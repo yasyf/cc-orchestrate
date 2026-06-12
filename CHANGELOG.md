@@ -6,7 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-12
+
 ### Added
 - Initial scaffolding.
+- `cc-orchestrate backends` command reporting which backends (cmux, superset)
+  are installed.
 
-[Unreleased]: https://github.com/yasyf/cc-orchestrate/commits/main
+[Unreleased]: https://github.com/yasyf/cc-orchestrate/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/yasyf/cc-orchestrate/releases/tag/v0.1.0
