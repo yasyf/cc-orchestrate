@@ -16,12 +16,16 @@ type ProjectSpec struct {
 	Cwd  string
 }
 
-// SpawnSpec describes an agent to spawn into a project.
+// SpawnSpec describes an agent to spawn into a project. Command is the full argv
+// the backend runs in a placed terminal (typically a claude invocation);
+// SessionID is that child's deterministic --session-id, which backends without a
+// per-terminal kill (superset) use to terminate the process by identity.
 type SpawnSpec struct {
-	Project ProjectHandle
-	Name    string
-	Cwd     string
-	Command []string
+	Project   ProjectHandle
+	Name      string
+	Cwd       string
+	Command   []string
+	SessionID string
 }
 
 // ProjectHandle identifies a backend workspace.
@@ -32,12 +36,15 @@ type ProjectHandle struct {
 	Cwd     string
 }
 
-// AgentHandle identifies a spawned agent's backend terminal.
+// AgentHandle identifies a spawned agent's backend terminal. SessionID carries the
+// child's claude --session-id so a backend that can't address its terminal (superset)
+// can still kill the process by identity.
 type AgentHandle struct {
 	Backend   string
 	ID        string
 	ProjectID string
 	Name      string
+	SessionID string
 }
 
 // Caps reports the optional fast paths a backend supports beyond the event plane.
