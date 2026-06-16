@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Rewritten from Python to a single pure-Go CLI built on the
+  [cc-interact](https://github.com/yasyf/cc-interact) framework. Distribution
+  moves from PyPI wheels to prebuilt binaries and a Homebrew tap.
+
 ## [0.1.0] - 2026-06-12
 
 ### Added

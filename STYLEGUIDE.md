@@ -1,349 +1,177 @@
 # cc-orchestrate Style Guide
 
-The concrete style rules for `cc_orchestrate/`. Target Python 3.13+.
+The concrete style rules for the Go in this repository. cc-orchestrate is a
+single Go CLI that consumes the [cc-interact](https://github.com/yasyf/cc-interact)
+framework, so these rules mirror cc-interact's own conventions — match that module
+when in doubt. Target the `go 1.26.2` toolchain (cc-interact's floor).
 
 ## Core Principles
 
-1. **Functional over imperative.** Compose, chain, and return. Skip intermediate
-   variables when a pipeline reads well, and reach for the walrus (`:=`) and
-   comprehensions instead of loops.
-2. **Match for dispatch.** Pattern matching for type dispatch, destructuring, and
-   multi-factor decisions. Use `if/elif` only for meaningful boolean flags.
-3. **Type everything.** `from __future__ import annotations` in every module.
-   Never widen a typed slot to `Any` to quiet the checker.
-4. **Fail fast, fail loud.** No defensive coding: no fallbacks, shims, or
+1. **Fail fast, fail loud.** No defensive coding: no fallbacks, shims, or
    backwards-compat layers, and no guards against impossible states. No sentinel
    values, no silent defaults. If unused, delete it. Crash on the unexpected.
-5. **Make invalid states unrepresentable.** `NewType` for branded primitives,
-   frozen dataclasses for immutable data, required fields over optionals.
-6. **Minimal changes.** Stay within scope. Make the test pass, then stop. Improve
+2. **Make invalid states unrepresentable.** Named types over bare strings, structs
+   for grouped data, required fields over zero-value flags. A `BackendName` is a
+   defined type, not a loose `string`.
+3. **Minimal changes.** Stay within scope. Make the test pass, then stop. Improve
    only the code you touch.
-7. **Match surrounding code.** Follow this guide first, then the file you're in,
+4. **Match surrounding code.** Follow this guide first, then the file you're in,
    then the module. If surrounding code violates this guide, fix it.
-8. **Flat over nested.** Early returns and flat control flow. Nesting deeper than
-   three levels is a smell.
-9. **Async-native I/O.** Anything that touches I/O is `async def`, backed by a
-   library with a native async API (e.g. `aiosqlite`) — never a blocking call
-   wrapped in `asyncio.to_thread`. See § Async.
+5. **Flat over nested.** Early returns and flat control flow. Handle the error and
+   return; nesting deeper than three levels is a smell.
 
-## Functional Style
+## Package Layout
 
-Avoid intermediate variables. Chain operations or return directly.
+cc-orchestrate ships flat packages, no `internal/` directory — the same shape
+cc-interact uses. Hide helpers with lowercase identifiers and doc comments, not the
+compiler. A package is one concern: `backend` holds the `Backend` interface, the
+spec/handle types, the registry, and the five drivers; domain ops, the transcript
+tailer, and the cobra tree live in their own packages beside `main.go`.
 
-```python
-# Good
-def expand_tool_names(name: str) -> set[str]:
-    return (base := set(name.split("|"))) | {
-        alias for n in base for alias in (TOOL_ALIASES.get(n), TOOL_ALIASES_REVERSE.get(n)) if alias
-    }
-
-# Bad
-def expand_tool_names(name):
-    base = set(name.split("|"))
-    aliases = set()
-    for n in base:
-        ...
-    return base | aliases
-```
-
-Use the walrus operator to bind a value once and reuse it inside an expression.
-
-```python
-# Good
-if (match := WHEEL_CHECKSUM.search(body)):
-    return match.group(1)
-
-# Good — walrus in a comprehension, single pass
-return [result for item in items if (result := process(item)) is not None]
-```
-
-Prefer the dict union operator over unpacking.
-
-```python
-config = defaults | user_config | overrides   # not {**defaults, **user_config, ...}
-```
-
-Use comprehensions instead of imperative accumulation.
-
-```python
-# Good
-return [item.transform() for item in items if item.is_valid()]
-
-# Bad
-result = []
-for item in items:
-    if item.is_valid():
-        result.append(item.transform())
-return result
-```
-
-## Type Annotations
-
-Always annotate. Use future annotations and guard expensive or cycle-prone imports
-with `TYPE_CHECKING`. Under PEP 563 annotations stay strings, so they need no quotes.
-
-```python
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from cc_orchestrate.models import Record
-
-def process(self, record: Record) -> bool: ...
-```
-
-Lazy imports that break cycles or defer heavy modules go at the top of the function
-body, before any logic, and never inside an `if`, `for`, or `try`.
-
-```python
-# Good
-def model_version() -> str:
-    from cc_orchestrate.state import RESOURCES
-
-    return RESOURCES.lookup()
-
-# Bad — import buried in a branch
-def model_version() -> str:
-    if cached:
-        from cc_orchestrate.state import RESOURCES
-        ...
-```
-
-Don't widen to `Any` to quiet pyright. Use the real type, narrow with `isinstance`,
-or split the model. Trivial complaints such as `cached_property` shadowing
-`property` or descriptor-protocol nuances are noise; ignore them instead of reaching
-for `# type: ignore`. Wanting `hasattr` on a typed object means the type is wrong.
-Fix it or define a `Protocol`.
-
-## Pattern Matching
-
-Use `match` for type dispatch, destructuring, and decisions that turn on several
-factors at once.
-
-```python
-match decision:
-    case Keep():
-        return msg
-    case Compress(rate=rate):
-        return msg.filter(lambda c: c.type != "text").append(compress(text, rate))
-    case Summarize(content=content):
-        return msg.append(content)
-```
-
-For multi-factor decisions, name the state with a `NamedTuple` so each `case` maps
-one-to-one onto a requirement.
-
-```python
-match Status(is_fresh, scores.get(id(tc))):
-    case Status(score=None):           return tc
-    case Status(score=s) if s >= floor: return tc
-    case Status(is_fresh=True):        return tc.demote()
-    case Status(is_fresh=False):       return tc.exclude()
-```
-
-Use `if/elif` when the branches turn on meaningful boolean flags with their own
-names. Don't build a tuple just to pattern-match on it.
-
-## Functions & Methods
-
-Options and flags go keyword-only, after `*`.
-
-```python
-def run(self, jobs: Sequence[Job], *, timeout: int = 30, strict: bool = True) -> Result: ...
-```
-
-Use `@overload` when the return type depends on the argument shape.
-
-```python
-@overload
-def __getitem__(self, index: int) -> Task: ...
-@overload
-def __getitem__(self, index: slice) -> tuple[Task, ...]: ...
-def __getitem__(self, index: int | slice) -> Task | tuple[Task, ...]:
-    return self.tasks[index]
-```
-
-Mutable defaults are forbidden in function signatures too: take `list[T] | None = None`
-and normalize with `items = items or []` at the top of the body.
-
-Access typed attributes directly instead of routing through helpers that may return
-None; a helper that can fail forces every caller into a guard.
-
-```python
-# Good
-await tracker.update(self.request.id, stage)
-
-# Bad — helper that may return None forces a guard
-if rid := report_id():
-    await tracker.update(rid, stage)
-```
-
-## API Design
-
-Accept what callers naturally have. If callers must extract or transform data
-before calling, take the parent object and extract internally.
-
-```python
-# Good — caller passes what it holds
-def record_usage(request_id: RequestId, usage: Usage) -> None: ...
-
-# Bad — caller dismembers the object first
-def record_usage(request_id: str, total_tokens: int, total_cost: float) -> None: ...
-```
-
-Keep parameters minimal. No speculative flags; add a parameter when there is a
-demonstrated need, not just in case.
-
-Types reflect user concepts, not implementation internals. A public signature built
-from internal metadata types leaks the implementation; expose the objects users
-think in.
-
-## Async
-
-I/O is async from day 1. Anything that hits the network, filesystem, or a database is
-an `async def`, and the library doing it has a native async API. Reach for the
-async-native driver instead of wrapping a blocking one in `asyncio.to_thread` — the
-wrapper leaks a sync boundary into every caller and caps throughput at the thread pool.
-Keep `to_thread` / `run_in_executor` for libraries with no async equivalent. Run
-concurrent work through `anyio` `TaskGroup`s rather than juggling bare `asyncio.gather`.
-
-```python
-# Good — async-native driver
-import aiosqlite
-
-async def load(db_path: str, key: str) -> Row | None:
-    async with aiosqlite.connect(db_path) as db:
-        async with db.execute("select * from t where k = ?", (key,)) as cur:
-            return await cur.fetchone()
-
-# Bad — blocking driver shoved onto a thread
-import asyncio
-import sqlite3
-
-async def load(db_path: str, key: str) -> Row | None:
-    def _q() -> Row | None:
-        with sqlite3.connect(db_path) as db:
-            return db.execute("select * from t where k = ?", (key,)).fetchone()
-    return await asyncio.to_thread(_q)
-```
+`main.go` is the composition root. It builds `cmd.Deps`, wires `daemon.New` with the
+consumer DDL via `daemon.Config.Migrate`, registers domain ops, and assembles the
+cobra tree from cc-interact's `cmd.*` constructors plus the local domain commands —
+exactly as `examples/echo/main.go` does in cc-interact. Read that file before adding a
+command.
 
 ## Error Handling
 
-Keep `try` blocks minimal. Only the line that can throw belongs inside.
+Wrap errors with context and let them propagate; never swallow one.
 
-```python
-# Good
-try:
-    response = await client.fetch(url)
-except HTTPError:
-    return None
-data = response.json()
-return transform(data)
+```go
+// Good — wrapped, contextual, propagated
+if _, err := s.Append(ctx, ev); err != nil {
+    return fmt.Errorf("append %s event: %w", ev.Type, err)
+}
+
+// Bad — context lost, error swallowed
+s.Append(ctx, ev)
 ```
 
-No broad `except Exception` that swallows everything. Use dedicated exception
-classes. Read required configuration with `os.environ["KEY"]` so a missing key
-raises at startup. No sentinel return values; raise, or return a typed result.
+Use `%w` so callers can `errors.Is`/`errors.As` the cause. Keep the error-handling
+block minimal: only the operation that can fail belongs inside. No catch-all that
+hides the failure. Read required configuration so a missing key fails at startup, and
+return a typed result instead of a sentinel value. Reserve `panic` for programmer
+error the API forbids (e.g. a duplicate `Server.Register` op), never for runtime
+failure — a backend that isn't installed returns an error, it does not panic.
 
-## Code Organization
+## Context
 
-Module order runs imports, constants, type aliases, helpers, classes, then
-functions. Module-level `UPPER_SNAKE_CASE` constants sit immediately after imports,
-before any class or function.
+Pass `context.Context` as the first argument through every command, IPC call, daemon
+op, and `os/exec` invocation. Cancellation is how a killed `agent watch` frees its
+parked goroutine and how a slow backend command gets torn down. The `Backend`
+interface threads `ctx` through `EnsureReady`, `CreateProject`, `Spawn`, and the rest
+for exactly this reason.
 
-Within a class body, all assignments come before any methods. That covers
-constants, `ClassVar`s, and dataclass fields.
+## Cobra Commands
 
-```python
-@dataclass(frozen=True, slots=True)
-class JobSpec:
-    name: str
-    steps: tuple[Step, ...] = ()
-    retries: int = 0
+Each command is a constructor returning `*cobra.Command`, taking the dependencies it
+needs (`cmd.Deps` for substrate commands, a backend registry for domain commands).
+Bind flags with `c.Flags().StringVar(&v, …)`; put the logic in `RunE` and return the
+error rather than printing and exiting inside the handler. Set `SilenceUsage` and
+`SilenceErrors` on the root and print the error once in `main`. Reuse cc-interact's
+`cmd.DaemonCmd`/`WatchCmd`/`StatusCmd`/`StopCmd`/`SessionRecordCmd`/`GuardEditCmd`/
+`ChannelCmd`/`ChannelAckCmd` for the substrate; do not re-implement them.
 
-    def matches(self, job: Job) -> bool: ...
+```go
+func spawnCmd(d cmd.Deps, reg *backend.Registry) *cobra.Command {
+    var project, prompt string
+    c := &cobra.Command{
+        Use:   "spawn",
+        Short: "Spawn an agent into a project",
+        Args:  cobra.NoArgs,
+        RunE: func(c *cobra.Command, _ []string) error {
+            if err := d.EnsureCurrent(c.Context()); err != nil {
+                return err
+            }
+            return runSpawn(c.Context(), reg, project, prompt)
+        },
+    }
+    c.Flags().StringVar(&project, "project", "", "project id or name")
+    c.Flags().StringVar(&prompt, "prompt", "", "the agent's task")
+    return c
+}
 ```
 
-No leading underscores on classes, constants, or module-level helpers. Reserve a
-leading underscore for a private instance attribute.
+## Backend Drivers (`os/exec`)
 
-`__init__.py` exposes only the public API surface, re-exported with plain regular
-imports. No redundant `as` aliases, no `__all__`: name a symbol here to make it
-public, omit it to keep it internal. F401 stays active in every other module, so
-unused imports outside `__init__.py` are still deleted.
+A backend is *placement + spawn* only; everything interactive rides cc-interact's
+event plane. Drivers shell out via `os/exec`, parsing `--json` output where the CLI
+offers it and falling back to documented text formats where it doesn't. Rules:
 
-```python
-# Good — public API, plain re-export
-from cc_orchestrate.matcher import Matcher
-from cc_orchestrate.runner import Runner
+- `Available()` is `exec.LookPath` on the backend's binary (note `herd` invokes
+  `herdr`). It returns a bool, never an error.
+- Build argv as an explicit `[]string`; never interpolate user input into a shell
+  string. The one exception is superset, which needs `bash -lc "<one quoted line>"`
+  because its terminal spawns a fresh login shell — quote that line deterministically
+  and use the absolute `claude` path, since the login shell is fish.
+- Run commands with the call's `context.Context` (`exec.CommandContext`) so a
+  cancelled op kills the child process.
+- Wrap a failed command with its captured stderr: `fmt.Errorf("herdr workspace
+  create: %w: %s", err, stderr)`.
+- The child references the orchestrator binary by its absolute path from
+  `os.Executable()` — the child's `PATH`/env differs (especially under superset), so a
+  bare `cc-orchestrate` won't resolve.
 
-# Bad — redundant-alias / __all__ ceremony
-from cc_orchestrate.matcher import Matcher as Matcher
-__all__ = ["Matcher", "Runner"]
-```
+## SQLite & State
 
-Frozen dataclasses for immutable and config data. Every mutable default needs a
-factory such as `field(default_factory=list)`; a bare `[]` or `{}` is a bug.
+State lives under `paths.Paths{App: ".cc-orchestrate"}` → `~/.cc-orchestrate/`. The
+consumer's tables (`projects`, `agents`, `config`) are created through
+`daemon.Config.Migrate` and queried through `HandlerCtx.DB`; cc-interact owns the
+`subjects` and `events` tables, which you touch only via `subject.Resolver` and the
+`Append` chokepoint. cc-interact has no migration framework beyond `Config.Migrate`,
+so keep all DDL idempotent (`CREATE TABLE IF NOT EXISTS`). Each record gets exactly
+one write codepath — two call sites writing the same row diverge. The single-backend
+selection persists in the `config` table, not a TOML file.
 
-Each persistence operation gets exactly one codepath; two call sites writing the
-same record will diverge. Side-effects such as tracking, logging, and metrics react
-to events in listeners instead of interleaving with business logic.
+## Functions & Code Organization
 
-```python
-# Bad — two codepaths write the same record, tracking inlined
-async def event_loop(self):
-    await self.tracker.update(self.id, stage)
-    await store.put(self.id, response)
+Keep functions small and single-purpose; a long handler is a sign it should delegate
+to named helpers. Options and flags ride a struct (`SpawnSpec`, `ProjectSpec`) rather
+than a long positional argument list — accept what the caller naturally holds.
 
-async def drain_queue(self):
-    await store.put(self.id, response)
+Order each file: imports, constants, type definitions, then functions and methods.
+Constants sit immediately after imports. Group related constants in a single `const`
+block, as `examples/echo/main.go` does for its op names and event types. Use Go's
+exported/unexported capitalization to control visibility, not naming prefixes.
 
-# Good — one write location; a listener reacts to the event
-async def persist(self, response):
-    await store.put(self.id, response)
-    self.emit(ResponsePersisted(self.id, response))
-```
-
-## Comments & Docstrings
+## Comments & Doc Comments
 
 Code documents itself through names, types, and organization. No comments except
-TODOs, non-obvious workarounds, or disabled code.
-
-Docstrings are the one exception, scoped by surface. Public API surfaces and
-user-facing classes carry Google-style docstrings, so they earn their place.
-Internal helpers get none, and a docstring that restates the signature is
-clutter to delete.
-Great Docs renders these docstrings into the published docs site.
-
-```python
-# Good — public class, documented; example renders on the docs site
-@dataclass(frozen=True, slots=True)
-class Matcher:
-    """Matches a record against a regex pattern.
-
-    Example:
-        >>> Matcher("user_.*").matches(record)
-    """
-
-    pattern: str
-
-# Good — internal helper, no docstring
-def version_key(dirname: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in dirname.removeprefix(f"{MODEL_NAME}-").split("."))
-```
+TODOs, non-obvious workarounds, or disabled code. Document the exported API only,
+with a leading doc comment in the `// Identifier …` form; a comment that restates the
+signature is clutter to delete. A non-obvious invariant earns a comment — e.g. why
+the transcript tailer globs by the unique session id rather than reversing the lossy
+slug.
 
 ## Testing
 
-Tests live in `tests/`; run them with `uv run pytest`. Hook authors also write
-inline `tests = {...}` on each hook in `.claude/hooks/`, runnable with
-`uvx capt-hook test`.
+Tests live beside the code as `*_test.go`; run them with `go test -race ./...` from
+the repo root. Use table-driven tests with `t.Run` subtests, each case named and
+carrying its own expected values; a test that can't fail uncovers nothing.
 
-Write strict assertions against specific expected values; a test that can't fail
-uncovers nothing. Mock the boundaries your code talks to, such as the network,
-filesystem, and clock, and leave the function under test real. A database (or any
-stateful service — Mongo, Postgres, Redis) is **not** a mock boundary: when a test
-needs one, start a real ephemeral instance with `testcontainers`
-(add `testcontainers[<backend>]` to the dev extra) rather than mocking the driver or
-using an in-memory fake. Parameterize repeated test bodies, giving each case a
-descriptive `id` and its own expected values.
+Mock the boundaries the code talks to — the network, the clock, and the backend CLIs
+(stub `os/exec` so a driver test asserts the argv it builds without needing the real
+binary installed). A database is **not** a mock boundary: store and tailer tests run
+against a real ephemeral on-disk SQLite (a `t.TempDir()` path through `store.Open`),
+never a mock or in-memory fake. The full spawn → status → message → kill loop gets a
+real-`tmux` integration test.
+
+```go
+func TestPrecedence(t *testing.T) {
+    for _, tc := range []struct {
+        name      string
+        available []BackendName
+        want      BackendName
+    }{
+        {"all present picks herd", allBackends, "herd"},
+        {"herd absent falls to superset", allBackends[1:], "superset"},
+    } {
+        t.Run(tc.name, func(t *testing.T) {
+            if got := resolve(tc.available); got != tc.want {
+                t.Fatalf("resolve(%v) = %q, want %q", tc.available, got, tc.want)
+            }
+        })
+    }
+}
+```

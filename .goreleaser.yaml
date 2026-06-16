@@ -1,0 +1,56 @@
+version: 2
+
+project_name: cc-orchestrate
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: cc-orchestrate
+    main: .
+    binary: cc-orchestrate
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/yasyf/cc-orchestrate/orchestrate.Version={{ .Version }}
+
+archives:
+  - id: cc-orchestrate
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+homebrew_casks:
+  - name: cc-orchestrate
+    binaries:
+      - cc-orchestrate
+    repository:
+      owner: yasyf
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/yasyf/cc-orchestrate
+    description: Orchestrate fleets of Claude Code agents across pluggable backends.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/cc-orchestrate"]
+          end
+
+release:
+  prerelease: auto
+
+changelog:
+  use: github
+  sort: asc
