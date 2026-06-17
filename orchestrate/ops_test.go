@@ -53,6 +53,47 @@ func (b opBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
 func (opBackend) KillProject(context.Context, backend.ProjectHandle) error { return nil }
 func (opBackend) Caps() backend.Caps                                       { return backend.Caps{} }
 
+// TestResolveBackend covers the explicit, persisted-selection, and unknown-name
+// branches; the no-selection backend.Select() fallback depends on which runtimes
+// are installed, so it is exercised by the spawn-smoke and integration paths.
+func TestResolveBackend(t *testing.T) {
+	ctx := context.Background()
+	backend.Register(opBackend{}) // registers the "optest" backend, outside Precedence
+
+	t.Run("explicit known backend wins", func(t *testing.T) {
+		hc := daemon.HandlerCtx{Ctx: ctx, DB: newTestDB(t)}
+		b, name, err := resolveBackend(hc, "optest")
+		if err != nil || name != "optest" || b == nil {
+			t.Fatalf("resolveBackend(optest) = %v, %q, %v; want the optest backend", b, name, err)
+		}
+	})
+	t.Run("explicit unknown backend errors", func(t *testing.T) {
+		hc := daemon.HandlerCtx{Ctx: ctx, DB: newTestDB(t)}
+		if _, _, err := resolveBackend(hc, "ghost"); err == nil {
+			t.Fatal("resolveBackend(ghost) err = nil, want an unknown-backend error")
+		}
+	})
+	t.Run("falls back to the persisted selection", func(t *testing.T) {
+		db := newTestDB(t)
+		if err := setConfig(ctx, db, "backend", "optest"); err != nil {
+			t.Fatal(err)
+		}
+		b, name, err := resolveBackend(daemon.HandlerCtx{Ctx: ctx, DB: db}, "")
+		if err != nil || name != "optest" || b == nil {
+			t.Fatalf("resolveBackend(persisted) = %v, %q, %v; want the optest backend", b, name, err)
+		}
+	})
+	t.Run("persisted selection that is unknown errors", func(t *testing.T) {
+		db := newTestDB(t)
+		if err := setConfig(ctx, db, "backend", "ghost"); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := resolveBackend(daemon.HandlerCtx{Ctx: ctx, DB: db}, ""); err == nil {
+			t.Fatal("resolveBackend(persisted ghost) err = nil, want an unknown-backend error")
+		}
+	})
+}
+
 func mustInsertAgent(t *testing.T, db *sql.DB, a agentRow) {
 	t.Helper()
 	if err := insertAgent(context.Background(), db, a); err != nil {

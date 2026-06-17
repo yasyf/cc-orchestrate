@@ -1,0 +1,49 @@
+package backend
+
+import "testing"
+
+// TestAvailableFollowsPrecedence asserts Available() returns the installed backends
+// as an in-order subsequence of Precedence — never reordered, never including an
+// uninstalled one. The default backend pick depends on this ordering invariant, and
+// it holds regardless of which runtimes happen to be installed on the test host.
+func TestAvailableFollowsPrecedence(t *testing.T) {
+	avail := Available()
+	pi := 0
+	for _, b := range avail {
+		for pi < len(Precedence) && Precedence[pi] != b.Name() {
+			pi++
+		}
+		if pi == len(Precedence) {
+			t.Fatalf("Available() = %v is not an in-order subsequence of Precedence %v", names(avail), Precedence)
+		}
+		if !b.Available() {
+			t.Errorf("Available() returned %q which reports Available() = false", b.Name())
+		}
+		pi++
+	}
+}
+
+// TestSelectReturnsFirstAvailable asserts Select() is exactly the first entry of
+// Available(), and (nil, false) when no runtime is installed.
+func TestSelectReturnsFirstAvailable(t *testing.T) {
+	b, ok := Select()
+	avail := Available()
+	switch {
+	case len(avail) == 0:
+		if ok {
+			t.Fatal("Select() ok = true with no available backends")
+		}
+	case !ok:
+		t.Fatalf("Select() ok = false but %d backends are available", len(avail))
+	case b.Name() != avail[0].Name():
+		t.Fatalf("Select() = %q, want the first available %q", b.Name(), avail[0].Name())
+	}
+}
+
+func names(bs []Backend) []string {
+	out := make([]string, len(bs))
+	for i, b := range bs {
+		out[i] = b.Name()
+	}
+	return out
+}
