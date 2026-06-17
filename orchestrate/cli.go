@@ -564,6 +564,7 @@ func streamAgent(ctx context.Context, d cmd.Deps, a agentView, emit func(string)
 	if err != nil {
 		return err
 	}
+	// No ExcludeOrigin: the parent watch is an observer and must see every origin, including agent orchestrate.report events.
 	src := consume.StreamSource{
 		Port: port, SubjectID: subjectID, Consumer: watchConsumer, ClaudePID: os.Getpid(),
 		Paths: d.Paths, WindowAlive: d.WindowAlive,

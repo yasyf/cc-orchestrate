@@ -163,10 +163,6 @@ Three flows keep the orchestrator and its agents in sync, all over the event pla
   agent. The agent calls it to report progress, a result, or a question, which appends
   an `orchestrate.report` event to its subject's log.
 
-One current limitation: `agent watch` streams status and orchestrator messages, but
-agent reports are recorded in the event log and not yet surfaced in the watch stream.
-That gap is [tracked](https://github.com/yasyf/cc-orchestrate/issues).
-
 ## Documentation
 
 The conventions and architecture live in [AGENTS.md](AGENTS.md) and
