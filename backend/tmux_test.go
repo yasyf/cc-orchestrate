@@ -130,6 +130,18 @@ func TestTmux(t *testing.T) {
 			},
 			wantCalls: [][]string{{"tmux", "kill-session", "-t", "proj_one"}},
 		},
+		{
+			name: "SendText types the text literally then submits with Enter",
+			do: func(t *testing.T, b tmux) {
+				if err := b.SendText(ctx, AgentHandle{Backend: "tmux", ID: "%3"}, "hi -n there"); err != nil {
+					t.Fatalf("SendText: %v", err)
+				}
+			},
+			wantCalls: [][]string{
+				{"tmux", "send-keys", "-t", "%3", "-l", "--", "hi -n there"},
+				{"tmux", "send-keys", "-t", "%3", "Enter"},
+			},
+		},
 	}
 
 	for _, tc := range cases {

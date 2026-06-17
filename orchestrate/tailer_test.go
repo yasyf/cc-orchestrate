@@ -63,7 +63,7 @@ func TestRunTailerStreamsStatuses(t *testing.T) {
 		done <- runTailer(ctx, session, "scope", interval, func(s Status) error {
 			got <- s
 			return nil
-		})
+		}, func(string) error { return nil })
 	}()
 
 	// Transcript appears after the tailer starts: the wait loop must poll it in.
@@ -88,6 +88,76 @@ func TestRunTailerStreamsStatuses(t *testing.T) {
 	appendLine(t, path, lineResultEdit+"\n"+lineText+"\n")
 	if s := recvStatus(t, got); s != (Status{State: StateIdle, Tool: "Edit", Target: "/tmp/x.go", LastText: "All done.", Tokens: 49}) {
 		t.Fatalf("third status = %+v", s)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runTailer returned %v, want nil on cancel", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runTailer did not return after cancel")
+	}
+}
+
+// TestRunTailerEmitsInboundLiveOnly proves the tailer emits an inbound audit turn
+// only for turns appended while live, never for the historical turns it replays on
+// start — otherwise every daemon restart would duplicate audit frames.
+func TestRunTailerEmitsInboundLiveOnly(t *testing.T) {
+	interval := 5 * time.Millisecond
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	dir := filepath.Join(home, ".claude", "projects", "test-proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	session := "sess-inbound"
+	path := filepath.Join(dir, session+".jsonl")
+
+	// Pre-existing transcript: a prior inbound turn plus an assistant turn. Both
+	// are replayed on start; the inbound turn must not be re-emitted, while the
+	// assistant turn's status emission signals that replay caught up and the tailer
+	// is live.
+	if err := os.WriteFile(path, []byte(lineUserPrompt+"\n"+lineText+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	status := make(chan Status, 8)
+	inbound := make(chan string, 8)
+	done := make(chan error, 1)
+	go func() {
+		done <- runTailer(ctx, session, "scope", interval,
+			func(s Status) error { status <- s; return nil },
+			func(text string) error { inbound <- text; return nil })
+	}()
+
+	// The replayed assistant status confirms the first read caught up; the tailer
+	// is now live.
+	if s := recvStatus(t, status); s.State != StateIdle {
+		t.Fatalf("replay status = %+v, want idle", s)
+	}
+
+	// A user turn appended while live surfaces as an inbound audit frame.
+	appendLine(t, path, lineUserPrompt2+"\n")
+	select {
+	case got := <-inbound:
+		if got != "second prompt" {
+			t.Fatalf("inbound = %q, want %q", got, "second prompt")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for a live inbound turn")
+	}
+
+	// The replayed pre-existing turn must not also surface.
+	select {
+	case extra := <-inbound:
+		t.Fatalf("replayed inbound turn was re-emitted: %q", extra)
+	case <-time.After(60 * time.Millisecond):
 	}
 
 	cancel()

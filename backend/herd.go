@@ -143,4 +143,14 @@ func (b herd) KillProject(ctx context.Context, project ProjectHandle) error {
 	return err
 }
 
+// SendText types text into the agent's pane and submits it with a separate Enter
+// key. agent.ID is the herd pane id.
+func (b herd) SendText(ctx context.Context, agent AgentHandle, text string) error {
+	if _, err := b.run(ctx, herdBin, "pane", "send-text", agent.ID, text); err != nil {
+		return err
+	}
+	_, err := b.run(ctx, herdBin, "pane", "send-keys", agent.ID, "Enter")
+	return err
+}
+
 func (b herd) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }

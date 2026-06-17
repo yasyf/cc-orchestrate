@@ -53,6 +53,43 @@ func (b opBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
 func (opBackend) KillProject(context.Context, backend.ProjectHandle) error { return nil }
 func (opBackend) Caps() backend.Caps                                       { return backend.Caps{} }
 
+// sendBackend is a registered test backend that advertises CanSendText and
+// implements Sender, recording the native SendText call so the dispatcher's
+// native path can be exercised without a live CLI. Its name is outside
+// backend.Precedence.
+type sendBackend struct {
+	sentTo   *backend.AgentHandle
+	sentText *string
+}
+
+func (sendBackend) Name() string                      { return "sendtest" }
+func (sendBackend) Available() bool                   { return true }
+func (sendBackend) EnsureReady(context.Context) error { return nil }
+func (sendBackend) ListProjects(context.Context) ([]backend.ProjectHandle, error) {
+	return nil, nil
+}
+func (sendBackend) CreateProject(context.Context, backend.ProjectSpec) (backend.ProjectHandle, error) {
+	return backend.ProjectHandle{}, nil
+}
+func (sendBackend) Spawn(context.Context, backend.SpawnSpec) (backend.AgentHandle, error) {
+	return backend.AgentHandle{}, nil
+}
+func (sendBackend) ListAgents(context.Context, backend.ProjectHandle) ([]backend.AgentHandle, error) {
+	return nil, nil
+}
+func (sendBackend) Kill(context.Context, backend.AgentHandle) error          { return nil }
+func (sendBackend) KillProject(context.Context, backend.ProjectHandle) error { return nil }
+func (sendBackend) Caps() backend.Caps                                       { return backend.Capabilities(backend.CanSendText) }
+func (b sendBackend) SendText(_ context.Context, agent backend.AgentHandle, text string) error {
+	if b.sentTo != nil {
+		*b.sentTo = agent
+	}
+	if b.sentText != nil {
+		*b.sentText = text
+	}
+	return nil
+}
+
 // TestResolveBackend covers the explicit, persisted-selection, and unknown-name
 // branches; the no-selection backend.Select() fallback depends on which runtimes
 // are installed, so it is exercised by the spawn-smoke and integration paths.
@@ -114,10 +151,13 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
+// TestHandleSendMessage covers the LCD path: a backend without CanSendText
+// (optest) delivers by appending an OriginHuman EventMessage to the subject log.
 func TestHandleSendMessage(t *testing.T) {
+	backend.Register(opBackend{}) // "optest": no Sender, no CanSendText → LCD
 	db := newTestDB(t)
 	mustInsertAgent(t, db, agentRow{
-		ID: "a1", ProjectID: "p1", Backend: "tmux", Scope: "/s",
+		ID: "a1", ProjectID: "p1", Backend: "optest", Scope: "/s",
 		SubjectID: "subj-1", Status: "active", State: StateUnknown, CreatedAt: "t0",
 	})
 
@@ -155,6 +195,59 @@ func TestHandleSendMessage(t *testing.T) {
 	}
 	if err := json.Unmarshal(reply.Body, &rb); err != nil || rb.Seq != 7 {
 		t.Errorf("reply body = %s, want seq=7 (err %v)", reply.Body, err)
+	}
+}
+
+// TestHandleSendMessageNative covers the native path: a Sender advertising
+// CanSendText delivers by typing into the agent's terminal, writes no event-plane
+// frame, and reports transport=native. The handle carries the project's backend
+// WorkspaceHandle, not the orchestrate project id.
+func TestHandleSendMessageNative(t *testing.T) {
+	ctx := context.Background()
+	var sentTo backend.AgentHandle
+	var sentText string
+	backend.Register(sendBackend{sentTo: &sentTo, sentText: &sentText})
+
+	db := newTestDB(t)
+	if err := insertProject(ctx, db, projectRow{
+		ID: "p1", Name: "proj", Backend: "sendtest", WorkspaceHandle: "ws-1",
+		Cwd: "/s", Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertProject: %v", err)
+	}
+	mustInsertAgent(t, db, agentRow{
+		ID: "a1", ProjectID: "p1", Backend: "sendtest", TerminalHandle: "term-1",
+		SessionID: "sess-1", Scope: "/s", Name: "worker", SubjectID: "subj-1",
+		Status: StatusActive, State: StateUnknown, CreatedAt: "t0",
+	})
+
+	appendFn := func(context.Context, *event.Event) (int64, error) {
+		t.Fatal("native send must not append to the event plane")
+		return 0, nil
+	}
+	body := mustJSON(t, map[string]string{"agent_id": "a1", "text": "hello"})
+	reply := handleSendMessage(opCtx(db, body, appendFn))
+	if !reply.OK {
+		t.Fatalf("reply not ok: %s", reply.Error)
+	}
+
+	wantHandle := backend.AgentHandle{Backend: "sendtest", ID: "term-1", ProjectID: "ws-1", Name: "worker", SessionID: "sess-1"}
+	if sentTo != wantHandle {
+		t.Fatalf("SendText handle = %+v, want %+v", sentTo, wantHandle)
+	}
+	if sentText != "hello" {
+		t.Fatalf("SendText text = %q, want hello", sentText)
+	}
+
+	var rb struct {
+		Seq       int64  `json:"seq"`
+		Transport string `json:"transport"`
+	}
+	if err := json.Unmarshal(reply.Body, &rb); err != nil {
+		t.Fatal(err)
+	}
+	if rb.Transport != "native" || rb.Seq != 0 {
+		t.Fatalf("reply = %+v, want transport=native seq=0", rb)
 	}
 }
 

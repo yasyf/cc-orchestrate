@@ -144,6 +144,30 @@ func TestZellijArgv(t *testing.T) {
 	}
 }
 
+// TestZellijSendText asserts the two-call native send argv: write the characters
+// into the pane within its session, then submit with a carriage-return byte.
+func TestZellijSendText(t *testing.T) {
+	ctx := context.Background()
+	calls, r := recorder("")
+	agent := AgentHandle{Backend: "zellij", ID: "terminal_1", ProjectID: "proj-1"}
+	if err := (zellij{run: r}).SendText(ctx, agent, "hi -n there"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	want := [][]string{
+		{"zellij", "--session", "proj-1", "action", "write-chars", "-p", "terminal_1", "--", "hi -n there"},
+		{"zellij", "--session", "proj-1", "action", "write", "-p", "terminal_1", "13"},
+	}
+	if len(*calls) != len(want) {
+		t.Fatalf("calls = %v, want %v", *calls, want)
+	}
+	for i := range want {
+		got := append([]string{(*calls)[i].name}, (*calls)[i].args...)
+		if !slices.Equal(got, want[i]) {
+			t.Fatalf("call %d = %v, want %v", i, got, want[i])
+		}
+	}
+}
+
 func TestZellijSpawnExtractsPaneID(t *testing.T) {
 	_, r := recorder("terminal_1\n")
 	agent, err := zellij{run: r}.Spawn(context.Background(), SpawnSpec{

@@ -93,6 +93,16 @@ func (b tmux) KillProject(ctx context.Context, project ProjectHandle) error {
 	return err
 }
 
+// SendText types text into the agent's pane and submits it with a separate Enter
+// key: -l sends the text literally so its characters are never read as key names.
+func (b tmux) SendText(ctx context.Context, agent AgentHandle, text string) error {
+	if _, err := b.run(ctx, tmuxBin, "send-keys", "-t", agent.ID, "-l", "--", text); err != nil {
+		return err
+	}
+	_, err := b.run(ctx, tmuxBin, "send-keys", "-t", agent.ID, "Enter")
+	return err
+}
+
 func tmuxLines(out []byte) []string {
 	lines := []string{}
 	for _, line := range strings.Split(string(out), "\n") {

@@ -161,6 +161,32 @@ func TestHerdMethods(t *testing.T) {
 	}
 }
 
+// TestHerdSendText asserts the two-call native send argv: type the text, then
+// submit with a separate Enter key.
+func TestHerdSendText(t *testing.T) {
+	ctx := context.Background()
+	var calls [][]string
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, append([]string{name}, args...))
+		return []byte(`{"id":"x","result":{"type":"ok"}}`), nil
+	}
+	if err := (herd{run: run}).SendText(ctx, AgentHandle{Backend: "herd", ID: "pane-9"}, "hi -n there"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	want := [][]string{
+		{"herdr", "pane", "send-text", "pane-9", "hi -n there"},
+		{"herdr", "pane", "send-keys", "pane-9", "Enter"},
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+	for i := range want {
+		if !slices.Equal(calls[i], want[i]) {
+			t.Fatalf("call %d = %v, want %v", i, calls[i], want[i])
+		}
+	}
+}
+
 func TestHerdMetadata(t *testing.T) {
 	b := herd{}
 	if b.Name() != "herd" {

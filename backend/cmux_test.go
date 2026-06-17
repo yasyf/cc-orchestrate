@@ -137,6 +137,18 @@ func TestCmux(t *testing.T) {
 			want:  nil,
 			calls: []cmuxCall{{name: "cmux", args: []string{"close-workspace", "--workspace", "workspace:7"}}},
 		},
+		{
+			name:    "SendText types the text then submits a separate enter key",
+			outputs: [][]byte{[]byte(""), []byte("")},
+			invoke: func(b cmux) (any, error) {
+				return nil, b.SendText(context.Background(), AgentHandle{Backend: "cmux", ID: "surface:10", ProjectID: "workspace:7"}, "hi -n there")
+			},
+			want: nil,
+			calls: []cmuxCall{
+				{name: "cmux", args: []string{"send", "--workspace", "workspace:7", "--surface", "surface:10", "--", "hi -n there"}},
+				{name: "cmux", args: []string{"send-key", "--workspace", "workspace:7", "--surface", "surface:10", "enter"}},
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

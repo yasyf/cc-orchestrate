@@ -112,6 +112,16 @@ func (b zellij) KillProject(ctx context.Context, project ProjectHandle) error {
 	return err
 }
 
+// SendText writes text into the agent's pane within its session, then submits it
+// by writing a carriage-return byte (13). agent.ProjectID is the zellij session.
+func (b zellij) SendText(ctx context.Context, agent AgentHandle, text string) error {
+	if _, err := b.run(ctx, zellijBin, "--session", agent.ProjectID, "action", "write-chars", "-p", agent.ID, "--", text); err != nil {
+		return err
+	}
+	_, err := b.run(ctx, zellijBin, "--session", agent.ProjectID, "action", "write", "-p", agent.ID, "13")
+	return err
+}
+
 func paneID(p pane) string {
 	if p.IsPlugin {
 		return "plugin_" + strconv.Itoa(p.ID)

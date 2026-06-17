@@ -34,6 +34,7 @@ const (
 	EventStatus  = "orchestrate.status"  // transcript-derived status update
 	EventMessage = "orchestrate.message" // orchestrator → agent message
 	EventReport  = "orchestrate.report"  // agent → orchestrator report
+	EventInbound = "orchestrate.inbound" // an inbound user turn observed on the transcript (audit; the child ignores it)
 )
 
 // LifecycleStatus is the lifecycle state stored on a project or agent row. It is a

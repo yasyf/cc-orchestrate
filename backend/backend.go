@@ -99,6 +99,15 @@ type Backend interface {
 	Caps() Caps
 }
 
+// Sender is a Backend that can deliver a message by typing it into a running
+// agent's terminal, instead of routing it over the cc-interact event plane (the
+// LCD). A backend implements Sender exactly when its Caps has CanSendText; the
+// registry invariant test enforces that correspondence, so a capability never
+// advertises a path the driver cannot take.
+type Sender interface {
+	SendText(ctx context.Context, agent AgentHandle, text string) error
+}
+
 // registry holds the registered backends keyed by Name.
 var registry = map[string]Backend{}
 

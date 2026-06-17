@@ -19,7 +19,8 @@ const (
 
 	lineAsk = `{"type":"assistant","isSidechain":false,"message":{"id":"msg_a","role":"assistant","stop_reason":"tool_use","usage":{"input_tokens":2,"output_tokens":3},"content":[{"type":"tool_use","id":"toolu_ask","name":"AskUserQuestion","input":{"questions":[{"question":"Which?"}]}}]}}`
 
-	lineUserPrompt = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"a plain human prompt"}}`
+	lineUserPrompt  = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"a plain human prompt"}}`
+	lineUserPrompt2 = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"second prompt"}}`
 
 	// Two lines of one logical message (thinking then tool_use), sharing id and the
 	// repeated usage object — the per-message dedup must count it once.
@@ -28,6 +29,29 @@ const (
 
 	lineSidechain = `{"type":"assistant","isSidechain":true,"message":{"id":"msg_side","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":1000},"content":[{"type":"text","text":"sidechain text"}]}}`
 )
+
+// TestFeedInbound covers feed's inbound-turn detection: a plain-string user turn
+// is an instruction, while tool results, assistant turns, and sidechains are not.
+func TestFeedInbound(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want string
+	}{
+		{"plain string user prompt is inbound", lineUserPrompt, "a plain human prompt"},
+		{"tool_result user turn is not inbound", lineResultBash, ""},
+		{"assistant turn is not inbound", lineText, ""},
+		{"sidechain is skipped", lineSidechain, ""},
+		{"unparseable line is skipped", `{not json`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := newStatusAcc().feed([]byte(tc.line)); got != tc.want {
+				t.Errorf("feed inbound = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestStatusAccumulator(t *testing.T) {
 	cases := []struct {

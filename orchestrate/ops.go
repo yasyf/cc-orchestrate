@@ -73,6 +73,11 @@ func exitedPayload() json.RawMessage {
 	return b
 }
 
+func inboundPayload(text string) json.RawMessage {
+	b, _ := json.Marshal(map[string]string{"type": EventInbound, "text": text})
+	return b
+}
+
 // handleStatus answers agent-status with one agent's persisted snapshot.
 func handleStatus(hc daemon.HandlerCtx) daemon.Reply {
 	var b struct {
@@ -126,8 +131,11 @@ func handleList(hc daemon.HandlerCtx) daemon.Reply {
 	return daemon.Reply{OK: true, Body: body}
 }
 
-// handleSendMessage answers agent-send-message by appending an OriginHuman
-// EventMessage to the target agent's subject log.
+// handleSendMessage answers agent-send-message: it delivers the text to the agent
+// natively when the backend can type into its terminal (CanSendText), else by
+// appending an OriginHuman EventMessage the agent's watch Monitor consumes (the
+// LCD). The native path writes no event-plane frame; the transcript tailer emits
+// an EventInbound audit frame when the typed turn lands.
 func handleSendMessage(hc daemon.HandlerCtx) daemon.Reply {
 	var b struct {
 		AgentID string `json:"agent_id"`
@@ -143,14 +151,47 @@ func handleSendMessage(hc daemon.HandlerCtx) daemon.Reply {
 	if ag.SubjectID == "" {
 		return daemon.Reply{OK: false, Error: "agent has no subject: " + b.AgentID}
 	}
-	seq, err := hc.Append(hc.Ctx, &event.Event{
-		SubjectID: ag.SubjectID, Origin: event.OriginHuman, Type: EventMessage, Payload: messagePayload(b.Text),
-	})
+	bk, ok := backend.Get(ag.Backend)
+	if !ok {
+		return daemon.Reply{OK: false, Error: "unknown backend: " + ag.Backend}
+	}
+	native, seq, err := deliverMessage(hc, bk, ag, b.Text)
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	body, _ := json.Marshal(map[string]int64{"seq": seq})
+	body, _ := json.Marshal(map[string]any{"seq": seq, "transport": transportLabel(native)})
 	return daemon.Reply{OK: true, Body: body}
+}
+
+// deliverMessage routes a message to a running agent: natively when the backend is
+// a Sender advertising CanSendText (typing into the agent's terminal), else by
+// appending an OriginHuman EventMessage the agent's watch Monitor consumes (the
+// LCD). seq is the event-log sequence on the LCD path and 0 on the native path,
+// which writes no event-plane frame.
+func deliverMessage(hc daemon.HandlerCtx, bk backend.Backend, ag agentRow, text string) (native bool, seq int64, err error) {
+	if s, ok := bk.(backend.Sender); ok && bk.Caps().Has(backend.CanSendText) {
+		handle, err := backendAgentHandle(hc, ag)
+		if err != nil {
+			return true, 0, err
+		}
+		if err := s.SendText(hc.Ctx, handle, text); err != nil {
+			return true, 0, err
+		}
+		return true, 0, nil
+	}
+	seq, err = hc.Append(hc.Ctx, &event.Event{
+		SubjectID: ag.SubjectID, Origin: event.OriginHuman, Type: EventMessage, Payload: messagePayload(text),
+	})
+	return false, seq, err
+}
+
+// transportLabel names the delivery path on the send-message reply, so a caller
+// (and the tests) can tell native typing from an event-plane append.
+func transportLabel(native bool) string {
+	if native {
+		return "native"
+	}
+	return "event"
 }
 
 // reportPayload is the EventReport event body an agent's report tool appends: the

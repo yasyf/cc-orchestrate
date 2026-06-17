@@ -123,15 +123,22 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 	m.mu.Unlock()
 	go func() {
 		defer m.finish(ag.ID, tc)
-		err := runTailer(cctx, ag.SessionID, ag.Scope, m.interval, func(st Status) error {
-			if err := applyStatus(cctx, db, ag.ID, st); err != nil {
+		err := runTailer(cctx, ag.SessionID, ag.Scope, m.interval,
+			func(st Status) error {
+				if err := applyStatus(cctx, db, ag.ID, st); err != nil {
+					return err
+				}
+				_, err := appendFn(cctx, &event.Event{
+					SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventStatus, Payload: jsonStatus(st),
+				})
 				return err
-			}
-			_, err := appendFn(cctx, &event.Event{
-				SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventStatus, Payload: jsonStatus(st),
+			},
+			func(text string) error {
+				_, err := appendFn(cctx, &event.Event{
+					SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventInbound, Payload: inboundPayload(text),
+				})
+				return err
 			})
-			return err
-		})
 		if err != nil {
 			log.Printf("cc-orchestrate: tailer for agent %s stopped: %v", ag.ID, err)
 		}

@@ -62,12 +62,18 @@ func findTranscript(sessionID string) (string, bool, error) {
 
 // runTailer waits for the session's transcript to appear, then tails it, calling
 // onStatus with the derived Status whenever it changes (identical consecutive
-// statuses are deduped). It returns nil when ctx is cancelled and propagates an
-// onStatus error. scope is currently informational; interval is the poll cadence.
-// The baseline status is the empty accumulator's StateUnknown, which matches the
+// statuses are deduped) and onInbound with each user instruction turn observed
+// while live. It returns nil when ctx is cancelled and propagates a callback
+// error. scope is currently informational; interval is the poll cadence. The
+// baseline status is the empty accumulator's StateUnknown, which matches the
 // agents table default, so the first emission is the first meaningful change
 // rather than a redundant unknown.
-func runTailer(ctx context.Context, sessionID, scope string, interval time.Duration, onStatus func(Status) error) error {
+//
+// The transcript is replayed from the start on every (re)start to rebuild status,
+// so onInbound fires only for turns seen after the first read catches up to the
+// end — replayed historical turns are not re-emitted, which would otherwise
+// duplicate audit frames on every daemon restart.
+func runTailer(ctx context.Context, sessionID, scope string, interval time.Duration, onStatus func(Status) error, onInbound func(string) error) error {
 	path, ok, err := waitForTranscript(ctx, sessionID, interval)
 	if err != nil {
 		return err
@@ -80,6 +86,7 @@ func runTailer(ctx context.Context, sessionID, scope string, interval time.Durat
 	last := acc.status()
 	var offset int64
 	var buf []byte
+	live := false
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -94,8 +101,13 @@ func runTailer(ctx context.Context, sessionID, scope string, interval time.Durat
 			if i < 0 {
 				break
 			}
-			acc.feed(buf[:i])
+			inbound := acc.feed(buf[:i])
 			buf = buf[i+1:]
+			if live && inbound != "" {
+				if err := onInbound(inbound); err != nil {
+					return err
+				}
+			}
 		}
 		if cur := acc.status(); cur != last {
 			if err := onStatus(cur); err != nil {
@@ -103,6 +115,7 @@ func runTailer(ctx context.Context, sessionID, scope string, interval time.Durat
 			}
 			last = cur
 		}
+		live = true
 		select {
 		case <-ctx.Done():
 			return nil

@@ -170,4 +170,15 @@ func (b cmux) KillProject(ctx context.Context, project ProjectHandle) error {
 	return err
 }
 
+// SendText types text into the agent's surface, then submits it with a separate
+// enter key event rather than an embedded "\n" — cmux send reinterprets \n/\r/\t,
+// which would split a multi-line message into partial commands.
+func (b cmux) SendText(ctx context.Context, agent AgentHandle, text string) error {
+	if _, err := b.run(ctx, cmuxBin, "send", "--workspace", agent.ProjectID, "--surface", agent.ID, "--", text); err != nil {
+		return err
+	}
+	_, err := b.run(ctx, cmuxBin, "send-key", "--workspace", agent.ProjectID, "--surface", agent.ID, "enter")
+	return err
+}
+
 func (b cmux) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }
