@@ -52,18 +52,27 @@ func serve(ctx context.Context) error {
 		PresenceEventType: c.Type(),
 		OnPresenceChange:  c.OnPresenceChange,
 		Migrate:           migrate,
-		// Run the channel boot reconcile, then resume a transcript tailer for every
-		// agent still active across the restart.
+		// Run the channel boot reconcile, repair DB rows whose backend workspace or
+		// terminal vanished while the daemon was down, then resume a transcript
+		// tailer for every agent still active across the restart (the post-reconcile
+		// active set).
 		BootReconcile: func(ctx context.Context, s *daemon.Server) error {
 			if err := c.BootReconcile(ctx, s); err != nil {
 				return err
 			}
-			agents, err := listActiveAgents(ctx, s.DB())
+			db := s.DB()
+			if err := reconcileProjects(ctx, db, s.Append); err != nil {
+				return err
+			}
+			if err := reconcileAgents(ctx, db, s.Append); err != nil {
+				return err
+			}
+			agents, err := listActiveAgents(ctx, db)
 			if err != nil {
 				return err
 			}
 			for _, ag := range agents {
-				tailers.start(s.DB(), s.Append, ag)
+				tailers.start(db, s.Append, ag)
 			}
 			return nil
 		},
