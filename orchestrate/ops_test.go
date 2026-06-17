@@ -257,6 +257,51 @@ func TestHandleSendMessageNative(t *testing.T) {
 	}
 }
 
+// TestHandleSendMessageMultilineUsesLCD proves a multi-line message is delivered
+// over the event plane even when the backend can send natively: typing it would
+// submit each line as its own turn.
+func TestHandleSendMessageMultilineUsesLCD(t *testing.T) {
+	ctx := context.Background()
+	var sentText string
+	backend.Register(sendBackend{sentText: &sentText})
+
+	db := newTestDB(t)
+	if err := insertProject(ctx, db, projectRow{
+		ID: "p1", Name: "proj", Backend: "sendtest", WorkspaceHandle: "ws-1",
+		Cwd: "/s", Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertProject: %v", err)
+	}
+	mustInsertAgent(t, db, agentRow{
+		ID: "a1", ProjectID: "p1", Backend: "sendtest", TerminalHandle: "term-1",
+		SessionID: "sess-1", Scope: "/s", SubjectID: "subj-1",
+		Status: StatusActive, State: StateUnknown, CreatedAt: "t0",
+	})
+
+	var captured *event.Event
+	appendFn := func(_ context.Context, e *event.Event) (int64, error) {
+		captured = e
+		return 3, nil
+	}
+	body := mustJSON(t, map[string]string{"agent_id": "a1", "text": "line one\nline two"})
+	reply := handleSendMessage(opCtx(db, body, appendFn))
+	if !reply.OK {
+		t.Fatalf("reply not ok: %s", reply.Error)
+	}
+	if sentText != "" {
+		t.Fatalf("SendText was called with %q; multi-line must not go native", sentText)
+	}
+	if captured == nil || captured.Type != EventMessage {
+		t.Fatalf("multi-line message was not appended as an EventMessage: %+v", captured)
+	}
+	var rb struct {
+		Transport string `json:"transport"`
+	}
+	if err := json.Unmarshal(reply.Body, &rb); err != nil || rb.Transport != "event" {
+		t.Fatalf("reply = %s, want transport=event (err %v)", reply.Body, err)
+	}
+}
+
 func TestHandleSendMessageErrors(t *testing.T) {
 	db := newTestDB(t)
 	mustInsertAgent(t, db, agentRow{

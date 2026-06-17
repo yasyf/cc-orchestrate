@@ -177,8 +177,13 @@ func handleSendMessage(hc daemon.HandlerCtx) daemon.Reply {
 // appending an OriginHuman EventMessage the agent's watch Monitor consumes (the
 // LCD). seq is the event-log sequence on the LCD path and 0 on the native path,
 // which writes no event-plane frame.
+//
+// A message containing a newline is always delivered over the LCD, even to a
+// native backend: typing it into a terminal would submit each line as its own
+// turn (and cmux reinterprets \t too), fragmenting the message. The LCD delivers
+// it whole as a single EventMessage.
 func deliverMessage(hc daemon.HandlerCtx, bk backend.Backend, ag agentRow, text string) (native bool, seq int64, err error) {
-	if s, ok := bk.(backend.Sender); ok && bk.Caps().Has(backend.CanSendText) {
+	if s, ok := bk.(backend.Sender); ok && bk.Caps().Has(backend.CanSendText) && !strings.ContainsAny(text, "\n\r") {
 		handle, err := backendAgentHandle(hc, ag)
 		if err != nil {
 			return true, 0, err

@@ -457,12 +457,17 @@ func agentCmd() *cobra.Command {
 				return err
 			}
 			var out struct {
-				Seq int64 `json:"seq"`
+				Seq       int64  `json:"seq"`
+				Transport string `json:"transport"`
 			}
 			if err := json.Unmarshal(reply.Body, &out); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "sent to %s (seq %d)\n", args[0], out.Seq)
+			if out.Transport == "native" {
+				fmt.Fprintf(c.OutOrStdout(), "sent to %s (native)\n", args[0])
+			} else {
+				fmt.Fprintf(c.OutOrStdout(), "sent to %s (seq %d)\n", args[0], out.Seq)
+			}
 			return nil
 		},
 	}
