@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/spf13/cobra v1.10.2
-	github.com/yasyf/cc-interact v0.1.0
+	github.com/yasyf/cc-interact v0.1.1
 	modernc.org/sqlite v1.52.0
 )
 

@@ -5,7 +5,9 @@ package orchestrate
 
 import (
 	"context"
+	"errors"
 	"os"
+	"syscall"
 
 	"github.com/yasyf/cc-interact/cmd"
 	"github.com/yasyf/cc-interact/daemon"
@@ -53,8 +55,20 @@ func deps() cmd.Deps {
 		EnsureCurrent:          func(context.Context) error { return launcher().EnsureCurrent(daemon.UpgradeTimeout) },
 		EnsureCurrentIfRunning: func() error { return launcher().EnsureCurrentIfRunning() },
 		ClaudePID:              os.Getpid,
+		WindowAlive:            windowAlive,
 		TerminalEvent:          func(t string) bool { return t == EventExited },
 		Serve:                  serve,
 		ChannelTools:           channelTools,
 	}
+}
+
+// windowAlive reports whether pid names a live process, so a pid-bound watch or
+// channel consumer self-terminates once its agent's claude window dies. EPERM
+// means the process exists under another owner — still alive.
+func windowAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
