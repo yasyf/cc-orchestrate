@@ -1,11 +1,25 @@
 package orchestrate
 
 import (
+	"cmp"
 	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/yasyf/cc-interact/daemon"
 	"github.com/yasyf/cc-interact/event"
+
+	"github.com/yasyf/cc-orchestrate/backend"
 )
+
+// slugInvalid collapses every run of non-slug characters in a project name to a
+// single hyphen when deriving a project's canonical id.
+var slugInvalid = regexp.MustCompile(`[^a-z0-9]+`)
 
 // agentView is the JSON shape every agent-facing op returns: the persisted agent
 // fields a parent inspects, flattened from agentRow.
@@ -136,6 +150,177 @@ func handleConfigSet(hc daemon.HandlerCtx) daemon.Reply {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
 	return daemon.Reply{OK: true}
+}
+
+// projectView is the JSON shape every project-facing op returns, flattened from
+// projectRow so a parent never sees the internal column names.
+type projectView struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Backend   string `json:"backend"`
+	Workspace string `json:"workspace"`
+	Cwd       string `json:"cwd"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+}
+
+func newProjectView(p projectRow) projectView {
+	return projectView{
+		ID: p.ID, Name: p.Name, Backend: p.Backend, Workspace: p.WorkspaceHandle,
+		Cwd: p.Cwd, Status: p.Status, CreatedAt: p.CreatedAt,
+	}
+}
+
+// projectSlug derives a project's stable, unique canonical id from its name: the
+// name slugified, plus a short uuid suffix so two projects of the same name never
+// collide on the primary key.
+func projectSlug(name string) string {
+	base := strings.Trim(slugInvalid.ReplaceAllString(strings.ToLower(name), "-"), "-")
+	if base == "" {
+		base = "project"
+	}
+	return base + "-" + uuid.NewString()[:8]
+}
+
+// resolveBackend picks the backend for a project: the explicit name, else the
+// persisted selection, else the first available one. It errors when an explicit
+// or selected backend is unknown, or when none is available.
+func resolveBackend(hc daemon.HandlerCtx, explicit string) (backend.Backend, string, error) {
+	name := explicit
+	if name == "" {
+		value, found, err := getConfig(hc.Ctx, hc.DB, "backend")
+		if err != nil {
+			return nil, "", err
+		}
+		if found {
+			name = value
+		}
+	}
+	if name != "" {
+		b, ok := backend.Get(name)
+		if !ok {
+			return nil, "", fmt.Errorf("unknown backend: %s", name)
+		}
+		return b, name, nil
+	}
+	b, ok := backend.Select()
+	if !ok {
+		return nil, "", fmt.Errorf("no available backend; install one of %s", strings.Join(backend.Precedence, ", "))
+	}
+	return b, b.Name(), nil
+}
+
+// handleProjectCreate answers project-create: it resolves the backend, creates
+// the backend workspace, persists the project row keyed by a slug of its name,
+// and reports the new id, workspace handle, and backend.
+func handleProjectCreate(hc daemon.HandlerCtx) daemon.Reply {
+	var b struct {
+		Name    string `json:"name"`
+		Backend string `json:"backend"`
+		Cwd     string `json:"cwd"`
+	}
+	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+		return daemon.Reply{OK: false, Error: "bad project-create body: " + err.Error()}
+	}
+	bk, bname, err := resolveBackend(hc, b.Backend)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := bk.EnsureReady(hc.Ctx); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	cwd, err := filepath.Abs(cmp.Or(b.Cwd, "."))
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	handle, err := bk.CreateProject(hc.Ctx, backend.ProjectSpec{Name: b.Name, Cwd: cwd})
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	p := projectRow{
+		ID: projectSlug(b.Name), Name: b.Name, Backend: bname, WorkspaceHandle: handle.ID,
+		Cwd: cwd, Status: "active", CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := insertProject(hc.Ctx, hc.DB, p); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	out, _ := json.Marshal(map[string]string{"project_id": p.ID, "workspace": handle.ID, "backend": bname})
+	return daemon.Reply{OK: true, Body: out}
+}
+
+// handleProjectList answers project-list with every project's flattened view.
+func handleProjectList(hc daemon.HandlerCtx) daemon.Reply {
+	projects, err := listProjects(hc.Ctx, hc.DB)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	views := make([]projectView, len(projects))
+	for i, p := range projects {
+		views[i] = newProjectView(p)
+	}
+	body, err := json.Marshal(views)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	return daemon.Reply{OK: true, Body: body}
+}
+
+// handleProjectActivate answers project-activate: it resolves the project (by id
+// or name, erroring when missing) and marks it active.
+func handleProjectActivate(hc daemon.HandlerCtx) daemon.Reply {
+	var b struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+		return daemon.Reply{OK: false, Error: "bad project-activate body: " + err.Error()}
+	}
+	proj, err := getProject(hc.Ctx, hc.DB, b.ID)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := setProjectStatus(hc.Ctx, hc.DB, proj.ID, "active"); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	out, _ := json.Marshal(map[string]string{"project_id": proj.ID, "status": "active"})
+	return daemon.Reply{OK: true, Body: out}
+}
+
+// handleAgentKill answers agent-kill: it stops the agent's transcript tailer,
+// terminates the backend terminal, marks the row exited, and appends a terminal
+// EventExited. A backend kill failure is surfaced after the row is already marked
+// exited, so a half-dead agent never lingers as active.
+func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
+	var b struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+		return daemon.Reply{OK: false, Error: "bad agent-kill body: " + err.Error()}
+	}
+	ag, err := getAgent(hc.Ctx, hc.DB, b.AgentID)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	bk, ok := backend.Get(ag.Backend)
+	if !ok {
+		return daemon.Reply{OK: false, Error: "unknown backend: " + ag.Backend}
+	}
+	tailers.stop(ag.ID)
+	killErr := bk.Kill(hc.Ctx, backend.AgentHandle{
+		Backend: ag.Backend, ID: ag.TerminalHandle, ProjectID: ag.ProjectID, Name: ag.Name, SessionID: ag.SessionID,
+	})
+	if err := setAgentLifecycle(hc.Ctx, hc.DB, ag.ID, "exited"); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if _, err := hc.Append(hc.Ctx, &event.Event{
+		SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventExited, Payload: json.RawMessage("{}"),
+	}); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if killErr != nil {
+		return daemon.Reply{OK: false, Error: fmt.Errorf("kill agent %q: %w", ag.ID, killErr).Error()}
+	}
+	out, _ := json.Marshal(map[string]string{"agent_id": ag.ID, "status": "exited"})
+	return daemon.Reply{OK: true, Body: out}
 }
 
 // handleConfigGet answers config-get with one config key's value and whether it

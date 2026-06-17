@@ -4,11 +4,51 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/yasyf/cc-interact/daemon"
 	"github.com/yasyf/cc-interact/event"
+
+	"github.com/yasyf/cc-orchestrate/backend"
 )
+
+// opBackend is a registered test backend that records the CreateProject and Kill
+// calls it receives, so the project/kill ops can be exercised without a live CLI.
+// Its Name is outside backend.Precedence, so it never interferes with the default
+// availability/selection ordering; ops address it by passing its name explicitly.
+type opBackend struct {
+	createdSpec *backend.ProjectSpec
+	killedAgent *backend.AgentHandle
+	killErr     error
+}
+
+func (opBackend) Name() string                      { return "optest" }
+func (opBackend) Available() bool                   { return true }
+func (opBackend) EnsureReady(context.Context) error { return nil }
+func (opBackend) ListProjects(context.Context) ([]backend.ProjectHandle, error) {
+	return nil, nil
+}
+func (b opBackend) CreateProject(_ context.Context, spec backend.ProjectSpec) (backend.ProjectHandle, error) {
+	if b.createdSpec != nil {
+		*b.createdSpec = spec
+	}
+	return backend.ProjectHandle{Backend: "optest", ID: "ws-" + spec.Name, Name: spec.Name, Cwd: spec.Cwd}, nil
+}
+func (opBackend) Spawn(context.Context, backend.SpawnSpec) (backend.AgentHandle, error) {
+	return backend.AgentHandle{}, nil
+}
+func (opBackend) ListAgents(context.Context, backend.ProjectHandle) ([]backend.AgentHandle, error) {
+	return nil, nil
+}
+func (b opBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
+	if b.killedAgent != nil {
+		*b.killedAgent = agent
+	}
+	return b.killErr
+}
+func (opBackend) KillProject(context.Context, backend.ProjectHandle) error { return nil }
+func (opBackend) Caps() backend.Caps                                       { return backend.Caps{} }
 
 func mustInsertAgent(t *testing.T, db *sql.DB, a agentRow) {
 	t.Helper()
@@ -191,4 +231,188 @@ func TestHandleConfigGetSet(t *testing.T) {
 	if !got.Found || got.Value != "superset" {
 		t.Fatalf("after set = %+v, want value=superset found=true", got)
 	}
+}
+
+func TestHandleProjectCreate(t *testing.T) {
+	db := newTestDB(t)
+
+	var gotSpec backend.ProjectSpec
+	backend.Register(opBackend{createdSpec: &gotSpec})
+
+	body := mustJSON(t, map[string]string{"name": "demo", "backend": "optest", "cwd": "/tmp/ccodemo"})
+	reply := handleProjectCreate(opCtx(db, body, nil))
+	if !reply.OK {
+		t.Fatalf("reply not ok: %s", reply.Error)
+	}
+	var out struct {
+		ProjectID string `json:"project_id"`
+		Workspace string `json:"workspace"`
+		Backend   string `json:"backend"`
+	}
+	if err := json.Unmarshal(reply.Body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ProjectID == "" || out.Workspace != "ws-demo" || out.Backend != "optest" {
+		t.Fatalf("reply = %+v, want non-empty id, workspace ws-demo, backend optest", out)
+	}
+
+	// The backend received the project spec with the absolute cwd.
+	if gotSpec.Name != "demo" || gotSpec.Cwd != "/tmp/ccodemo" {
+		t.Fatalf("CreateProject spec = %+v, want {Name:demo Cwd:/tmp/ccodemo}", gotSpec)
+	}
+
+	// The project row persisted with the backend's workspace handle.
+	p, err := getProject(context.Background(), db, out.ProjectID)
+	if err != nil {
+		t.Fatalf("getProject: %v", err)
+	}
+	want := projectRow{
+		ID: out.ProjectID, Name: "demo", Backend: "optest", WorkspaceHandle: "ws-demo",
+		Cwd: "/tmp/ccodemo", Status: "active", CreatedAt: p.CreatedAt,
+	}
+	if p != want {
+		t.Fatalf("project row = %+v, want %+v", p, want)
+	}
+	if p.CreatedAt == "" {
+		t.Error("created_at not stamped")
+	}
+}
+
+func TestHandleProjectList(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	for _, p := range []projectRow{
+		{ID: "p1", Name: "alpha", Backend: "tmux", WorkspaceHandle: "ws-1", Cwd: "/tmp/a", Status: "active", CreatedAt: "t0"},
+		{ID: "p2", Name: "beta", Backend: "superset", WorkspaceHandle: "ws-2", Cwd: "/tmp/b", Status: "archived", CreatedAt: "t1"},
+	} {
+		if err := insertProject(ctx, db, p); err != nil {
+			t.Fatalf("insertProject %s: %v", p.ID, err)
+		}
+	}
+
+	reply := handleProjectList(opCtx(db, nil, nil))
+	if !reply.OK {
+		t.Fatalf("reply not ok: %s", reply.Error)
+	}
+	var got []projectView
+	if err := json.Unmarshal(reply.Body, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []projectView{
+		{ID: "p1", Name: "alpha", Backend: "tmux", Workspace: "ws-1", Cwd: "/tmp/a", Status: "active", CreatedAt: "t0"},
+		{ID: "p2", Name: "beta", Backend: "superset", Workspace: "ws-2", Cwd: "/tmp/b", Status: "archived", CreatedAt: "t1"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("view[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestHandleProjectActivate(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	if err := insertProject(ctx, db, projectRow{
+		ID: "p1", Name: "alpha", Backend: "tmux", Cwd: "/tmp/a", Status: "archived", CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertProject: %v", err)
+	}
+
+	t.Run("activates by id", func(t *testing.T) {
+		reply := handleProjectActivate(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), nil))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		p, err := getProject(ctx, db, "p1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Status != "active" {
+			t.Fatalf("status = %q, want active", p.Status)
+		}
+	})
+	t.Run("missing is an error", func(t *testing.T) {
+		reply := handleProjectActivate(opCtx(db, mustJSON(t, map[string]string{"id": "ghost"}), nil))
+		if reply.OK || reply.Error == "" {
+			t.Fatalf("reply = %+v, want ok=false with an error", reply)
+		}
+	})
+}
+
+func TestHandleAgentKill(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTailerManager(ctx)
+
+	db := newTestDB(t)
+	mustInsertAgent(t, db, agentRow{
+		ID: "a1", ProjectID: "p1", Backend: "optest", TerminalHandle: "term-1",
+		SessionID: "sess-1", Scope: "/s", Name: "worker", SubjectID: "subj-1",
+		Status: "active", State: StateWorking, CreatedAt: "t0",
+	})
+
+	t.Run("kills and marks exited", func(t *testing.T) {
+		var killed backend.AgentHandle
+		backend.Register(opBackend{killedAgent: &killed})
+
+		var captured *event.Event
+		appendFn := func(_ context.Context, e *event.Event) (int64, error) {
+			captured = e
+			return 9, nil
+		}
+		reply := handleAgentKill(opCtx(db, mustJSON(t, map[string]string{"agent_id": "a1"}), appendFn))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+
+		// The backend received the agent handle assembled from the row.
+		want := backend.AgentHandle{
+			Backend: "optest", ID: "term-1", ProjectID: "p1", Name: "worker", SessionID: "sess-1",
+		}
+		if killed != want {
+			t.Fatalf("kill handle = %+v, want %+v", killed, want)
+		}
+
+		// The row is now exited.
+		ag, err := getAgent(ctx, db, "a1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ag.Status != "exited" {
+			t.Fatalf("status = %q, want exited", ag.Status)
+		}
+
+		// A terminal EventExited was appended on the subject log.
+		if captured == nil {
+			t.Fatal("Append was not called")
+		}
+		if captured.SubjectID != "subj-1" || captured.Type != EventExited || captured.Origin != event.OriginSystem {
+			t.Fatalf("event = %+v, want subj-1/%s/system", captured, EventExited)
+		}
+	})
+
+	t.Run("kill error is surfaced but the row is still exited", func(t *testing.T) {
+		mustInsertAgent(t, db, agentRow{
+			ID: "a2", ProjectID: "p1", Backend: "optest", TerminalHandle: "term-2",
+			SessionID: "sess-2", Scope: "/s", SubjectID: "subj-2",
+			Status: "active", State: StateWorking, CreatedAt: "t1",
+		})
+		backend.Register(opBackend{killErr: errors.New("tmux: no such window")})
+		appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+
+		reply := handleAgentKill(opCtx(db, mustJSON(t, map[string]string{"agent_id": "a2"}), appendFn))
+		if reply.OK || reply.Error == "" {
+			t.Fatalf("reply = %+v, want ok=false with the kill error", reply)
+		}
+		ag, err := getAgent(ctx, db, "a2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ag.Status != "exited" {
+			t.Fatalf("status = %q, want exited even after kill error", ag.Status)
+		}
+	})
 }

@@ -1,0 +1,316 @@
+package orchestrate
+
+import (
+	"context"
+	"encoding/json"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/yasyf/cc-interact/daemon"
+	"github.com/yasyf/cc-interact/event"
+	"github.com/yasyf/cc-interact/store"
+	"github.com/yasyf/cc-interact/subject"
+
+	"github.com/yasyf/cc-orchestrate/backend"
+)
+
+func TestChildMCPConfig(t *testing.T) {
+	raw := childMCPConfig("/opt/cc-orchestrate", "sid-1", "/work/scope")
+
+	var got struct {
+		MCPServers map[string]mcpServer `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("childMCPConfig produced invalid JSON: %v\n%s", err, raw)
+	}
+	srv, ok := got.MCPServers["cc-orchestrate"]
+	if !ok {
+		t.Fatalf("missing cc-orchestrate server in %s", raw)
+	}
+	if srv.Command != "/opt/cc-orchestrate" {
+		t.Errorf("command = %q, want /opt/cc-orchestrate", srv.Command)
+	}
+	want := []string{"channel", "--session", "sid-1", "--cwd", "/work/scope"}
+	if len(srv.Args) != len(want) {
+		t.Fatalf("args = %v, want %v", srv.Args, want)
+	}
+	for i := range want {
+		if srv.Args[i] != want[i] {
+			t.Fatalf("args = %v, want %v", srv.Args, want)
+		}
+	}
+}
+
+func TestChildSettings(t *testing.T) {
+	cases := []struct {
+		name        string
+		self        string
+		wantSession string
+		wantGuard   string
+	}{
+		{
+			name:        "plain path",
+			self:        "/opt/cc-orchestrate",
+			wantSession: "/opt/cc-orchestrate session-record",
+			wantGuard:   "/opt/cc-orchestrate guard-edit",
+		},
+		{
+			name:        "path with spaces is shell-quoted",
+			self:        "/Applications/My Tools/cc-orchestrate",
+			wantSession: "'/Applications/My Tools/cc-orchestrate' session-record",
+			wantGuard:   "'/Applications/My Tools/cc-orchestrate' guard-edit",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := childSettings(tc.self)
+			var got struct {
+				Hooks map[string][]hookMatcher `json:"hooks"`
+			}
+			if err := json.Unmarshal([]byte(raw), &got); err != nil {
+				t.Fatalf("childSettings produced invalid JSON: %v\n%s", err, raw)
+			}
+
+			session := got.Hooks["SessionStart"]
+			if len(session) != 1 || session[0].Matcher != "" {
+				t.Fatalf("SessionStart = %+v, want one matcher-less entry", session)
+			}
+			if len(session[0].Hooks) != 1 || session[0].Hooks[0].Type != "command" ||
+				session[0].Hooks[0].Command != tc.wantSession {
+				t.Errorf("SessionStart hook = %+v, want command %q", session[0].Hooks, tc.wantSession)
+			}
+
+			guard := got.Hooks["PreToolUse"]
+			if len(guard) != 1 || guard[0].Matcher != "Edit|Write|NotebookEdit" {
+				t.Fatalf("PreToolUse = %+v, want matcher Edit|Write|NotebookEdit", guard)
+			}
+			if len(guard[0].Hooks) != 1 || guard[0].Hooks[0].Type != "command" ||
+				guard[0].Hooks[0].Command != tc.wantGuard {
+				t.Errorf("PreToolUse hook = %+v, want command %q", guard[0].Hooks, tc.wantGuard)
+			}
+		})
+	}
+}
+
+func TestClaudeCommand(t *testing.T) {
+	t.Run("with prompt", func(t *testing.T) {
+		argv := claudeCommand("/opt/cc-orchestrate", "sid-1", "/work", "fix the bug")
+		if argv[0] != "claude" {
+			t.Fatalf("argv[0] = %q, want claude", argv[0])
+		}
+		if got := flagValue(argv, "--session-id"); got != "sid-1" {
+			t.Errorf("--session-id = %q, want sid-1", got)
+		}
+		if !contains(argv, "--strict-mcp-config") {
+			t.Errorf("argv missing --strict-mcp-config: %v", argv)
+		}
+		if got := flagValue(argv, "--mcp-config"); got != childMCPConfig("/opt/cc-orchestrate", "sid-1", "/work") {
+			t.Errorf("--mcp-config = %q", got)
+		}
+		if got := flagValue(argv, "--settings"); got != childSettings("/opt/cc-orchestrate") {
+			t.Errorf("--settings = %q", got)
+		}
+		if last := argv[len(argv)-1]; last != "fix the bug" {
+			t.Errorf("trailing arg = %q, want the prompt", last)
+		}
+	})
+	t.Run("empty prompt omits the trailing arg", func(t *testing.T) {
+		argv := claudeCommand("/opt/cc-orchestrate", "sid-1", "/work", "")
+		if last := argv[len(argv)-1]; last != childSettings("/opt/cc-orchestrate") {
+			t.Errorf("trailing arg = %q, want --settings value (no prompt)", last)
+		}
+	})
+}
+
+func TestTailerManagerStartStop(t *testing.T) {
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	t.Setenv("HOME", t.TempDir()) // no transcript will ever resolve, so tailers just poll
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	m := newTailerManager(ctx)
+	db := newTestDB(t)
+	noopAppend := func(context.Context, *event.Event) (int64, error) { return 0, nil }
+
+	ag := agentRow{ID: "a1", SessionID: "sess-x", Scope: "/s", SubjectID: "subj-1"}
+
+	m.start(db, noopAppend, ag)
+	if _, ok := m.cancels["a1"]; !ok || len(m.cancels) != 1 {
+		t.Fatalf("after start cancels = %v, want one entry for a1", keysOf(m.cancels))
+	}
+
+	// A sessionless agent has no transcript, so start is a no-op.
+	m.start(db, noopAppend, agentRow{ID: "a2"})
+	if _, ok := m.cancels["a2"]; ok || len(m.cancels) != 1 {
+		t.Fatalf("sessionless start registered a tailer: %v", keysOf(m.cancels))
+	}
+
+	// Restarting the same id cancels-and-replaces rather than doubling up.
+	m.start(db, noopAppend, ag)
+	if len(m.cancels) != 1 {
+		t.Fatalf("restart doubled the registration: %v", keysOf(m.cancels))
+	}
+
+	m.stop("a1")
+	if _, ok := m.cancels["a1"]; ok || len(m.cancels) != 0 {
+		t.Fatalf("after stop cancels = %v, want empty", keysOf(m.cancels))
+	}
+	m.stop("a1") // idempotent: stopping an unknown id is a no-op
+}
+
+// spawnBackend is a registered test backend that records the SpawnSpec it
+// receives, so handleSpawn's wiring can be asserted without a live claude.
+type spawnBackend struct {
+	spec *backend.SpawnSpec
+}
+
+func (spawnBackend) Name() string                      { return "spawntest" }
+func (spawnBackend) Available() bool                   { return true }
+func (spawnBackend) EnsureReady(context.Context) error { return nil }
+func (spawnBackend) ListProjects(context.Context) ([]backend.ProjectHandle, error) {
+	return nil, nil
+}
+func (spawnBackend) CreateProject(context.Context, backend.ProjectSpec) (backend.ProjectHandle, error) {
+	return backend.ProjectHandle{}, nil
+}
+func (b spawnBackend) Spawn(_ context.Context, spec backend.SpawnSpec) (backend.AgentHandle, error) {
+	*b.spec = spec
+	return backend.AgentHandle{Backend: "spawntest", ID: "term-1", SessionID: spec.SessionID}, nil
+}
+func (spawnBackend) ListAgents(context.Context, backend.ProjectHandle) ([]backend.AgentHandle, error) {
+	return nil, nil
+}
+func (spawnBackend) Kill(context.Context, backend.AgentHandle) error          { return nil }
+func (spawnBackend) KillProject(context.Context, backend.ProjectHandle) error { return nil }
+func (spawnBackend) Caps() backend.Caps                                       { return backend.Caps{} }
+
+func TestHandleSpawn(t *testing.T) {
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTailerManager(ctx)
+
+	var gotSpec backend.SpawnSpec
+	backend.Register(spawnBackend{spec: &gotSpec})
+
+	// store.Open applies cc-interact's core schema (subjects/events) plus the
+	// orchestrate migrate, so the subject resolver has a real table to write.
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	db := st.DB()
+
+	if err := insertProject(ctx, db, projectRow{
+		ID: "p1", Name: "alpha", Backend: "spawntest", WorkspaceHandle: "ws-1",
+		Cwd: "/tmp/alpha", Status: "active", CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertProject: %v", err)
+	}
+
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db, []string{"active"})}
+	appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+	body := mustJSON(t, map[string]string{"project": "p1", "name": "worker", "prompt": "fix it"})
+	hc := daemon.HandlerCtx{
+		Ctx: ctx, Env: daemon.Envelope{Body: body},
+		Window: subject.Window{Session: "parent", ClaudePID: 4242},
+		Scope:  "/parent", Subjects: subjects, DB: db, Append: appendFn,
+	}
+
+	reply := handleSpawn(hc)
+	if !reply.OK {
+		t.Fatalf("reply not ok: %s", reply.Error)
+	}
+	var out struct {
+		AgentID   string `json:"agent_id"`
+		SubjectID string `json:"subject_id"`
+		Terminal  string `json:"terminal"`
+		Backend   string `json:"backend"`
+	}
+	if err := json.Unmarshal(reply.Body, &out); err != nil {
+		t.Fatalf("reply body: %v", err)
+	}
+	if out.AgentID == "" || out.SubjectID == "" {
+		t.Fatalf("reply ids empty: %+v", out)
+	}
+	if out.Terminal != "term-1" || out.Backend != "spawntest" {
+		t.Fatalf("reply = %+v, want terminal term-1 backend spawntest", out)
+	}
+
+	// The agent row is keyed by the generated session id and bound to the subject.
+	ag, err := getAgent(ctx, db, out.AgentID)
+	if err != nil {
+		t.Fatalf("getAgent: %v", err)
+	}
+	want := agentRow{
+		ID: out.AgentID, ProjectID: "p1", Backend: "spawntest", TerminalHandle: "term-1",
+		SessionID: out.AgentID, Scope: "/tmp/alpha", Name: "worker", Prompt: "fix it",
+		SubjectID: out.SubjectID, Status: "active", State: StateUnknown,
+		CreatedAt: ag.CreatedAt,
+	}
+	if ag != want {
+		t.Fatalf("agent row = %+v, want %+v", ag, want)
+	}
+	if ag.CreatedAt == "" {
+		t.Error("created_at not stamped")
+	}
+
+	// The subject was created for the child session with claude_pid 0 (unknown
+	// until the child's SessionStart hook rebinds it) — never the parent's pid.
+	var session string
+	var pid int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COALESCE(session_id, ''), claude_pid FROM subjects WHERE id = ?`, out.SubjectID,
+	).Scan(&session, &pid); err != nil {
+		t.Fatalf("query subject: %v", err)
+	}
+	if session != out.AgentID || pid != 0 {
+		t.Fatalf("subject session=%q pid=%d, want session=%s pid=0", session, pid, out.AgentID)
+	}
+
+	// The backend received the assembled claude argv keyed to the same session.
+	if gotSpec.SessionID != out.AgentID {
+		t.Errorf("spawn spec session = %q, want %s", gotSpec.SessionID, out.AgentID)
+	}
+	if len(gotSpec.Command) == 0 || gotSpec.Command[0] != "claude" {
+		t.Errorf("spawn command = %v, want it to start with claude", gotSpec.Command)
+	}
+	if last := gotSpec.Command[len(gotSpec.Command)-1]; last != "fix it" {
+		t.Errorf("spawn command trailing arg = %q, want the prompt", last)
+	}
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// flagValue returns the argument following the named flag in argv.
+func flagValue(argv []string, flag string) string {
+	for i, a := range argv {
+		if a == flag && i+1 < len(argv) {
+			return argv[i+1]
+		}
+	}
+	return ""
+}
+
+func keysOf(m map[string]context.CancelFunc) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

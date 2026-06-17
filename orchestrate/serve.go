@@ -2,6 +2,8 @@ package orchestrate
 
 import (
 	"context"
+	"database/sql"
+	"sync"
 
 	"github.com/yasyf/cc-interact/channel"
 	"github.com/yasyf/cc-interact/daemon"
@@ -13,18 +15,27 @@ import (
 // core ops (health, shutdown, resolve, session-record, guard-edit, channel-ack,
 // status).
 const (
-	opSpawn       daemon.Op = "agent-spawn"
-	opSendMessage daemon.Op = "agent-send-message"
-	opStatus      daemon.Op = "agent-status"
-	opList        daemon.Op = "agent-list"
-	opConfigGet   daemon.Op = "config-get"
-	opConfigSet   daemon.Op = "config-set"
+	opSpawn           daemon.Op = "agent-spawn"
+	opSendMessage     daemon.Op = "agent-send-message"
+	opStatus          daemon.Op = "agent-status"
+	opList            daemon.Op = "agent-list"
+	opAgentKill       daemon.Op = "agent-kill"
+	opProjectCreate   daemon.Op = "project-create"
+	opProjectList     daemon.Op = "project-list"
+	opProjectActivate daemon.Op = "project-activate"
+	opConfigGet       daemon.Op = "config-get"
+	opConfigSet       daemon.Op = "config-set"
 )
+
+// tailers is the daemon-lifetime transcript-tailer manager, bound to the serve
+// context so a tailer outlives the per-request handler context that spawned it.
+var tailers *tailerManager
 
 // serve runs the long-lived daemon: it builds the cc-interact daemon with the
 // orchestrate schema and the channel presence lifecycle, registers the domain
 // ops, then serves control RPCs until ctx is cancelled.
 func serve(ctx context.Context) error {
+	tailers = newTailerManager(ctx)
 	c := channel.Connectivity{}
 	s, err := daemon.New(daemon.Config{
 		AppName:        AppName,
@@ -32,11 +43,11 @@ func serve(ctx context.Context) error {
 		Version:        Version,
 		ActiveStatuses: []string{"active"},
 		WindowAlive:    func(int) bool { return true },
-		Migrate:        migrate,
 		// c.Type() (not c.EventType) so the SSE plane filters the same presence
 		// type these hooks emit, correct even for the Connectivity zero value.
 		PresenceEventType: c.Type(),
 		OnPresenceChange:  c.OnPresenceChange,
+		Migrate:           migrate,
 		// Run the channel boot reconcile, then resume a transcript tailer for every
 		// agent still active across the restart.
 		BootReconcile: func(ctx context.Context, s *daemon.Server) error {
@@ -48,7 +59,7 @@ func serve(ctx context.Context) error {
 				return err
 			}
 			for _, ag := range agents {
-				startTailer(ctx, s, ag)
+				tailers.start(s.DB(), s.Append, ag)
 			}
 			return nil
 		},
@@ -56,32 +67,65 @@ func serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.Register(opSpawn, handleStub)
+	s.Register(opSpawn, handleSpawn)
 	s.Register(opSendMessage, handleSendMessage)
 	s.Register(opStatus, handleStatus)
 	s.Register(opList, handleList)
+	s.Register(opAgentKill, handleAgentKill)
+	s.Register(opProjectCreate, handleProjectCreate)
+	s.Register(opProjectList, handleProjectList)
+	s.Register(opProjectActivate, handleProjectActivate)
 	s.Register(opConfigGet, handleConfigGet)
 	s.Register(opConfigSet, handleConfigSet)
 	return s.Serve(ctx)
 }
 
-// startTailer launches a background transcript tailer for an agent, persisting
-// each derived Status to its row and mirroring it onto the subject log as an
+// tailerManager owns every running transcript tailer for the daemon's lifetime.
+// Each tailer's context derives from base (the serve context), not from the
+// per-request handler context that started it, so a tailer survives the RPC that
+// spawned the agent.
+type tailerManager struct {
+	base    context.Context
+	mu      sync.Mutex
+	cancels map[string]context.CancelFunc
+}
+
+func newTailerManager(ctx context.Context) *tailerManager {
+	return &tailerManager{base: ctx, cancels: map[string]context.CancelFunc{}}
+}
+
+// start launches a background transcript tailer for an agent, persisting each
+// derived Status to its row and mirroring it onto the subject log as an
 // OriginSystem EventStatus. An agent with no session id has no transcript to
-// tail, so it is skipped.
-func startTailer(ctx context.Context, s *daemon.Server, ag agentRow) {
+// tail, so it is skipped. A tailer already running for the agent id is cancelled
+// and replaced.
+func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRow) {
 	if ag.SessionID == "" {
 		return
 	}
-	go runTailer(ctx, ag.SessionID, ag.Scope, func(st Status) error {
-		applyStatus(ctx, s.DB(), ag.ID, st)
-		_, err := s.Append(ctx, &event.Event{
+	cctx, cancel := context.WithCancel(m.base)
+	m.mu.Lock()
+	if prev, ok := m.cancels[ag.ID]; ok {
+		prev()
+	}
+	m.cancels[ag.ID] = cancel
+	m.mu.Unlock()
+	go runTailer(cctx, ag.SessionID, ag.Scope, func(st Status) error {
+		applyStatus(cctx, db, ag.ID, st)
+		_, err := appendFn(cctx, &event.Event{
 			SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventStatus, Payload: jsonStatus(st),
 		})
 		return err
 	})
 }
 
-// handleStub answers a domain op with a bare success until a later phase supplies
-// the real handler.
-func handleStub(daemon.HandlerCtx) daemon.Reply { return daemon.Reply{OK: true} }
+// stop cancels an agent's tailer and forgets it. It is a no-op for an agent with
+// no running tailer.
+func (m *tailerManager) stop(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cancel, ok := m.cancels[id]; ok {
+		cancel()
+		delete(m.cancels, id)
+	}
+}

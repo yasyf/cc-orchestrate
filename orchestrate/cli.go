@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -64,6 +65,56 @@ func withSessionDefault(c *cobra.Command) *cobra.Command {
 func notImplemented(c *cobra.Command, _ []string) error {
 	fmt.Fprintln(c.OutOrStdout(), "not implemented yet")
 	return nil
+}
+
+// runOp is the shared control-command round trip: ensure the daemon is current,
+// send one domain envelope keyed to the orchestrator's session and cwd, and
+// return the reply (turning a non-ok reply into an error). A nil body sends no
+// domain payload.
+func runOp(c *cobra.Command, op daemon.Op, body any) (daemon.Reply, error) {
+	ctx := c.Context()
+	d := deps()
+	if err := d.EnsureCurrent(ctx); err != nil {
+		return daemon.Reply{}, err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return daemon.Reply{}, err
+	}
+	var raw json.RawMessage
+	if body != nil {
+		if raw, err = json.Marshal(body); err != nil {
+			return daemon.Reply{}, err
+		}
+	}
+	reply, err := newClient().Do(ctx, daemon.Envelope{
+		Op: op, Session: AppName, ClaudePID: d.ClaudePID(), Scope: cwd, Body: raw,
+	})
+	if err != nil {
+		return daemon.Reply{}, err
+	}
+	if !reply.OK {
+		return daemon.Reply{}, errors.New(reply.Error)
+	}
+	return reply, nil
+}
+
+// renderTable renders a header and rows as an aligned text table with a trailing
+// newline and no trailing whitespace on any line.
+func renderTable(header []string, rows [][]string) string {
+	var buf strings.Builder
+	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, strings.Join(header, "\t"))
+	for _, r := range rows {
+		fmt.Fprintln(w, strings.Join(r, "\t"))
+	}
+	w.Flush()
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " ")
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // backendsCmd is the `backends` group: inspect and select the placement backend.
@@ -167,22 +218,13 @@ type backendRow struct {
 	isDefault bool
 }
 
-// formatBackends renders backend rows as an aligned text table with a trailing
-// newline and no trailing whitespace on any line.
+// formatBackends renders backend rows as an aligned text table.
 func formatBackends(rows []backendRow) string {
-	var buf strings.Builder
-	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "BACKEND\tINSTALLED\tDEFAULT")
-	for _, r := range rows {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", r.name, installedLabel(r.available), defaultMarker(r.isDefault))
+	out := make([][]string, len(rows))
+	for i, r := range rows {
+		out[i] = []string{r.name, installedLabel(r.available), defaultMarker(r.isDefault)}
 	}
-	w.Flush()
-
-	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimRight(line, " ")
-	}
-	return strings.Join(lines, "\n") + "\n"
+	return renderTable([]string{"BACKEND", "INSTALLED", "DEFAULT"}, out)
 }
 
 func installedLabel(available bool) string {
@@ -210,7 +252,22 @@ func projectsCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List projects",
 		Args:  cobra.NoArgs,
-		RunE:  notImplemented,
+		RunE: func(c *cobra.Command, _ []string) error {
+			reply, err := runOp(c, opProjectList, nil)
+			if err != nil {
+				return err
+			}
+			var views []projectView
+			if err := json.Unmarshal(reply.Body, &views); err != nil {
+				return err
+			}
+			rows := make([][]string, len(views))
+			for i, p := range views {
+				rows[i] = []string{p.ID, p.Name, p.Backend, p.Status, p.Cwd}
+			}
+			fmt.Fprint(c.OutOrStdout(), renderTable([]string{"ID", "NAME", "BACKEND", "STATUS", "CWD"}, rows))
+			return nil
+		},
 	}
 
 	var createBackend, createCwd string
@@ -218,7 +275,27 @@ func projectsCmd() *cobra.Command {
 		Use:   "create <name>",
 		Short: "Create a project and its backend workspace",
 		Args:  cobra.ExactArgs(1),
-		RunE:  notImplemented,
+		RunE: func(c *cobra.Command, args []string) error {
+			reply, err := runOp(c, opProjectCreate, map[string]string{
+				"name": args[0], "backend": createBackend, "cwd": createCwd,
+			})
+			if err != nil {
+				return err
+			}
+			var out struct {
+				ProjectID string `json:"project_id"`
+				Workspace string `json:"workspace"`
+				Backend   string `json:"backend"`
+			}
+			if err := json.Unmarshal(reply.Body, &out); err != nil {
+				return err
+			}
+			w := c.OutOrStdout()
+			fmt.Fprintf(w, "project:   %s\n", out.ProjectID)
+			fmt.Fprintf(w, "backend:   %s\n", out.Backend)
+			fmt.Fprintf(w, "workspace: %s\n", out.Workspace)
+			return nil
+		},
 	}
 	create.Flags().StringVar(&createBackend, "backend", "", "backend to place the project on (defaults to the selected/first available)")
 	create.Flags().StringVar(&createCwd, "cwd", "", "working directory for the project (defaults to the current directory)")
@@ -227,7 +304,20 @@ func projectsCmd() *cobra.Command {
 		Use:   "activate <id>",
 		Short: "Mark a project active",
 		Args:  cobra.ExactArgs(1),
-		RunE:  notImplemented,
+		RunE: func(c *cobra.Command, args []string) error {
+			reply, err := runOp(c, opProjectActivate, map[string]string{"id": args[0]})
+			if err != nil {
+				return err
+			}
+			var out struct {
+				ProjectID string `json:"project_id"`
+			}
+			if err := json.Unmarshal(reply.Body, &out); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "activated project: %s\n", out.ProjectID)
+			return nil
+		},
 	}
 
 	c.AddCommand(list, create, activate)
@@ -246,7 +336,28 @@ func agentCmd() *cobra.Command {
 		Use:   "spawn",
 		Short: "Spawn a child agent into a project",
 		Args:  cobra.NoArgs,
-		RunE:  notImplemented,
+		RunE: func(c *cobra.Command, _ []string) error {
+			reply, err := runOp(c, opSpawn, map[string]string{
+				"project": spawnProject, "backend": spawnBackend, "name": spawnName,
+				"cwd": spawnCwd, "prompt": spawnPrompt,
+			})
+			if err != nil {
+				return err
+			}
+			var out struct {
+				AgentID  string `json:"agent_id"`
+				Backend  string `json:"backend"`
+				Terminal string `json:"terminal"`
+			}
+			if err := json.Unmarshal(reply.Body, &out); err != nil {
+				return err
+			}
+			w := c.OutOrStdout()
+			fmt.Fprintf(w, "agent:    %s\n", out.AgentID)
+			fmt.Fprintf(w, "backend:  %s\n", out.Backend)
+			fmt.Fprintf(w, "terminal: %s\n", out.Terminal)
+			return nil
+		},
 	}
 	spawn.Flags().StringVar(&spawnProject, "project", "", "project id or name to spawn into")
 	spawn.Flags().StringVar(&spawnBackend, "backend", "", "backend override (defaults to the project's backend)")
@@ -259,7 +370,23 @@ func agentCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List agents",
 		Args:  cobra.NoArgs,
-		RunE:  notImplemented,
+		RunE: func(c *cobra.Command, _ []string) error {
+			reply, err := runOp(c, opList, map[string]string{"project": listProject})
+			if err != nil {
+				return err
+			}
+			var views []agentView
+			if err := json.Unmarshal(reply.Body, &views); err != nil {
+				return err
+			}
+			rows := make([][]string, len(views))
+			for i, a := range views {
+				rows[i] = []string{a.ID, a.Name, a.ProjectID, a.Backend, a.State, a.Status, strconv.Itoa(a.Tokens), a.Activity}
+			}
+			fmt.Fprint(c.OutOrStdout(), renderTable(
+				[]string{"ID", "NAME", "PROJECT", "BACKEND", "STATE", "STATUS", "TOKENS", "ACTIVITY"}, rows))
+			return nil
+		},
 	}
 	list.Flags().StringVar(&listProject, "project", "", "filter by project id or name")
 
@@ -267,14 +394,45 @@ func agentCmd() *cobra.Command {
 		Use:   "send-message <id> <text>",
 		Short: "Send a message to a running agent",
 		Args:  cobra.ExactArgs(2),
-		RunE:  notImplemented,
+		RunE: func(c *cobra.Command, args []string) error {
+			reply, err := runOp(c, opSendMessage, map[string]string{"agent_id": args[0], "text": args[1]})
+			if err != nil {
+				return err
+			}
+			var out struct {
+				Seq int64 `json:"seq"`
+			}
+			if err := json.Unmarshal(reply.Body, &out); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "sent to %s (seq %d)\n", args[0], out.Seq)
+			return nil
+		},
 	}
 
 	status := &cobra.Command{
 		Use:   "status <id>",
 		Short: "Show a single agent's derived status",
 		Args:  cobra.ExactArgs(1),
-		RunE:  notImplemented,
+		RunE: func(c *cobra.Command, args []string) error {
+			reply, err := runOp(c, opStatus, map[string]string{"agent_id": args[0]})
+			if err != nil {
+				return err
+			}
+			var a agentView
+			if err := json.Unmarshal(reply.Body, &a); err != nil {
+				return err
+			}
+			w := c.OutOrStdout()
+			fmt.Fprintf(w, "agent:    %s\n", a.ID)
+			fmt.Fprintf(w, "name:     %s\n", a.Name)
+			fmt.Fprintf(w, "status:   %s\n", a.Status)
+			fmt.Fprintf(w, "state:    %s\n", a.State)
+			fmt.Fprintf(w, "activity: %s\n", a.Activity)
+			fmt.Fprintf(w, "tokens:   %d\n", a.Tokens)
+			fmt.Fprintf(w, "updated:  %s\n", a.UpdatedAt)
+			return nil
+		},
 	}
 
 	var watchAll bool
@@ -292,7 +450,13 @@ func agentCmd() *cobra.Command {
 		Use:   "kill <id>",
 		Short: "Kill a running agent",
 		Args:  cobra.ExactArgs(1),
-		RunE:  notImplemented,
+		RunE: func(c *cobra.Command, args []string) error {
+			if _, err := runOp(c, opAgentKill, map[string]string{"agent_id": args[0]}); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "killed agent: %s\n", args[0])
+			return nil
+		},
 	}
 
 	c.AddCommand(spawn, list, sendMessage, status, watch, kill)
