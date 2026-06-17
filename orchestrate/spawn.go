@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yasyf/cc-interact/daemon"
+	"github.com/yasyf/cc-interact/event"
 	"github.com/yasyf/cc-interact/subject"
 
 	"github.com/yasyf/cc-orchestrate/backend"
@@ -164,6 +165,11 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := insertAgent(hc.Ctx, hc.DB, ag); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if _, err := hc.Append(hc.Ctx, &event.Event{
+		SubjectID: sub.ID, Origin: event.OriginSystem, Type: EventSpawned, Payload: spawnedPayload(ag),
+	}); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
 	tailers.start(hc.DB, hc.Append, ag)

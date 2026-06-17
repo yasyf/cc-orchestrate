@@ -80,6 +80,13 @@ func inboundPayload(text string) json.RawMessage {
 	return b
 }
 
+func spawnedPayload(ag agentRow) json.RawMessage {
+	b, _ := json.Marshal(map[string]string{
+		"type": EventSpawned, "agent_id": ag.ID, "backend": ag.Backend, "terminal": ag.TerminalHandle,
+	})
+	return b
+}
+
 // handleStatus answers agent-status with one agent's persisted snapshot.
 func handleStatus(hc daemon.HandlerCtx) daemon.Reply {
 	var b struct {

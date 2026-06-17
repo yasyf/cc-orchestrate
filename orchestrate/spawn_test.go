@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -241,7 +242,16 @@ func TestHandleSpawn(t *testing.T) {
 	}
 
 	subjects := subject.Resolver{Store: store.NewSubjectStore(db, []string{"active"})}
-	appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+	// Capture appended events under a mutex: the agent's transcript tailer runs in
+	// a background goroutine sharing this appendFn.
+	var mu sync.Mutex
+	var events []*event.Event
+	appendFn := func(_ context.Context, e *event.Event) (int64, error) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+		return 1, nil
+	}
 	body := mustJSON(t, map[string]string{"project": "p1", "name": "worker", "prompt": "fix it"})
 	hc := daemon.HandlerCtx{
 		Ctx: ctx, Env: daemon.Envelope{Body: body},
@@ -298,6 +308,35 @@ func TestHandleSpawn(t *testing.T) {
 	}
 	if session != out.AgentID || pid != 0 {
 		t.Fatalf("subject session=%q pid=%d, want session=%s pid=0", session, pid, out.AgentID)
+	}
+
+	// A lifecycle EventSpawned was appended on the child's subject log, symmetric
+	// with the EventExited on kill.
+	mu.Lock()
+	var spawned *event.Event
+	for _, e := range events {
+		if e.Type == EventSpawned {
+			spawned = e
+		}
+	}
+	mu.Unlock()
+	if spawned == nil {
+		t.Fatal("no EventSpawned appended on spawn")
+	}
+	if spawned.SubjectID != out.SubjectID || spawned.Origin != event.OriginSystem {
+		t.Fatalf("spawned event = subject %q origin %q, want %s/system", spawned.SubjectID, spawned.Origin, out.SubjectID)
+	}
+	var spl struct {
+		Type     string `json:"type"`
+		AgentID  string `json:"agent_id"`
+		Backend  string `json:"backend"`
+		Terminal string `json:"terminal"`
+	}
+	if err := json.Unmarshal(spawned.Payload, &spl); err != nil {
+		t.Fatalf("spawned payload: %v", err)
+	}
+	if spl.Type != EventSpawned || spl.AgentID != out.AgentID || spl.Backend != "spawntest" || spl.Terminal != "term-1" {
+		t.Fatalf("spawned payload = %+v, want agent %s backend spawntest terminal term-1", spl, out.AgentID)
 	}
 
 	// The backend received the assembled claude argv keyed to the same session.
