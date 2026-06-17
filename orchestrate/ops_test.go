@@ -767,6 +767,27 @@ func TestHandleAgentKill(t *testing.T) {
 			t.Fatalf("status = %q, want exited even after kill error", ag.Status)
 		}
 	})
+
+	t.Run("already-exited agent is an idempotent no-op", func(t *testing.T) {
+		mustInsertAgent(t, db, agentRow{
+			ID: "a3", ProjectID: "p1", Backend: "optest", TerminalHandle: "term-3",
+			SessionID: "sess-3", Scope: "/s", SubjectID: "subj-3",
+			Status: StatusExited, State: StateIdle, CreatedAt: "t2",
+		})
+		var killed backend.AgentHandle
+		backend.Register(opBackend{killedAgent: &killed})
+		appendFn := func(context.Context, *event.Event) (int64, error) {
+			t.Fatal("Append must not be called for an already-exited agent")
+			return 0, nil
+		}
+		reply := handleAgentKill(opCtx(db, mustJSON(t, map[string]string{"agent_id": "a3"}), appendFn))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		if (killed != backend.AgentHandle{}) {
+			t.Fatalf("bk.Kill was called for an already-exited agent: %+v", killed)
+		}
+	})
 }
 
 func TestHandleProjectKill(t *testing.T) {

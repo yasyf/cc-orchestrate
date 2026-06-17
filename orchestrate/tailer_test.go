@@ -2,10 +2,14 @@ package orchestrate
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/yasyf/cc-interact/event"
 )
 
 func appendLine(t *testing.T, path, data string) {
@@ -168,6 +172,103 @@ func TestRunTailerEmitsInboundLiveOnly(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("runTailer did not return after cancel")
+	}
+}
+
+// TestTailerManagerEmitsInboundEvent exercises tailerManager.start's inbound
+// branch end to end: a live user turn becomes an OriginSystem EventInbound, while
+// a turn matching the agent's spawn prompt is deduped (already in EventSpawned).
+func TestTailerManagerEmitsInboundEvent(t *testing.T) {
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	dir := filepath.Join(home, ".claude", "projects", "p")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	session := "sess-mgr"
+	path := filepath.Join(dir, session+".jsonl")
+	// A replayed assistant turn: its status emission signals the tailer is live.
+	if err := os.WriteFile(path, []byte(lineText+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	m := newTailerManager(ctx)
+	db := newTestDB(t)
+
+	var mu sync.Mutex
+	var events []*event.Event
+	appendFn := func(_ context.Context, e *event.Event) (int64, error) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+		return 1, nil
+	}
+	countType := func(typ string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, e := range events {
+			if e.Type == typ {
+				n++
+			}
+		}
+		return n
+	}
+	firstOf := func(typ string) *event.Event {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, e := range events {
+			if e.Type == typ {
+				return e
+			}
+		}
+		return nil
+	}
+	waitUntil := func(what string, pred func() bool) {
+		t.Helper()
+		deadline := time.After(2 * time.Second)
+		for !pred() {
+			select {
+			case <-deadline:
+				t.Fatalf("timed out waiting for %s", what)
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+	}
+
+	m.start(db, appendFn, agentRow{ID: "a1", SessionID: session, Scope: "/s", SubjectID: "subj-1", Prompt: "the spawn prompt"})
+
+	// Replay caught up once a status frame lands; the tailer is now live.
+	waitUntil("replay status", func() bool { return countType(EventStatus) > 0 })
+
+	// A live turn matching the spawn prompt is deduped; a different one is emitted.
+	appendLine(t, path, `{"type":"user","isSidechain":false,"message":{"role":"user","content":"the spawn prompt"}}`+"\n")
+	appendLine(t, path, lineUserPrompt+"\n")
+	waitUntil("inbound event", func() bool { return countType(EventInbound) > 0 })
+
+	if n := countType(EventInbound); n != 1 {
+		t.Fatalf("EventInbound count = %d, want 1 (spawn prompt must be deduped)", n)
+	}
+	in := firstOf(EventInbound)
+	if in.Origin != event.OriginSystem || in.SubjectID != "subj-1" {
+		t.Fatalf("inbound event = origin %q subject %q, want system/subj-1", in.Origin, in.SubjectID)
+	}
+	var pl struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(in.Payload, &pl); err != nil {
+		t.Fatalf("inbound payload: %v", err)
+	}
+	if pl.Type != EventInbound || pl.Text != "a plain human prompt" {
+		t.Fatalf("inbound payload = %+v, want type=%s text=%q", pl, EventInbound, "a plain human prompt")
 	}
 }
 

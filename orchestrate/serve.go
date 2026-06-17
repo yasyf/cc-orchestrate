@@ -145,6 +145,9 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 				return err
 			},
 			func(text string) error {
+				if text == ag.Prompt {
+					return nil // the spawn prompt is already recorded by EventSpawned
+				}
 				_, err := appendFn(cctx, &event.Event{
 					SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventInbound, Payload: inboundPayload(text),
 				})

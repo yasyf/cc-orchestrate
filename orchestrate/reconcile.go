@@ -6,7 +6,6 @@ import (
 	"log"
 
 	"github.com/yasyf/cc-interact/daemon"
-	"github.com/yasyf/cc-interact/event"
 
 	"github.com/yasyf/cc-orchestrate/backend"
 )
@@ -78,13 +77,7 @@ func reconcileAgents(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc
 			if ag.Status != StatusActive || containsAgentHandle(live, ag.TerminalHandle) {
 				continue
 			}
-			tailers.stop(ag.ID)
-			if err := setAgentLifecycle(ctx, db, ag.ID, StatusExited); err != nil {
-				return err
-			}
-			if _, err := appendFn(ctx, &event.Event{
-				SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventExited, Payload: exitedPayload(),
-			}); err != nil {
+			if err := softExitAgent(ctx, db, appendFn, ag); err != nil {
 				return err
 			}
 		}

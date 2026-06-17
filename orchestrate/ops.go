@@ -431,6 +431,12 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
+	if ag.Status != StatusActive {
+		// Already terminal (e.g. its project was killed while a caller held the id):
+		// idempotent no-op, never a second EventExited or a re-kill of a dead terminal.
+		out, _ := json.Marshal(map[string]string{"agent_id": ag.ID, "status": string(ag.Status)})
+		return daemon.Reply{OK: true, Body: out}
+	}
 	bk, ok := backend.Get(ag.Backend)
 	if !ok {
 		return daemon.Reply{OK: false, Error: "unknown backend: " + string(ag.Backend)}
@@ -456,11 +462,26 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 	return daemon.Reply{OK: true, Body: out}
 }
 
-// markProjectKilled stops every active agent's tailer, marks each exited with a
-// terminal EventExited, then marks the project killed. It never calls the backend:
-// a caller that must also tear down the workspace calls bk.KillProject first and
-// surfaces its error after these row writes (mirroring handleAgentKill). Reused by
-// boot reconcile when a workspace has vanished out-of-band.
+// softExitAgent stops an agent's transcript tailer, marks its row exited, and
+// appends a terminal OriginSystem EventExited. It is the shared teardown for an
+// agent the backend no longer hosts — the project-kill cascade and the boot
+// reconcile prune — and never calls the backend itself.
+func softExitAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow) error {
+	tailers.stop(ag.ID)
+	if err := setAgentLifecycle(ctx, db, ag.ID, StatusExited); err != nil {
+		return err
+	}
+	_, err := appendFn(ctx, &event.Event{
+		SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventExited, Payload: exitedPayload(),
+	})
+	return err
+}
+
+// markProjectKilled soft-exits every active agent of a project, then marks the
+// project killed. It never calls the backend: a caller that must also tear down
+// the workspace calls bk.KillProject first and surfaces its error after these row
+// writes (mirroring handleAgentKill). Reused by boot reconcile when a workspace
+// has vanished out-of-band.
 func markProjectKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, proj projectRow) error {
 	agents, err := listAgents(ctx, db, proj.ID)
 	if err != nil {
@@ -470,13 +491,7 @@ func markProjectKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFu
 		if ag.Status != StatusActive {
 			continue
 		}
-		tailers.stop(ag.ID)
-		if err := setAgentLifecycle(ctx, db, ag.ID, StatusExited); err != nil {
-			return err
-		}
-		if _, err := appendFn(ctx, &event.Event{
-			SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventExited, Payload: exitedPayload(),
-		}); err != nil {
+		if err := softExitAgent(ctx, db, appendFn, ag); err != nil {
 			return err
 		}
 	}
