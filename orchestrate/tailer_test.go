@@ -125,16 +125,16 @@ func TestFindTranscriptPicksNewest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, ok := findTranscript(session); !ok || got != newPath {
-		t.Fatalf("findTranscript() = %q, %v; want %q, true", got, ok, newPath)
+	if got, ok, err := findTranscript(session); err != nil || !ok || got != newPath {
+		t.Fatalf("findTranscript() = %q, %v, %v; want %q, true, nil", got, ok, err, newPath)
 	}
 }
 
 func TestFindTranscriptMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	if got, ok := findTranscript("nope"); ok {
-		t.Fatalf("findTranscript() = %q, true; want \"\", false", got)
+	if got, ok, err := findTranscript("nope"); ok || err != nil {
+		t.Fatalf("findTranscript() = %q, %v, %v; want \"\", false, nil", got, ok, err)
 	}
 }
 
@@ -165,7 +165,42 @@ func TestFindTranscriptHonorsConfigDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, ok := findTranscript(session); !ok || got != want {
-		t.Fatalf("findTranscript() = %q, %v; want %q, true", got, ok, want)
+	if got, ok, err := findTranscript(session); err != nil || !ok || got != want {
+		t.Fatalf("findTranscript() = %q, %v, %v; want %q, true, nil", got, ok, err, want)
+	}
+}
+
+// TestFindTranscriptHomeError proves an unresolvable home directory surfaces as an
+// error instead of an empty path that would make the tailer poll forever.
+func TestFindTranscriptHomeError(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("HOME", "")
+	if _, ok, err := findTranscript("any"); err == nil || ok {
+		t.Fatalf("findTranscript() = ok %v, err %v; want false and a wrapped home error", ok, err)
+	}
+}
+
+// TestTailerManagerFinish proves a self-exited tailer drops its own entry but never
+// a successor that already replaced it under the same agent id.
+func TestTailerManagerFinish(t *testing.T) {
+	m := newTailerManager(context.Background())
+
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tc := &tailerCancel{cancel: cancel}
+	m.cancels["a1"] = tc
+	m.finish("a1", tc)
+	if _, ok := m.cancels["a1"]; ok {
+		t.Fatal("finish did not drop the finished tailer's entry")
+	}
+
+	// A finishing predecessor must not clear the successor that took the same id.
+	_, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	tc2 := &tailerCancel{cancel: cancel2}
+	m.cancels["a2"] = tc2
+	m.finish("a2", &tailerCancel{cancel: func() {}})
+	if m.cancels["a2"] != tc2 {
+		t.Fatal("finish cleared a successor's entry")
 	}
 }

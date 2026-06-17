@@ -19,30 +19,33 @@ var pollInterval = 250 * time.Millisecond
 
 // claudeProjectsDir resolves the directory holding Claude Code's per-project
 // transcript folders. claude honors $CLAUDE_CONFIG_DIR over ~/.claude, so the
-// tailer must too, or it never finds a child whose config dir is relocated. It is
-// empty only when the home directory is needed but unresolvable.
-func claudeProjectsDir() string {
+// tailer must too, or it never finds a child whose config dir is relocated. It
+// errors only when the home directory is needed but unresolvable.
+func claudeProjectsDir() (string, error) {
 	if base := os.Getenv("CLAUDE_CONFIG_DIR"); base != "" {
-		return filepath.Join(base, "projects")
+		return filepath.Join(base, "projects"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".claude", "projects")
+	return filepath.Join(home, ".claude", "projects"), nil
 }
 
 // findTranscript locates a session's Claude Code transcript under
 // <claudeProjectsDir>/<slug>/<sessionID>.jsonl, returning the newest by mtime when
 // the session id collides across project slugs.
-func findTranscript(sessionID string) (string, bool) {
-	dir := claudeProjectsDir()
-	if dir == "" {
-		return "", false
+func findTranscript(sessionID string) (string, bool, error) {
+	dir, err := claudeProjectsDir()
+	if err != nil {
+		return "", false, err
 	}
 	matches, err := filepath.Glob(filepath.Join(dir, "*", sessionID+".jsonl"))
-	if err != nil || len(matches) == 0 {
-		return "", false
+	if err != nil {
+		return "", false, fmt.Errorf("glob transcript for %s: %w", sessionID, err)
+	}
+	if len(matches) == 0 {
+		return "", false, nil
 	}
 	newest, newestMod := "", time.Time{}
 	for _, m := range matches {
@@ -54,7 +57,7 @@ func findTranscript(sessionID string) (string, bool) {
 			newest, newestMod = m, mod
 		}
 	}
-	return newest, newest != ""
+	return newest, newest != "", nil
 }
 
 // runTailer waits for the session's transcript to appear, then tails it, calling
@@ -65,7 +68,10 @@ func findTranscript(sessionID string) (string, bool) {
 // agents table default, so the first emission is the first meaningful change
 // rather than a redundant unknown.
 func runTailer(ctx context.Context, sessionID, scope string, interval time.Duration, onStatus func(Status) error) error {
-	path, ok := waitForTranscript(ctx, sessionID, interval)
+	path, ok, err := waitForTranscript(ctx, sessionID, interval)
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return nil
 	}
@@ -106,19 +112,19 @@ func runTailer(ctx context.Context, sessionID, scope string, interval time.Durat
 }
 
 // waitForTranscript polls findTranscript until it resolves or ctx is cancelled.
-func waitForTranscript(ctx context.Context, sessionID string, interval time.Duration) (string, bool) {
-	if p, ok := findTranscript(sessionID); ok {
-		return p, true
+func waitForTranscript(ctx context.Context, sessionID string, interval time.Duration) (string, bool, error) {
+	if p, ok, err := findTranscript(sessionID); err != nil || ok {
+		return p, ok, err
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return "", false
+			return "", false, nil
 		case <-ticker.C:
-			if p, ok := findTranscript(sessionID); ok {
-				return p, true
+			if p, ok, err := findTranscript(sessionID); err != nil || ok {
+				return p, ok, err
 			}
 		}
 	}

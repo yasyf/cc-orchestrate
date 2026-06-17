@@ -92,11 +92,16 @@ type tailerManager struct {
 	base     context.Context
 	interval time.Duration
 	mu       sync.Mutex
-	cancels  map[string]context.CancelFunc
+	cancels  map[string]*tailerCancel
 }
 
+// tailerCancel wraps a running tailer's CancelFunc so the manager can tell one
+// tailer from a later replacement by pointer identity: a finished tailer removes
+// its own entry only, never a successor that already took its agent id.
+type tailerCancel struct{ cancel context.CancelFunc }
+
 func newTailerManager(ctx context.Context) *tailerManager {
-	return &tailerManager{base: ctx, interval: pollInterval, cancels: map[string]context.CancelFunc{}}
+	return &tailerManager{base: ctx, interval: pollInterval, cancels: map[string]*tailerCancel{}}
 }
 
 // start launches a background transcript tailer for an agent, persisting each
@@ -109,13 +114,15 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 		return
 	}
 	cctx, cancel := context.WithCancel(m.base)
+	tc := &tailerCancel{cancel: cancel}
 	m.mu.Lock()
 	if prev, ok := m.cancels[ag.ID]; ok {
-		prev()
+		prev.cancel()
 	}
-	m.cancels[ag.ID] = cancel
+	m.cancels[ag.ID] = tc
 	m.mu.Unlock()
 	go func() {
+		defer m.finish(ag.ID, tc)
 		err := runTailer(cctx, ag.SessionID, ag.Scope, m.interval, func(st Status) error {
 			if err := applyStatus(cctx, db, ag.ID, st); err != nil {
 				return err
@@ -136,8 +143,20 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 func (m *tailerManager) stop(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if cancel, ok := m.cancels[id]; ok {
-		cancel()
+	if tc, ok := m.cancels[id]; ok {
+		tc.cancel()
+		delete(m.cancels, id)
+	}
+}
+
+// finish releases a self-exited tailer's context and drops its map entry, unless a
+// later start already replaced it — so a finishing tailer never clears its
+// successor and the map does not accumulate stale entries over the daemon's life.
+func (m *tailerManager) finish(id string, tc *tailerCancel) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tc.cancel()
+	if m.cancels[id] == tc {
 		delete(m.cancels, id)
 	}
 }

@@ -331,7 +331,7 @@ func flagValue(argv []string, flag string) string {
 	return ""
 }
 
-func keysOf(m map[string]context.CancelFunc) []string {
+func keysOf(m map[string]*tailerCancel) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
