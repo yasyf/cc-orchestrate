@@ -26,6 +26,7 @@ const (
 	opProjectCreate   daemon.Op = "project-create"
 	opProjectList     daemon.Op = "project-list"
 	opProjectActivate daemon.Op = "project-activate"
+	opProjectKill     daemon.Op = "project-kill"
 	opConfigGet       daemon.Op = "config-get"
 	opConfigSet       daemon.Op = "config-set"
 )
@@ -79,6 +80,7 @@ func serve(ctx context.Context) error {
 	s.Register(opProjectCreate, handleProjectCreate)
 	s.Register(opProjectList, handleProjectList)
 	s.Register(opProjectActivate, handleProjectActivate)
+	s.Register(opProjectKill, handleProjectKill)
 	s.Register(opConfigGet, handleConfigGet)
 	s.Register(opConfigSet, handleConfigSet)
 	return s.Serve(ctx)

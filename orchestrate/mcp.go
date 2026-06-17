@@ -72,8 +72,8 @@ func opTool(name, description string, schema map[string]any, op daemon.Op) chann
 	}
 }
 
-// mcpTools is the parent-facing control surface: ten tools mapping the
-// orchestration ops onto MCP, in the order tools/list advertises them.
+// mcpTools is the parent-facing control surface mapping the orchestration ops
+// onto MCP, in the order tools/list advertises them.
 func mcpTools() []channel.Tool {
 	return []channel.Tool{
 		{
@@ -110,6 +110,10 @@ func mcpTools() []channel.Tool {
 			"Mark a project active.",
 			objectSchema(map[string]any{"id": stringProp("project id or name")}, "id"),
 			opProjectActivate),
+		opTool("project_kill",
+			"Kill a project, its backend workspace, and all of its agents.",
+			objectSchema(map[string]any{"id": stringProp("project id or name")}, "id"),
+			opProjectKill),
 		opTool("agent_spawn",
 			"Spawn a child Claude Code agent into a project. The agent reports back via its report tool; watch its progress with agent_list / agent_status, or stream it live with `agent watch` under a Monitor.",
 			objectSchema(map[string]any{

@@ -328,7 +328,20 @@ func projectsCmd() *cobra.Command {
 		},
 	}
 
-	c.AddCommand(list, create, activate)
+	kill := &cobra.Command{
+		Use:   "kill <id>",
+		Short: "Kill a project, its backend workspace, and all its agents",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			if _, err := runOp(c, opProjectKill, map[string]string{"id": args[0]}); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "killed project: %s\n", args[0])
+			return nil
+		},
+	}
+
+	c.AddCommand(list, create, activate, kill)
 	return c
 }
 

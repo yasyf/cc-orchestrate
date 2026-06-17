@@ -2,6 +2,8 @@ package orchestrate
 
 import (
 	"cmp"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -435,6 +437,66 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 		return daemon.Reply{OK: false, Error: fmt.Errorf("kill agent %q: %w", ag.ID, killErr).Error()}
 	}
 	out, _ := json.Marshal(map[string]string{"agent_id": ag.ID, "status": string(StatusExited)})
+	return daemon.Reply{OK: true, Body: out}
+}
+
+// markProjectKilled stops every active agent's tailer, marks each exited with a
+// terminal EventExited, then marks the project killed. It never calls the backend:
+// a caller that must also tear down the workspace calls bk.KillProject first and
+// surfaces its error after these row writes (mirroring handleAgentKill). Reused by
+// boot reconcile when a workspace has vanished out-of-band.
+func markProjectKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, proj projectRow) error {
+	agents, err := listAgents(ctx, db, proj.ID)
+	if err != nil {
+		return err
+	}
+	for _, ag := range agents {
+		if ag.Status != StatusActive {
+			continue
+		}
+		tailers.stop(ag.ID)
+		if err := setAgentLifecycle(ctx, db, ag.ID, StatusExited); err != nil {
+			return err
+		}
+		if _, err := appendFn(ctx, &event.Event{
+			SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventExited, Payload: exitedPayload(),
+		}); err != nil {
+			return err
+		}
+	}
+	return setProjectStatus(ctx, db, proj.ID, StatusKilled)
+}
+
+// handleProjectKill answers project-kill: it tears down the project's backend
+// workspace (which kills all its terminals at once), cascades its agents to exited,
+// and marks the project killed. The backend-kill error is surfaced after the row
+// mutations, mirroring handleAgentKill, so a half-dead workspace never lingers
+// active.
+func handleProjectKill(hc daemon.HandlerCtx) daemon.Reply {
+	var b struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+		return daemon.Reply{OK: false, Error: "bad project-kill body: " + err.Error()}
+	}
+	proj, err := getProject(hc.Ctx, hc.DB, b.ID)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	bk, ok := backend.Get(proj.Backend)
+	if !ok {
+		return daemon.Reply{OK: false, Error: "unknown backend: " + proj.Backend}
+	}
+	killErr := bk.KillProject(hc.Ctx, backend.ProjectHandle{
+		Backend: proj.Backend, ID: proj.WorkspaceHandle, Name: proj.Name, Cwd: proj.Cwd,
+	})
+	if err := markProjectKilled(hc.Ctx, hc.DB, hc.Append, proj); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if killErr != nil {
+		return daemon.Reply{OK: false, Error: fmt.Errorf("kill project %q: %w", proj.ID, killErr).Error()}
+	}
+	out, _ := json.Marshal(map[string]string{"project_id": proj.ID, "status": string(StatusKilled)})
 	return daemon.Reply{OK: true, Body: out}
 }
 

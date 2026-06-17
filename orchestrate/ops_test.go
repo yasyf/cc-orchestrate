@@ -21,9 +21,10 @@ import (
 // Its Name is outside backend.Precedence, so it never interferes with the default
 // availability/selection ordering; ops address it by passing its name explicitly.
 type opBackend struct {
-	createdSpec *backend.ProjectSpec
-	killedAgent *backend.AgentHandle
-	killErr     error
+	createdSpec   *backend.ProjectSpec
+	killedAgent   *backend.AgentHandle
+	killedProject *backend.ProjectHandle
+	killErr       error
 }
 
 func (opBackend) Name() string                      { return "optest" }
@@ -50,8 +51,13 @@ func (b opBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
 	}
 	return b.killErr
 }
-func (opBackend) KillProject(context.Context, backend.ProjectHandle) error { return nil }
-func (opBackend) Caps() backend.Caps                                       { return backend.Caps{} }
+func (b opBackend) KillProject(_ context.Context, project backend.ProjectHandle) error {
+	if b.killedProject != nil {
+		*b.killedProject = project
+	}
+	return b.killErr
+}
+func (opBackend) Caps() backend.Caps { return backend.Caps{} }
 
 // sendBackend is a registered test backend that advertises CanSendText and
 // implements Sender, recording the native SendText call so the dispatcher's
@@ -714,6 +720,103 @@ func TestHandleAgentKill(t *testing.T) {
 		}
 		if ag.Status != "exited" {
 			t.Fatalf("status = %q, want exited even after kill error", ag.Status)
+		}
+	})
+}
+
+func TestHandleProjectKill(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTailerManager(ctx)
+
+	db := newTestDB(t)
+	if err := insertProject(ctx, db, projectRow{
+		ID: "p1", Name: "proj", Backend: "optest", WorkspaceHandle: "ws-1",
+		Cwd: "/s", Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertProject: %v", err)
+	}
+	mustInsertAgent(t, db, agentRow{ID: "a1", ProjectID: "p1", Backend: "optest", SubjectID: "subj-1", Status: StatusActive, State: StateWorking, CreatedAt: "t0"})
+	mustInsertAgent(t, db, agentRow{ID: "a2", ProjectID: "p1", Backend: "optest", SubjectID: "subj-2", Status: StatusActive, State: StateIdle, CreatedAt: "t1"})
+	mustInsertAgent(t, db, agentRow{ID: "a3", ProjectID: "p1", Backend: "optest", SubjectID: "subj-3", Status: StatusExited, State: StateIdle, CreatedAt: "t2"})
+
+	t.Run("kills workspace and cascades active agents", func(t *testing.T) {
+		var killed backend.ProjectHandle
+		backend.Register(opBackend{killedProject: &killed})
+
+		var exited []string
+		appendFn := func(_ context.Context, e *event.Event) (int64, error) {
+			if e.Type == EventExited {
+				exited = append(exited, e.SubjectID)
+			}
+			return 1, nil
+		}
+		reply := handleProjectKill(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+
+		// The backend tore down the project's workspace handle (ws-1), not its id.
+		want := backend.ProjectHandle{Backend: "optest", ID: "ws-1", Name: "proj", Cwd: "/s"}
+		if killed != want {
+			t.Fatalf("killed project = %+v, want %+v", killed, want)
+		}
+
+		proj, err := getProject(ctx, db, "p1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if proj.Status != StatusKilled {
+			t.Fatalf("project status = %q, want killed", proj.Status)
+		}
+		for _, id := range []string{"a1", "a2"} {
+			ag, err := getAgent(ctx, db, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ag.Status != StatusExited {
+				t.Fatalf("agent %s status = %q, want exited", id, ag.Status)
+			}
+		}
+
+		// Exactly the two active agents got an EventExited; the pre-exited a3 did not.
+		got := map[string]bool{}
+		for _, s := range exited {
+			got[s] = true
+		}
+		if len(exited) != 2 || !got["subj-1"] || !got["subj-2"] || got["subj-3"] {
+			t.Fatalf("EventExited subjects = %v, want exactly subj-1 and subj-2", exited)
+		}
+	})
+
+	t.Run("kill error is surfaced but rows are still mutated", func(t *testing.T) {
+		if err := insertProject(ctx, db, projectRow{
+			ID: "p2", Name: "proj2", Backend: "optest", WorkspaceHandle: "ws-2",
+			Cwd: "/s", Status: StatusActive, CreatedAt: "t3",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		mustInsertAgent(t, db, agentRow{ID: "b1", ProjectID: "p2", Backend: "optest", SubjectID: "subj-b1", Status: StatusActive, State: StateWorking, CreatedAt: "t3"})
+		backend.Register(opBackend{killErr: errors.New("tmux: no such session")})
+		appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+
+		reply := handleProjectKill(opCtx(db, mustJSON(t, map[string]string{"id": "p2"}), appendFn))
+		if reply.OK || reply.Error == "" {
+			t.Fatalf("reply = %+v, want ok=false with the kill error", reply)
+		}
+		proj, err := getProject(ctx, db, "p2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if proj.Status != StatusKilled {
+			t.Fatalf("project status = %q, want killed even after kill error", proj.Status)
+		}
+		ag, err := getAgent(ctx, db, "b1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ag.Status != StatusExited {
+			t.Fatalf("agent status = %q, want exited even after kill error", ag.Status)
 		}
 	})
 }
