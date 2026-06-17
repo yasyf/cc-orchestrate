@@ -161,24 +161,8 @@ func runBackendsSelect(c *cobra.Command, args []string) error {
 	if !slices.Contains(backend.Precedence, name) || !ok || !b.Available() {
 		return fmt.Errorf("backend %q is not an available backend; run `%s backends list`", name, AppName)
 	}
-	ctx := c.Context()
-	d := deps()
-	if err := d.EnsureCurrent(ctx); err != nil {
+	if _, err := runOp(c, opConfigSet, map[string]string{"key": "backend", "value": name}); err != nil {
 		return err
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	body, _ := json.Marshal(map[string]string{"key": "backend", "value": name})
-	reply, err := newClient().Do(ctx, daemon.Envelope{
-		Op: opConfigSet, Session: AppName, ClaudePID: d.ClaudePID(), Scope: cwd, Body: body,
-	})
-	if err != nil {
-		return err
-	}
-	if !reply.OK {
-		return errors.New(reply.Error)
 	}
 	fmt.Fprintf(c.OutOrStdout(), "selected backend: %s\n", name)
 	return nil
