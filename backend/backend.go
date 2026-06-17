@@ -10,9 +10,13 @@ import (
 	"slices"
 )
 
+// BackendName is a backend's registry identity. It is a named type so a backend
+// name can never be silently mixed with an arbitrary string.
+type BackendName string
+
 // Precedence is the default backend resolution order: the first Available one
 // wins unless the user selects another.
-var Precedence = []string{"herd", "superset", "cmux", "zellij", "tmux"}
+var Precedence = []BackendName{"herd", "superset", "cmux", "zellij", "tmux"}
 
 // ProjectSpec describes a project to create on a backend.
 type ProjectSpec struct {
@@ -34,7 +38,7 @@ type SpawnSpec struct {
 
 // ProjectHandle identifies a backend workspace.
 type ProjectHandle struct {
-	Backend string
+	Backend BackendName
 	ID      string
 	Name    string
 	Cwd     string
@@ -44,7 +48,7 @@ type ProjectHandle struct {
 // child's claude --session-id so a backend that can't address its terminal (superset)
 // can still kill the process by identity.
 type AgentHandle struct {
-	Backend   string
+	Backend   BackendName
 	ID        string
 	ProjectID string
 	Name      string
@@ -87,7 +91,7 @@ func (c Caps) Has(want Capability) bool { return c.set&want != 0 }
 
 // Backend is one agent placement+spawn runtime.
 type Backend interface {
-	Name() string
+	Name() BackendName
 	Available() bool
 	EnsureReady(ctx context.Context) error
 	CreateProject(ctx context.Context, spec ProjectSpec) (ProjectHandle, error)
@@ -109,13 +113,13 @@ type Sender interface {
 }
 
 // registry holds the registered backends keyed by Name.
-var registry = map[string]Backend{}
+var registry = map[BackendName]Backend{}
 
 // Register adds a backend to the registry. Drivers call it from an init function.
 func Register(b Backend) { registry[b.Name()] = b }
 
 // Get returns the registered backend with the given name.
-func Get(name string) (Backend, bool) {
+func Get(name BackendName) (Backend, bool) {
 	b, ok := registry[name]
 	return b, ok
 }
@@ -123,7 +127,7 @@ func Get(name string) (Backend, bool) {
 // ValidateBackend returns an error unless name is a known backend (present in
 // Precedence and registered) whose runtime is installed. Callers add their own
 // surface-specific hint (e.g. how to list backends) by wrapping the result.
-func ValidateBackend(name string) error {
+func ValidateBackend(name BackendName) error {
 	b, ok := Get(name)
 	if !slices.Contains(Precedence, name) || !ok || !b.Available() {
 		return fmt.Errorf("backend %q is not an available backend", name)

@@ -41,7 +41,7 @@ type agentView struct {
 
 func newAgentView(a agentRow) agentView {
 	return agentView{
-		ID: a.ID, Name: a.Name, ProjectID: a.ProjectID, Backend: a.Backend,
+		ID: a.ID, Name: a.Name, ProjectID: a.ProjectID, Backend: string(a.Backend),
 		Status: string(a.Status), State: a.State, Activity: a.Activity, Tokens: a.Tokens,
 		UpdatedAt: a.UpdatedAt, SessionID: a.SessionID, Scope: a.Scope,
 	}
@@ -82,7 +82,7 @@ func inboundPayload(text string) json.RawMessage {
 
 func spawnedPayload(ag agentRow) json.RawMessage {
 	b, _ := json.Marshal(map[string]string{
-		"type": EventSpawned, "agent_id": ag.ID, "backend": ag.Backend, "terminal": ag.TerminalHandle,
+		"type": EventSpawned, "agent_id": ag.ID, "backend": string(ag.Backend), "terminal": ag.TerminalHandle,
 	})
 	return b
 }
@@ -162,7 +162,7 @@ func handleSendMessage(hc daemon.HandlerCtx) daemon.Reply {
 	}
 	bk, ok := backend.Get(ag.Backend)
 	if !ok {
-		return daemon.Reply{OK: false, Error: "unknown backend: " + ag.Backend}
+		return daemon.Reply{OK: false, Error: "unknown backend: " + string(ag.Backend)}
 	}
 	native, seq, err := deliverMessage(hc, bk, ag, b.Text)
 	if err != nil {
@@ -269,7 +269,7 @@ type projectView struct {
 
 func newProjectView(p projectRow) projectView {
 	return projectView{
-		ID: p.ID, Name: p.Name, Backend: p.Backend, Workspace: p.WorkspaceHandle,
+		ID: p.ID, Name: p.Name, Backend: string(p.Backend), Workspace: p.WorkspaceHandle,
 		Cwd: p.Cwd, Status: string(p.Status), CreatedAt: p.CreatedAt,
 	}
 }
@@ -288,15 +288,15 @@ func projectSlug(name string) string {
 // resolveBackend picks the backend for a project: the explicit name, else the
 // persisted selection, else the first available one. It errors when an explicit
 // or selected backend is unknown, or when none is available.
-func resolveBackend(hc daemon.HandlerCtx, explicit string) (backend.Backend, string, error) {
-	name := explicit
+func resolveBackend(hc daemon.HandlerCtx, explicit string) (backend.Backend, backend.BackendName, error) {
+	name := backend.BackendName(explicit)
 	if name == "" {
 		value, found, err := getConfig(hc.Ctx, hc.DB, "backend")
 		if err != nil {
 			return nil, "", err
 		}
 		if found {
-			name = value
+			name = backend.BackendName(value)
 		}
 	}
 	if name != "" {
@@ -308,7 +308,11 @@ func resolveBackend(hc daemon.HandlerCtx, explicit string) (backend.Backend, str
 	}
 	b, ok := backend.Select()
 	if !ok {
-		return nil, "", fmt.Errorf("no available backend; install one of %s", strings.Join(backend.Precedence, ", "))
+		installable := make([]string, len(backend.Precedence))
+		for i, n := range backend.Precedence {
+			installable[i] = string(n)
+		}
+		return nil, "", fmt.Errorf("no available backend; install one of %s", strings.Join(installable, ", "))
 	}
 	return b, b.Name(), nil
 }
@@ -347,7 +351,7 @@ func handleProjectCreate(hc daemon.HandlerCtx) daemon.Reply {
 	if err := insertProject(hc.Ctx, hc.DB, p); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	out, _ := json.Marshal(map[string]string{"project_id": p.ID, "workspace": handle.ID, "backend": bname})
+	out, _ := json.Marshal(map[string]string{"project_id": p.ID, "workspace": handle.ID, "backend": string(bname)})
 	return daemon.Reply{OK: true, Body: out}
 }
 
@@ -424,7 +428,7 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 	}
 	bk, ok := backend.Get(ag.Backend)
 	if !ok {
-		return daemon.Reply{OK: false, Error: "unknown backend: " + ag.Backend}
+		return daemon.Reply{OK: false, Error: "unknown backend: " + string(ag.Backend)}
 	}
 	handle, err := backendAgentHandle(hc, ag)
 	if err != nil {
@@ -492,7 +496,7 @@ func handleProjectKill(hc daemon.HandlerCtx) daemon.Reply {
 	}
 	bk, ok := backend.Get(proj.Backend)
 	if !ok {
-		return daemon.Reply{OK: false, Error: "unknown backend: " + proj.Backend}
+		return daemon.Reply{OK: false, Error: "unknown backend: " + string(proj.Backend)}
 	}
 	killErr := bk.KillProject(hc.Ctx, backend.ProjectHandle{
 		Backend: proj.Backend, ID: proj.WorkspaceHandle, Name: proj.Name, Cwd: proj.Cwd,

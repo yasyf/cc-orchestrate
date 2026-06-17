@@ -78,7 +78,7 @@ var resolveClaude = func() (string, error) {
 	return "", fmt.Errorf("superset: no claude on PATH outside %s", wrapperDir)
 }
 
-func (b superset) Name() string { return supersetBin }
+func (b superset) Name() BackendName { return supersetBin }
 
 func (b superset) Available() bool { return installed(supersetBin) }
 

@@ -125,10 +125,10 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	bname := cmp.Or(body.Backend, proj.Backend)
+	bname := cmp.Or(backend.BackendName(body.Backend), proj.Backend)
 	b, ok := backend.Get(bname)
 	if !ok {
-		return daemon.Reply{OK: false, Error: "unknown backend: " + bname}
+		return daemon.Reply{OK: false, Error: "unknown backend: " + string(bname)}
 	}
 	if err := b.EnsureReady(hc.Ctx); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
@@ -175,7 +175,7 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 	tailers.start(hc.DB, hc.Append, ag)
 
 	out, _ := json.Marshal(map[string]string{
-		"agent_id": sid, "subject_id": sub.ID, "terminal": handle.ID, "backend": bname,
+		"agent_id": sid, "subject_id": sub.ID, "terminal": handle.ID, "backend": string(bname),
 	})
 	return daemon.Reply{OK: true, Body: out}
 }

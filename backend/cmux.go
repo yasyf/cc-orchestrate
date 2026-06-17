@@ -84,7 +84,7 @@ func cmuxLaunchScript(command []string) (string, error) {
 	return "bash " + ShellQuote(f.Name()) + `\n`, nil
 }
 
-func (b cmux) Name() string { return cmuxName }
+func (b cmux) Name() BackendName { return cmuxName }
 
 func (b cmux) Available() bool { return installed(cmuxBin) }
 

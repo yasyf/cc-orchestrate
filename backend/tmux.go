@@ -25,7 +25,7 @@ type tmux struct{ run runner }
 
 func init() { Register(tmux{run: execRunner}) }
 
-func (b tmux) Name() string { return tmuxName }
+func (b tmux) Name() BackendName { return tmuxName }
 
 func (b tmux) Available() bool { return installed(tmuxBin) }
 

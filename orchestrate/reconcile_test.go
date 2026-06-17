@@ -19,7 +19,7 @@ type reconcileBackend struct {
 	enumerate bool
 }
 
-func (reconcileBackend) Name() string                      { return "recontest" }
+func (reconcileBackend) Name() backend.BackendName         { return "recontest" }
 func (reconcileBackend) Available() bool                   { return true }
 func (reconcileBackend) EnsureReady(context.Context) error { return nil }
 func (b reconcileBackend) ListProjects(context.Context) ([]backend.ProjectHandle, error) {
@@ -46,7 +46,7 @@ func (b reconcileBackend) Caps() backend.Caps {
 func seedProject(t *testing.T, db *sql.DB, id, bname, workspace string) {
 	t.Helper()
 	if err := insertProject(context.Background(), db, projectRow{
-		ID: id, Name: id, Backend: bname, WorkspaceHandle: workspace,
+		ID: id, Name: id, Backend: backend.BackendName(bname), WorkspaceHandle: workspace,
 		Cwd: "/s", Status: StatusActive, CreatedAt: "t0",
 	}); err != nil {
 		t.Fatalf("insertProject %s: %v", id, err)
@@ -56,7 +56,7 @@ func seedProject(t *testing.T, db *sql.DB, id, bname, workspace string) {
 func seedAgent(t *testing.T, db *sql.DB, id, projectID, bname, terminal string) {
 	t.Helper()
 	mustInsertAgent(t, db, agentRow{
-		ID: id, ProjectID: projectID, Backend: bname, TerminalHandle: terminal,
+		ID: id, ProjectID: projectID, Backend: backend.BackendName(bname), TerminalHandle: terminal,
 		SubjectID: "subj-" + id, Status: StatusActive, State: StateWorking, CreatedAt: "t0",
 	})
 }

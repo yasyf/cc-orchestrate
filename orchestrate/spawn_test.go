@@ -192,7 +192,7 @@ type spawnBackend struct {
 	spec *backend.SpawnSpec
 }
 
-func (spawnBackend) Name() string                      { return "spawntest" }
+func (spawnBackend) Name() backend.BackendName         { return "spawntest" }
 func (spawnBackend) Available() bool                   { return true }
 func (spawnBackend) EnsureReady(context.Context) error { return nil }
 func (spawnBackend) ListProjects(context.Context) ([]backend.ProjectHandle, error) {

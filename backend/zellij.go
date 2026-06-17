@@ -30,7 +30,7 @@ type zellij struct{ run runner }
 
 func init() { Register(zellij{run: execRunner}) }
 
-func (b zellij) Name() string { return zellijName }
+func (b zellij) Name() BackendName { return zellijName }
 
 func (b zellij) Available() bool { return installed(zellijBin) }
 

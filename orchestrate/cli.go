@@ -189,7 +189,7 @@ func backendsCmd() *cobra.Command {
 // backend, then persists it as the selected default through the config-set op.
 func runBackendsSelect(c *cobra.Command, args []string) error {
 	name := args[0]
-	if err := backend.ValidateBackend(name); err != nil {
+	if err := backend.ValidateBackend(backend.BackendName(name)); err != nil {
 		return fmt.Errorf("%w; run `%s backends list`", err, AppName)
 	}
 	if _, err := runOp(c, opConfigSet, map[string]string{"key": "backend", "value": name}); err != nil {
@@ -203,7 +203,7 @@ func runBackendsSelect(c *cobra.Command, args []string) error {
 // without spawning the daemon. It returns "" when no state db exists yet or no
 // backend is selected, and a wrapped error when the db cannot be opened or read —
 // so a corrupt or locked db is surfaced rather than silently read as unset.
-func selectedBackend() (string, error) {
+func selectedBackend() (backend.BackendName, error) {
 	dbPath := appPaths().DBPath()
 	if _, err := os.Stat(dbPath); err != nil {
 		if os.IsNotExist(err) {
@@ -223,14 +223,14 @@ func selectedBackend() (string, error) {
 	case err != nil:
 		return "", fmt.Errorf("read selected backend: %w", err)
 	}
-	return value, nil
+	return backend.BackendName(value), nil
 }
 
 // backendRow is one line of `backends list`: a backend name, whether its runtime
 // is installed, and whether it is the effective default (the persisted selection,
 // or the first available one when none is selected).
 type backendRow struct {
-	name      string
+	name      backend.BackendName
 	available bool
 	isDefault bool
 }
@@ -266,7 +266,7 @@ func backendsTable() (string, error) {
 func formatBackends(rows []backendRow) string {
 	out := make([][]string, len(rows))
 	for i, r := range rows {
-		out[i] = []string{r.name, installedLabel(r.available), defaultMarker(r.isDefault)}
+		out[i] = []string{string(r.name), installedLabel(r.available), defaultMarker(r.isDefault)}
 	}
 	return renderTable([]string{"BACKEND", "INSTALLED", "DEFAULT"}, out)
 }

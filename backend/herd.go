@@ -60,7 +60,7 @@ func decodeHerd[T any](b []byte) (T, error) {
 	return env.Result, nil
 }
 
-func (b herd) Name() string { return herdName }
+func (b herd) Name() BackendName { return herdName }
 
 func (b herd) Available() bool { return installed(herdBin) }
 

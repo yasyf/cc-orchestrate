@@ -159,7 +159,7 @@ func mcpBackendSelect(ctx context.Context, args json.RawMessage) (string, bool) 
 	if err := json.Unmarshal(args, &b); err != nil {
 		return "bad backend_select arguments: " + err.Error(), true
 	}
-	if err := backend.ValidateBackend(b.Backend); err != nil {
+	if err := backend.ValidateBackend(backend.BackendName(b.Backend)); err != nil {
 		return fmt.Sprintf("%s; run the backends_list tool", err.Error()), true
 	}
 	body, _ := json.Marshal(map[string]string{"key": "backend", "value": b.Backend})

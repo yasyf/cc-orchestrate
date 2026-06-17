@@ -27,7 +27,7 @@ type opBackend struct {
 	killErr       error
 }
 
-func (opBackend) Name() string                      { return "optest" }
+func (opBackend) Name() backend.BackendName         { return "optest" }
 func (opBackend) Available() bool                   { return true }
 func (opBackend) EnsureReady(context.Context) error { return nil }
 func (opBackend) ListProjects(context.Context) ([]backend.ProjectHandle, error) {
@@ -68,7 +68,7 @@ type sendBackend struct {
 	sentText *string
 }
 
-func (sendBackend) Name() string                      { return "sendtest" }
+func (sendBackend) Name() backend.BackendName         { return "sendtest" }
 func (sendBackend) Available() bool                   { return true }
 func (sendBackend) EnsureReady(context.Context) error { return nil }
 func (sendBackend) ListProjects(context.Context) ([]backend.ProjectHandle, error) {

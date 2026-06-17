@@ -8,6 +8,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/yasyf/cc-orchestrate/backend"
 )
 
 // projectColumns is the canonical projects read list; nullable columns are
@@ -26,7 +28,7 @@ const agentColumns = `id, project_id, backend, COALESCE(backend_terminal_handle,
 type projectRow struct {
 	ID              string
 	Name            string
-	Backend         string
+	Backend         backend.BackendName
 	WorkspaceHandle string
 	Cwd             string
 	Status          LifecycleStatus
@@ -38,7 +40,7 @@ type projectRow struct {
 type agentRow struct {
 	ID             string
 	ProjectID      string
-	Backend        string
+	Backend        backend.BackendName
 	TerminalHandle string
 	SessionID      string
 	Scope          string
