@@ -43,9 +43,7 @@ func expectNoStatus(t *testing.T, ch <-chan Status) {
 // TestRunTailerStreamsStatuses exercises the appears-later poll, offset tailing
 // across incremental appends, partial-line buffering, and change-deduped emission.
 func TestRunTailerStreamsStatuses(t *testing.T) {
-	old := pollInterval
-	pollInterval = 5 * time.Millisecond
-	t.Cleanup(func() { pollInterval = old })
+	interval := 5 * time.Millisecond
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -62,7 +60,7 @@ func TestRunTailerStreamsStatuses(t *testing.T) {
 	got := make(chan Status, 16)
 	done := make(chan error, 1)
 	go func() {
-		done <- runTailer(ctx, session, "scope", func(s Status) error {
+		done <- runTailer(ctx, session, "scope", interval, func(s Status) error {
 			got <- s
 			return nil
 		})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"sync"
+	"time"
 
 	"github.com/yasyf/cc-interact/channel"
 	"github.com/yasyf/cc-interact/daemon"
@@ -87,13 +88,14 @@ func serve(ctx context.Context) error {
 // per-request handler context that started it, so a tailer survives the RPC that
 // spawned the agent.
 type tailerManager struct {
-	base    context.Context
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
+	base     context.Context
+	interval time.Duration
+	mu       sync.Mutex
+	cancels  map[string]context.CancelFunc
 }
 
 func newTailerManager(ctx context.Context) *tailerManager {
-	return &tailerManager{base: ctx, cancels: map[string]context.CancelFunc{}}
+	return &tailerManager{base: ctx, interval: pollInterval, cancels: map[string]context.CancelFunc{}}
 }
 
 // start launches a background transcript tailer for an agent, persisting each
@@ -112,7 +114,7 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 	}
 	m.cancels[ag.ID] = cancel
 	m.mu.Unlock()
-	go runTailer(cctx, ag.SessionID, ag.Scope, func(st Status) error {
+	go runTailer(cctx, ag.SessionID, ag.Scope, m.interval, func(st Status) error {
 		applyStatus(cctx, db, ag.ID, st)
 		_, err := appendFn(cctx, &event.Event{
 			SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventStatus, Payload: jsonStatus(st),
