@@ -166,8 +166,8 @@ func TestHerdMetadata(t *testing.T) {
 	if b.Name() != "herd" {
 		t.Errorf("Name() = %q, want herd", b.Name())
 	}
-	if want := (Caps{SendText: true, Capture: true}); b.Caps() != want {
-		t.Errorf("Caps() = %+v, want %+v", b.Caps(), want)
+	if c := b.Caps(); !c.Has(CanSendText) || !c.Has(CanEnumerate) || c.Has(CanCapture) {
+		t.Errorf("Caps() = %+v, want CanSendText+CanEnumerate", c)
 	}
 }
 

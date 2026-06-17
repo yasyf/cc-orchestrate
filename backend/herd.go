@@ -143,4 +143,4 @@ func (b herd) KillProject(ctx context.Context, project ProjectHandle) error {
 	return err
 }
 
-func (b herd) Caps() Caps { return Caps{SendText: true, Capture: true} }
+func (b herd) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }

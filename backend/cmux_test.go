@@ -278,8 +278,8 @@ func TestCmuxStatics(t *testing.T) {
 	if b.Name() != "cmux" {
 		t.Errorf("Name() = %q, want cmux", b.Name())
 	}
-	if b.Caps() != (Caps{SendText: true, Capture: true}) {
-		t.Errorf("Caps() = %#v", b.Caps())
+	if c := b.Caps(); !c.Has(CanSendText) || !c.Has(CanEnumerate) || c.Has(CanCapture) {
+		t.Errorf("Caps() = %#v, want CanSendText+CanEnumerate", c)
 	}
 	if err := b.EnsureReady(context.Background()); err != nil {
 		t.Errorf("EnsureReady() = %v, want nil", err)

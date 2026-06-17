@@ -170,4 +170,4 @@ func (b cmux) KillProject(ctx context.Context, project ProjectHandle) error {
 	return err
 }
 
-func (b cmux) Caps() Caps { return Caps{SendText: true, Capture: true} }
+func (b cmux) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }

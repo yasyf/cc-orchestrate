@@ -89,8 +89,8 @@ func TestSupersetMetadata(t *testing.T) {
 	if b.Name() != "superset" {
 		t.Errorf("Name() = %q, want superset", b.Name())
 	}
-	if got := b.Caps(); got != (Caps{}) {
-		t.Errorf("Caps() = %+v, want spawn-only (no SendText/Capture)", got)
+	if got := b.Caps(); got.Has(CanSendText) || got.Has(CanCapture) || got.Has(CanEnumerate) {
+		t.Errorf("Caps() = %+v, want spawn-only (no native capabilities)", got)
 	}
 }
 

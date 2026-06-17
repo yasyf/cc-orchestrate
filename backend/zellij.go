@@ -34,7 +34,7 @@ func (b zellij) Name() string { return zellijName }
 
 func (b zellij) Available() bool { return installed(zellijBin) }
 
-func (b zellij) Caps() Caps { return Caps{SendText: true, Capture: true} }
+func (b zellij) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }
 
 func (b zellij) EnsureReady(ctx context.Context) error { return nil }
 

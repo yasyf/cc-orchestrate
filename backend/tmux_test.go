@@ -145,7 +145,8 @@ func TestTmux(t *testing.T) {
 }
 
 func TestTmuxCaps(t *testing.T) {
-	if got := (tmux{}).Caps(); got != (Caps{SendText: true, Capture: true}) {
-		t.Fatalf("Caps = %+v, want SendText+Capture", got)
+	c := (tmux{}).Caps()
+	if !c.Has(CanSendText) || !c.Has(CanEnumerate) || c.Has(CanCapture) {
+		t.Fatalf("Caps = %+v, want CanSendText+CanEnumerate (no CanCapture)", c)
 	}
 }

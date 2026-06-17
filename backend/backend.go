@@ -51,11 +51,39 @@ type AgentHandle struct {
 	SessionID string
 }
 
-// Caps reports the optional fast paths a backend supports beyond the event plane.
-type Caps struct {
-	SendText bool
-	Capture  bool
+// Capability is one native fast path a backend can perform itself instead of
+// falling back to the cc-interact event plane (the LCD, lowest common
+// denominator). It is the dispatch key: a caller checks Caps.Has(cap) to decide
+// native-vs-LCD.
+type Capability uint
+
+const (
+	// CanSendText delivers a message by typing it into the agent's terminal.
+	CanSendText Capability = 1 << iota
+	// CanCapture reads the agent terminal's screen/scrollback. Vocabulary only:
+	// no backend advertises it and no Capturer interface exists until a consumer
+	// does.
+	CanCapture
+	// CanEnumerate means ListAgents returns the live agent set, so boot reconcile
+	// may prune DB rows the backend no longer reports.
+	CanEnumerate
+)
+
+// Caps is the set of capabilities a backend supports. The zero value supports
+// nothing — the pure-LCD backend (superset).
+type Caps struct{ set Capability }
+
+// Capabilities builds a Caps advertising the given capabilities.
+func Capabilities(caps ...Capability) Caps {
+	var c Caps
+	for _, want := range caps {
+		c.set |= want
+	}
+	return c
 }
+
+// Has reports whether the backend can perform want natively.
+func (c Caps) Has(want Capability) bool { return c.set&want != 0 }
 
 // Backend is one agent placement+spawn runtime.
 type Backend interface {

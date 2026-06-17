@@ -29,7 +29,7 @@ func (b tmux) Name() string { return tmuxName }
 
 func (b tmux) Available() bool { return installed(tmuxBin) }
 
-func (b tmux) Caps() Caps { return Caps{SendText: true, Capture: true} }
+func (b tmux) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }
 
 func (b tmux) EnsureReady(ctx context.Context) error { return nil }
 
