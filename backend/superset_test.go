@@ -380,8 +380,8 @@ func TestShellQuote(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := shellQuote(tc.in); got != tc.want {
-				t.Fatalf("shellQuote(%q) = %q, want %q", tc.in, got, tc.want)
+			if got := ShellQuote(tc.in); got != tc.want {
+				t.Fatalf("ShellQuote(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
@@ -435,7 +435,7 @@ func TestShellQuoteRoundTripThroughBash(t *testing.T) {
 	cmd := append([]string{"printf", `%s\n`}, args...)
 	quoted := make([]string, len(cmd))
 	for i, tok := range cmd {
-		quoted[i] = shellQuote(tok)
+		quoted[i] = ShellQuote(tok)
 	}
 	out, err := exec.Command(bash, "-c", strings.Join(quoted, " ")).Output()
 	if err != nil {

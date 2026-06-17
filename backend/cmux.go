@@ -67,7 +67,7 @@ func cmuxRef(out []byte, prefix string) (string, error) {
 func cmuxLaunchScript(command []string) (string, error) {
 	quoted := make([]string, len(command))
 	for i, tok := range command {
-		quoted[i] = shellQuote(tok)
+		quoted[i] = ShellQuote(tok)
 	}
 	f, err := os.CreateTemp("", "cc-orchestrate-cmux-*.sh")
 	if err != nil {
@@ -81,7 +81,7 @@ func cmuxLaunchScript(command []string) (string, error) {
 	if err := f.Close(); err != nil {
 		return "", fmt.Errorf("cmux: close launch script %s: %w", f.Name(), err)
 	}
-	return "bash " + shellQuote(f.Name()) + `\n`, nil
+	return "bash " + ShellQuote(f.Name()) + `\n`, nil
 }
 
 func (b cmux) Name() string { return cmuxName }

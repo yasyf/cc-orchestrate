@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,10 +51,10 @@ func childMCPConfig(self, sid, scope string) string {
 
 // childSettings is the child's --settings: a SessionStart hook that records the
 // child's window for session-rotation rebind, and a PreToolUse edit gate over
-// the file-mutating tools. Both hooks re-invoke this binary, shell-quoted when
-// its path carries spaces.
+// the file-mutating tools. Both hooks re-invoke this binary, POSIX-shell-quoted
+// so any metacharacter in its path survives the hook runner's shell split.
 func childSettings(self string) string {
-	q := shellQuote(self)
+	q := backend.ShellQuote(self)
 	b, _ := json.Marshal(map[string]map[string][]hookMatcher{
 		"hooks": {
 			"SessionStart": {{Hooks: []hookCommand{{Type: "command", Command: q + " session-record"}}}},
@@ -89,7 +88,7 @@ func claudeCommand(self, sid, scope, prompt string) []string {
 // It tells the agent it is orchestrated, how to RECEIVE instructions (arm a
 // persistent watch Monitor), and how to REPORT back (the report MCP tool). The
 // watch command is the exact line the agent must run; self and scope are
-// shell-quoted so a path with spaces survives the Monitor's shell split.
+// POSIX-shell-quoted so the Monitor's shell split sees one token each.
 func spawnBrief(self, sid, scope string) string {
 	return fmt.Sprintf(`You are a cc-orchestrate agent: a Claude Code instance spawned and supervised by an orchestrator. Two channels connect you to it.
 
@@ -100,16 +99,7 @@ RECEIVE: immediately, before doing anything else, arm a persistent Monitor runni
 Each line it prints is one JSON event. An event whose type is "orchestrate.message" carries a new instruction from your orchestrator in its "text" field; treat that text as a directive and act on it.
 
 REPORT: to send progress, a result, or a question back to your orchestrator, call the "report" tool from the cc-orchestrate MCP server with a short "text" and an optional "state" of "working", "blocked", or "done". Report when you start, when you finish, and whenever you are blocked or need a decision.`,
-		shellQuote(self), sid, shellQuote(scope))
-}
-
-// shellQuote single-quotes a path that contains a space so it survives a hook's
-// command-string shell split; a space-free path is returned unchanged.
-func shellQuote(s string) string {
-	if !strings.Contains(s, " ") {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+		backend.ShellQuote(self), sid, backend.ShellQuote(scope))
 }
 
 // agentSlug is a spawned subject's stable, unique URL name, derived from the

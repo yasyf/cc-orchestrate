@@ -273,14 +273,14 @@ func (b superset) KillProject(ctx context.Context, project ProjectHandle) error 
 func wrapBashLogin(command []string) string {
 	quoted := make([]string, len(command))
 	for i, tok := range command {
-		quoted[i] = shellQuote(tok)
+		quoted[i] = ShellQuote(tok)
 	}
 	return "bash -lc " + fishQuote(strings.Join(quoted, " "))
 }
 
-// shellQuote renders s as a single POSIX-shell token, escaping each embedded
+// ShellQuote renders s as a single POSIX-shell token, escaping each embedded
 // single quote by closing the quote, emitting an escaped quote, and reopening.
-func shellQuote(s string) string {
+func ShellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
