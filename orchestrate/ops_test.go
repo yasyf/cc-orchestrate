@@ -103,10 +103,11 @@ func TestHandleSendMessage(t *testing.T) {
 		t.Errorf("Origin = %q, want %q", captured.Origin, event.OriginHuman)
 	}
 	var pl struct {
+		Type string `json:"type"`
 		Text string `json:"text"`
 	}
-	if err := json.Unmarshal(captured.Payload, &pl); err != nil || pl.Text != "hello" {
-		t.Errorf("payload = %s, want text=hello (err %v)", captured.Payload, err)
+	if err := json.Unmarshal(captured.Payload, &pl); err != nil || pl.Type != EventMessage || pl.Text != "hello" {
+		t.Errorf("payload = %s, want type=%s text=hello (err %v)", captured.Payload, EventMessage, err)
 	}
 	var rb struct {
 		Seq int64 `json:"seq"`
@@ -201,8 +202,8 @@ func TestHandleReport(t *testing.T) {
 	if err := json.Unmarshal(captured.Payload, &pl); err != nil {
 		t.Fatalf("payload: %v", err)
 	}
-	if pl.Text != "halfway done" || pl.State != "working" {
-		t.Errorf("payload = %+v, want text=halfway done state=working", pl)
+	if pl.Type != EventReport || pl.Text != "halfway done" || pl.State != "working" {
+		t.Errorf("payload = %+v, want type=%s text=halfway done state=working", pl, EventReport)
 	}
 	var rb struct {
 		Seq int64 `json:"seq"`
@@ -484,6 +485,12 @@ func TestHandleAgentKill(t *testing.T) {
 		}
 		if captured.SubjectID != "subj-1" || captured.Type != EventExited || captured.Origin != event.OriginSystem {
 			t.Fatalf("event = %+v, want subj-1/%s/system", captured, EventExited)
+		}
+		var pl struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(captured.Payload, &pl); err != nil || pl.Type != EventExited {
+			t.Errorf("exited payload = %s, want type=%s (err %v)", captured.Payload, EventExited, err)
 		}
 	})
 

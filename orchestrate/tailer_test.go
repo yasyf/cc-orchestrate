@@ -49,6 +49,7 @@ func TestRunTailerStreamsStatuses(t *testing.T) {
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	dir := filepath.Join(home, ".claude", "projects", "test-proj")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -105,6 +106,7 @@ func TestRunTailerStreamsStatuses(t *testing.T) {
 func TestFindTranscriptPicksNewest(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	session := "dup-sess"
 	older := filepath.Join(home, ".claude", "projects", "alpha")
 	newer := filepath.Join(home, ".claude", "projects", "beta")
@@ -132,7 +134,40 @@ func TestFindTranscriptPicksNewest(t *testing.T) {
 
 func TestFindTranscriptMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	if got, ok := findTranscript("nope"); ok {
 		t.Fatalf("findTranscript() = %q, true; want \"\", false", got)
+	}
+}
+
+// TestFindTranscriptHonorsConfigDir proves the tailer resolves transcripts under
+// $CLAUDE_CONFIG_DIR/projects, taking precedence over ~/.claude — claude writes a
+// relocated child's transcript there, so a tailer reading only ~/.claude would
+// never find it.
+func TestFindTranscriptHonorsConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+
+	session := "cfg-sess"
+	decoy := filepath.Join(home, ".claude", "projects", "decoy")
+	real := filepath.Join(cfg, "projects", "real")
+	for _, d := range []string{decoy, real} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A ~/.claude match must be ignored entirely when CLAUDE_CONFIG_DIR is set.
+	if err := os.WriteFile(filepath.Join(decoy, session+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(real, session+".jsonl")
+	if err := os.WriteFile(want, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, ok := findTranscript(session); !ok || got != want {
+		t.Fatalf("findTranscript() = %q, %v; want %q, true", got, ok, want)
 	}
 }

@@ -45,8 +45,10 @@ func newAgentView(a agentRow) agentView {
 	}
 }
 
-// statusPayload is the EventStatus event body the transcript tailer appends.
+// statusPayload is the EventStatus event body the transcript tailer appends. Type
+// discriminates the frame for a stream consumer reading the SSE payload alone.
 type statusPayload struct {
+	Type     string `json:"type"`
 	State    string `json:"state"`
 	Tool     string `json:"tool"`
 	Target   string `json:"target"`
@@ -56,13 +58,18 @@ type statusPayload struct {
 
 func jsonStatus(st Status) json.RawMessage {
 	b, _ := json.Marshal(statusPayload{
-		State: st.State, Tool: st.Tool, Target: st.Target, LastText: st.LastText, Tokens: st.Tokens,
+		Type: EventStatus, State: st.State, Tool: st.Tool, Target: st.Target, LastText: st.LastText, Tokens: st.Tokens,
 	})
 	return b
 }
 
 func messagePayload(text string) json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"text": text})
+	b, _ := json.Marshal(map[string]string{"type": EventMessage, "text": text})
+	return b
+}
+
+func exitedPayload() json.RawMessage {
+	b, _ := json.Marshal(map[string]string{"type": EventExited})
 	return b
 }
 
@@ -139,8 +146,10 @@ func handleSendMessage(hc daemon.HandlerCtx) daemon.Reply {
 }
 
 // reportPayload is the EventReport event body an agent's report tool appends: the
-// agent's message and its optional run state.
+// agent's message and its optional run state. Type discriminates the frame for a
+// stream consumer reading the SSE payload alone.
 type reportPayload struct {
+	Type  string `json:"type"`
 	Text  string `json:"text"`
 	State string `json:"state,omitempty"`
 }
@@ -161,6 +170,7 @@ func handleReport(hc daemon.HandlerCtx) daemon.Reply {
 	if !ok {
 		return daemon.Reply{OK: false, Error: "no subject for session " + hc.Env.Session + " in scope " + hc.Scope}
 	}
+	b.Type = EventReport
 	payload, _ := json.Marshal(b)
 	seq, err := hc.Append(hc.Ctx, &event.Event{
 		SubjectID: sub.ID, Origin: event.OriginAgent, Type: EventReport, Payload: payload,
@@ -347,7 +357,7 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
 	if _, err := hc.Append(hc.Ctx, &event.Event{
-		SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventExited, Payload: json.RawMessage("{}"),
+		SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventExited, Payload: exitedPayload(),
 	}); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}

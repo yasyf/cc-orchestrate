@@ -14,15 +14,30 @@ import (
 // appear and for newly appended bytes. It is a var so tests can shorten it.
 var pollInterval = 250 * time.Millisecond
 
-// findTranscript locates a session's Claude Code transcript under
-// ~/.claude/projects/<slug>/<sessionID>.jsonl, returning the newest by mtime when
-// the session id collides across project slugs.
-func findTranscript(sessionID string) (string, bool) {
+// claudeProjectsDir resolves the directory holding Claude Code's per-project
+// transcript folders. claude honors $CLAUDE_CONFIG_DIR over ~/.claude, so the
+// tailer must too, or it never finds a child whose config dir is relocated. It is
+// empty only when the home directory is needed but unresolvable.
+func claudeProjectsDir() string {
+	if base := os.Getenv("CLAUDE_CONFIG_DIR"); base != "" {
+		return filepath.Join(base, "projects")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude", "projects")
+}
+
+// findTranscript locates a session's Claude Code transcript under
+// <claudeProjectsDir>/<slug>/<sessionID>.jsonl, returning the newest by mtime when
+// the session id collides across project slugs.
+func findTranscript(sessionID string) (string, bool) {
+	dir := claudeProjectsDir()
+	if dir == "" {
 		return "", false
 	}
-	matches, err := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", sessionID+".jsonl"))
+	matches, err := filepath.Glob(filepath.Join(dir, "*", sessionID+".jsonl"))
 	if err != nil || len(matches) == 0 {
 		return "", false
 	}
