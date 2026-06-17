@@ -4,7 +4,11 @@
 // cc-interact event plane; a backend only places workspaces and spawns commands.
 package backend
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"slices"
+)
 
 // Precedence is the default backend resolution order: the first Available one
 // wins unless the user selects another.
@@ -77,6 +81,17 @@ func Register(b Backend) { registry[b.Name()] = b }
 func Get(name string) (Backend, bool) {
 	b, ok := registry[name]
 	return b, ok
+}
+
+// ValidateBackend returns an error unless name is a known backend (present in
+// Precedence and registered) whose runtime is installed. Callers add their own
+// surface-specific hint (e.g. how to list backends) by wrapping the result.
+func ValidateBackend(name string) error {
+	b, ok := Get(name)
+	if !slices.Contains(Precedence, name) || !ok || !b.Available() {
+		return fmt.Errorf("backend %q is not an available backend", name)
+	}
+	return nil
 }
 
 // Available returns the registered backends, in precedence order, whose runtime

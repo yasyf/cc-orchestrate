@@ -40,6 +40,31 @@ func TestSelectReturnsFirstAvailable(t *testing.T) {
 	}
 }
 
+// TestValidateBackend asserts the shared validation predicate: a name passes only
+// when it is in Precedence, registered, and its runtime is installed. It mirrors
+// Available() so the set of names that validate is exactly the set Available()
+// returns, regardless of which runtimes are installed on the test host.
+func TestValidateBackend(t *testing.T) {
+	available := map[string]bool{}
+	for _, b := range Available() {
+		available[b.Name()] = true
+	}
+	for _, name := range Precedence {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateBackend(name)
+			if available[name] && err != nil {
+				t.Fatalf("ValidateBackend(%q) = %v, want nil for an available backend", name, err)
+			}
+			if !available[name] && err == nil {
+				t.Fatalf("ValidateBackend(%q) = nil, want error for an unavailable backend", name)
+			}
+		})
+	}
+	if err := ValidateBackend("not-a-backend"); err == nil {
+		t.Fatal("ValidateBackend(\"not-a-backend\") = nil, want error")
+	}
+}
+
 func names(bs []Backend) []string {
 	out := make([]string, len(bs))
 	for i, b := range bs {

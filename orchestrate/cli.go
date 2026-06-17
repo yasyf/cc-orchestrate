@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -154,9 +153,8 @@ func backendsCmd() *cobra.Command {
 // backend, then persists it as the selected default through the config-set op.
 func runBackendsSelect(c *cobra.Command, args []string) error {
 	name := args[0]
-	b, ok := backend.Get(name)
-	if !slices.Contains(backend.Precedence, name) || !ok || !b.Available() {
-		return fmt.Errorf("backend %q is not an available backend; run `%s backends list`", name, AppName)
+	if err := backend.ValidateBackend(name); err != nil {
+		return fmt.Errorf("%w; run `%s backends list`", err, AppName)
 	}
 	if _, err := runOp(c, opConfigSet, map[string]string{"key": "backend", "value": name}); err != nil {
 		return err

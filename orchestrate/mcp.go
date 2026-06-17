@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 
 	"github.com/yasyf/cc-interact/channel"
 	"github.com/yasyf/cc-interact/daemon"
@@ -152,9 +151,8 @@ func mcpBackendSelect(ctx context.Context, args json.RawMessage) (string, bool) 
 	if err := json.Unmarshal(args, &b); err != nil {
 		return "bad backend_select arguments: " + err.Error(), true
 	}
-	bk, ok := backend.Get(b.Backend)
-	if !slices.Contains(backend.Precedence, b.Backend) || !ok || !bk.Available() {
-		return fmt.Sprintf("backend %q is not an available backend; run the backends_list tool", b.Backend), true
+	if err := backend.ValidateBackend(b.Backend); err != nil {
+		return fmt.Sprintf("%s; run the backends_list tool", err.Error()), true
 	}
 	body, _ := json.Marshal(map[string]string{"key": "backend", "value": b.Backend})
 	return mcpDispatch(ctx, opConfigSet, body)

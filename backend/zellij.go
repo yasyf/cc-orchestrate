@@ -8,7 +8,12 @@ import (
 	"strings"
 )
 
-const zellijBin = "zellij"
+// zellijBin is the CLI binary the zellij backend drives; zellijName is its
+// registry identity, kept separate so only the name carries the backend type.
+const (
+	zellijBin  = "zellij"
+	zellijName = "zellij"
+)
 
 // pane mirrors one element of `zellij action list-panes --json`, which is a flat
 // array of pane objects (one per pane across every tab), not a tab-keyed map.
@@ -25,7 +30,7 @@ type zellij struct{ run runner }
 
 func init() { Register(zellij{run: execRunner}) }
 
-func (b zellij) Name() string { return "zellij" }
+func (b zellij) Name() string { return zellijName }
 
 func (b zellij) Available() bool { return installed(zellijBin) }
 
@@ -38,7 +43,7 @@ func (b zellij) CreateProject(ctx context.Context, spec ProjectSpec) (ProjectHan
 	if _, err := b.run(ctx, zellijBin, "attach", "--create-background", session); err != nil {
 		return ProjectHandle{}, err
 	}
-	return ProjectHandle{Backend: "zellij", ID: session, Name: spec.Name, Cwd: spec.Cwd}, nil
+	return ProjectHandle{Backend: zellijName, ID: session, Name: spec.Name, Cwd: spec.Cwd}, nil
 }
 
 func (b zellij) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
@@ -49,7 +54,7 @@ func (b zellij) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
 	projects := []ProjectHandle{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if name := strings.TrimSpace(line); name != "" {
-			projects = append(projects, ProjectHandle{Backend: "zellij", ID: name, Name: name})
+			projects = append(projects, ProjectHandle{Backend: zellijName, ID: name, Name: name})
 		}
 	}
 	return projects, nil
@@ -65,7 +70,7 @@ func (b zellij) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) 
 		return AgentHandle{}, err
 	}
 	return AgentHandle{
-		Backend:   "zellij",
+		Backend:   zellijName,
 		ID:        strings.TrimSpace(string(out)),
 		ProjectID: spec.Project.ID,
 		Name:      spec.Name,
@@ -88,7 +93,7 @@ func (b zellij) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentH
 			continue
 		}
 		agents = append(agents, AgentHandle{
-			Backend:   "zellij",
+			Backend:   zellijName,
 			ID:        paneID(p),
 			ProjectID: project.ID,
 			Name:      p.Title,
