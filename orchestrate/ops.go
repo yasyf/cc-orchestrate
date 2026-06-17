@@ -93,7 +93,7 @@ func handleStatus(hc daemon.HandlerCtx) daemon.Reply {
 }
 
 // handleList answers agent-list with every agent, optionally filtered to one
-// project. An absent body lists all.
+// project resolved by id or name. An absent body lists all.
 func handleList(hc daemon.HandlerCtx) daemon.Reply {
 	var b struct {
 		Project string `json:"project"`
@@ -103,7 +103,15 @@ func handleList(hc daemon.HandlerCtx) daemon.Reply {
 			return daemon.Reply{OK: false, Error: "bad agent-list body: " + err.Error()}
 		}
 	}
-	agents, err := listAgents(hc.Ctx, hc.DB, b.Project)
+	filter := b.Project
+	if filter != "" {
+		proj, err := getProject(hc.Ctx, hc.DB, b.Project)
+		if err != nil {
+			return daemon.Reply{OK: false, Error: err.Error()}
+		}
+		filter = proj.ID
+	}
+	agents, err := listAgents(hc.Ctx, hc.DB, filter)
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
@@ -274,9 +282,9 @@ func handleProjectCreate(hc daemon.HandlerCtx) daemon.Reply {
 	if err := bk.EnsureReady(hc.Ctx); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	cwd, err := filepath.Abs(cmp.Or(b.Cwd, "."))
-	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+	cwd := cmp.Or(b.Cwd, ".")
+	if !filepath.IsAbs(cwd) {
+		cwd = filepath.Join(hc.Scope, cwd)
 	}
 	handle, err := bk.CreateProject(hc.Ctx, backend.ProjectSpec{Name: b.Name, Cwd: cwd})
 	if err != nil {

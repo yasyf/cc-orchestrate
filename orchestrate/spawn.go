@@ -142,9 +142,9 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 	if err := b.EnsureReady(hc.Ctx); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	scope, err := filepath.Abs(cmp.Or(body.Cwd, proj.Cwd))
-	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+	scope := cmp.Or(body.Cwd, proj.Cwd)
+	if !filepath.IsAbs(scope) {
+		scope = filepath.Join(hc.Scope, scope)
 	}
 	self, err := os.Executable()
 	if err != nil {

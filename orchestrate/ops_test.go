@@ -269,7 +269,16 @@ func TestHandleStatusMissing(t *testing.T) {
 }
 
 func TestHandleList(t *testing.T) {
+	ctx := context.Background()
 	db := newTestDB(t)
+	for _, p := range []projectRow{
+		{ID: "p1", Name: "alpha", Backend: "tmux", WorkspaceHandle: "ws-1", Cwd: "/tmp/a", Status: "active", CreatedAt: "t0"},
+		{ID: "p2", Name: "beta", Backend: "tmux", WorkspaceHandle: "ws-2", Cwd: "/tmp/b", Status: "active", CreatedAt: "t1"},
+	} {
+		if err := insertProject(ctx, db, p); err != nil {
+			t.Fatalf("insertProject %s: %v", p.ID, err)
+		}
+	}
 	mustInsertAgent(t, db, agentRow{ID: "a1", ProjectID: "p1", Backend: "tmux", Scope: "/s", Status: "active", State: StateWorking, CreatedAt: "t0"})
 	mustInsertAgent(t, db, agentRow{ID: "a2", ProjectID: "p2", Backend: "tmux", Scope: "/s", Status: "active", State: StateIdle, CreatedAt: "t1"})
 
@@ -286,7 +295,7 @@ func TestHandleList(t *testing.T) {
 			t.Fatalf("len = %d, want 2", len(got))
 		}
 	})
-	t.Run("filtered by project", func(t *testing.T) {
+	t.Run("filtered by project id", func(t *testing.T) {
 		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"project": "p2"}), nil))
 		var got []agentView
 		if err := json.Unmarshal(reply.Body, &got); err != nil {
@@ -294,6 +303,25 @@ func TestHandleList(t *testing.T) {
 		}
 		if len(got) != 1 || got[0].ID != "a2" {
 			t.Fatalf("filtered = %+v, want [a2]", got)
+		}
+	})
+	t.Run("filtered by project name resolves to its id", func(t *testing.T) {
+		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"project": "beta"}), nil))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		var got []agentView
+		if err := json.Unmarshal(reply.Body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].ID != "a2" {
+			t.Fatalf("name-filtered = %+v, want [a2]", got)
+		}
+	})
+	t.Run("unknown project is an error", func(t *testing.T) {
+		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"project": "ghost"}), nil))
+		if reply.OK || reply.Error == "" {
+			t.Fatalf("reply = %+v, want ok=false for an unknown project", reply)
 		}
 	})
 }
@@ -369,6 +397,37 @@ func TestHandleProjectCreate(t *testing.T) {
 	}
 	if p.CreatedAt == "" {
 		t.Error("created_at not stamped")
+	}
+}
+
+// TestHandleProjectCreateResolvesCwdAgainstScope proves an empty or relative cwd
+// resolves against the caller's scope (the CLI/MCP working directory carried on
+// the envelope), not the long-lived daemon's process cwd.
+func TestHandleProjectCreateResolvesCwdAgainstScope(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cwd     string
+		scope   string
+		wantCwd string
+	}{
+		{"empty cwd uses caller scope", "", "/caller/here", "/caller/here"},
+		{"relative cwd joins caller scope", "sub/dir", "/caller/here", "/caller/here/sub/dir"},
+		{"absolute cwd is kept", "/abs/path", "/caller/here", "/abs/path"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newTestDB(t)
+			var gotSpec backend.ProjectSpec
+			backend.Register(opBackend{createdSpec: &gotSpec})
+			body := mustJSON(t, map[string]string{"name": "demo", "backend": "optest", "cwd": tc.cwd})
+			hc := daemon.HandlerCtx{Ctx: context.Background(), Env: daemon.Envelope{Body: body}, Scope: tc.scope, DB: db}
+			reply := handleProjectCreate(hc)
+			if !reply.OK {
+				t.Fatalf("reply not ok: %s", reply.Error)
+			}
+			if gotSpec.Cwd != tc.wantCwd {
+				t.Fatalf("CreateProject cwd = %q, want %q", gotSpec.Cwd, tc.wantCwd)
+			}
+		})
 	}
 }
 
