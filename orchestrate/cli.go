@@ -52,11 +52,47 @@ func Root() *cobra.Command {
 		withSessionDefault(cmd.ChannelAckCmd(d)),
 		withSessionDefault(cmd.ChannelCmd(d)),
 		backendsCmd(),
+		configCmd(),
 		projectsCmd(),
 		agentCmd(),
 		mcpCmd(),
 	)
 	return r
+}
+
+// configCmd is the `config` group: read the persisted key-value config (the
+// generic reader symmetric with the specialized `backends select` writer).
+func configCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "config",
+		Short: "Inspect the persisted orchestrator config",
+	}
+	get := &cobra.Command{
+		Use:   "get <key>",
+		Short: "Print one config key's value",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			reply, err := runOp(c, opConfigGet, map[string]string{"key": args[0]})
+			if err != nil {
+				return err
+			}
+			var out struct {
+				Value string `json:"value"`
+				Found bool   `json:"found"`
+			}
+			if err := json.Unmarshal(reply.Body, &out); err != nil {
+				return err
+			}
+			if !out.Found {
+				fmt.Fprintf(c.OutOrStdout(), "%s: not set\n", args[0])
+				return nil
+			}
+			fmt.Fprintln(c.OutOrStdout(), out.Value)
+			return nil
+		},
+	}
+	c.AddCommand(get)
+	return c
 }
 
 // withSessionDefault re-defaults a substrate command's --session flag to the

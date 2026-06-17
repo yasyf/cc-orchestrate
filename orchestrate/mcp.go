@@ -94,6 +94,10 @@ func mcpTools() []channel.Tool {
 			InputSchema: objectSchema(map[string]any{"backend": stringProp("backend name, e.g. herd, superset, cmux, zellij, tmux")}, "backend"),
 			Handler:     mcpBackendSelect,
 		},
+		opTool("config_get",
+			"Read one persisted config key's value.",
+			objectSchema(map[string]any{"key": stringProp("config key, e.g. backend")}, "key"),
+			opConfigGet),
 		opTool("project_create",
 			"Create an orchestration project and its backend workspace.",
 			objectSchema(map[string]any{

@@ -60,7 +60,8 @@ func TestMCPServer(t *testing.T) {
 		got[tool.Name] = true
 	}
 	want := []string{
-		"backends_list", "backend_select", "project_create", "project_list", "project_activate", "project_kill",
+		"backends_list", "backend_select", "config_get",
+		"project_create", "project_list", "project_activate", "project_kill",
 		"agent_spawn", "agent_list", "agent_send_message", "agent_status", "agent_kill",
 	}
 	if len(listReply.Result.Tools) != len(want) {
