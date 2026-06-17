@@ -239,7 +239,7 @@ func TestCmuxSpawn(t *testing.T) {
 
 	// Drive bash exactly as the pane shell would: type only the path. The argv
 	// must reach the recorder intact and nothing must be interpreted as a shell.
-	if out, err := exec.Command("bash", path).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(context.Background(), "bash", path).CombinedOutput(); err != nil {
 		t.Fatalf("bash launch script: %v: %s", err, out)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {

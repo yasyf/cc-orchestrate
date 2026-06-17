@@ -445,7 +445,7 @@ func TestShellQuoteRoundTripThroughBash(t *testing.T) {
 	for i, tok := range cmd {
 		quoted[i] = ShellQuote(tok)
 	}
-	out, err := exec.Command(bash, "-c", strings.Join(quoted, " ")).Output()
+	out, err := exec.CommandContext(context.Background(), bash, "-c", strings.Join(quoted, " ")).Output()
 	if err != nil {
 		t.Fatalf("bash: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestWrapBashLoginRoundTripThroughFish(t *testing.T) {
 	}
 	args := []string{"a b", "it's", "x$Y", "semi;colon", "amp&", `quote"d`, `back\slash`}
 	cmd := append([]string{"printf", `%s\n`}, args...)
-	out, err := exec.Command(fish, "--no-config", "-c", wrapBashLogin(cmd)).Output()
+	out, err := exec.CommandContext(context.Background(), fish, "--no-config", "-c", wrapBashLogin(cmd)).Output()
 	if err != nil {
 		t.Fatalf("fish: %v", err)
 	}
