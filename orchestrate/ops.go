@@ -338,6 +338,25 @@ func handleProjectActivate(hc daemon.HandlerCtx) daemon.Reply {
 	return daemon.Reply{OK: true, Body: out}
 }
 
+// backendAgentHandle resolves an agent's backend handle: its terminal addressed
+// within the project's backend workspace. The handle's ProjectID is the backend
+// WorkspaceHandle (what cmux's --workspace and zellij's --session expect), not the
+// orchestrate project id stored on the agent row — those are different values, and
+// addressing the terminal needs the backend one.
+func backendAgentHandle(hc daemon.HandlerCtx, ag agentRow) (backend.AgentHandle, error) {
+	proj, err := getProject(hc.Ctx, hc.DB, ag.ProjectID)
+	if err != nil {
+		return backend.AgentHandle{}, err
+	}
+	return backend.AgentHandle{
+		Backend:   ag.Backend,
+		ID:        ag.TerminalHandle,
+		ProjectID: proj.WorkspaceHandle,
+		Name:      ag.Name,
+		SessionID: ag.SessionID,
+	}, nil
+}
+
 // handleAgentKill answers agent-kill: it stops the agent's transcript tailer,
 // terminates the backend terminal, marks the row exited, and appends a terminal
 // EventExited. A backend kill failure is surfaced after the row is already marked
@@ -357,10 +376,12 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 	if !ok {
 		return daemon.Reply{OK: false, Error: "unknown backend: " + ag.Backend}
 	}
+	handle, err := backendAgentHandle(hc, ag)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
 	tailers.stop(ag.ID)
-	killErr := bk.Kill(hc.Ctx, backend.AgentHandle{
-		Backend: ag.Backend, ID: ag.TerminalHandle, ProjectID: ag.ProjectID, Name: ag.Name, SessionID: ag.SessionID,
-	})
+	killErr := bk.Kill(hc.Ctx, handle)
 	if err := setAgentLifecycle(hc.Ctx, hc.DB, ag.ID, StatusExited); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}

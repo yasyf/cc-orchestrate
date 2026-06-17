@@ -542,6 +542,12 @@ func TestHandleAgentKill(t *testing.T) {
 	tailers = newTailerManager(ctx)
 
 	db := newTestDB(t)
+	if err := insertProject(ctx, db, projectRow{
+		ID: "p1", Name: "proj", Backend: "optest", WorkspaceHandle: "ws-1",
+		Cwd: "/s", Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertProject: %v", err)
+	}
 	mustInsertAgent(t, db, agentRow{
 		ID: "a1", ProjectID: "p1", Backend: "optest", TerminalHandle: "term-1",
 		SessionID: "sess-1", Scope: "/s", Name: "worker", SubjectID: "subj-1",
@@ -562,9 +568,11 @@ func TestHandleAgentKill(t *testing.T) {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
 
-		// The backend received the agent handle assembled from the row.
+		// The backend received the agent handle assembled from the row, with
+		// ProjectID carrying the project's backend WorkspaceHandle (ws-1), not the
+		// orchestrate project id (p1).
 		want := backend.AgentHandle{
-			Backend: "optest", ID: "term-1", ProjectID: "p1", Name: "worker", SessionID: "sess-1",
+			Backend: "optest", ID: "term-1", ProjectID: "ws-1", Name: "worker", SessionID: "sess-1",
 		}
 		if killed != want {
 			t.Fatalf("kill handle = %+v, want %+v", killed, want)
