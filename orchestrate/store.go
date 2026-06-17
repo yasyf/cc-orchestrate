@@ -99,7 +99,10 @@ func listProjects(ctx context.Context, db *sql.DB) ([]projectRow, error) {
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate projects: %w", err)
+	}
+	return out, nil
 }
 
 // getProject resolves a project by canonical id first, then by name.
@@ -167,7 +170,10 @@ func queryAgents(ctx context.Context, db *sql.DB, query string, args ...any) ([]
 		}
 		out = append(out, a)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate agents: %w", err)
+	}
+	return out, nil
 }
 
 func getAgent(ctx context.Context, db *sql.DB, id string) (agentRow, error) {
