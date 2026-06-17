@@ -341,20 +341,28 @@ func TestMatchProjectID(t *testing.T) {
 func TestSupersetGitBranch(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
-		name string
-		out  string
-		err  error
-		want string
+		name    string
+		out     string
+		err     error
+		want    string
+		wantErr bool
 	}{
-		{"uses the checked-out branch", "feature/login\n", nil, "feature/login"},
-		{"defaults to main on detached HEAD", "HEAD\n", nil, "main"},
-		{"defaults to main when git fails", "", errors.New("not a repo"), "main"},
-		{"defaults to main on empty output", "\n", nil, "main"},
+		{name: "uses the checked-out branch", out: "feature/login\n", want: "feature/login"},
+		{name: "defaults to main on detached HEAD", out: "HEAD\n", want: "main"},
+		{name: "defaults to main on empty output", out: "\n", want: "main"},
+		{name: "propagates a git execution failure", err: errors.New("not a repo"), wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &supersetRunner{outs: []string{tc.out}, errs: []error{tc.err}}
-			if got := (superset{run: r.run}).gitBranch(ctx, "/work"); got != tc.want {
+			got, err := (superset{run: r.run}).gitBranch(ctx, "/work")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("gitBranch err = nil, want a wrapped git failure")
+				}
+			} else if err != nil {
+				t.Fatalf("gitBranch err = %v, want nil", err)
+			} else if got != tc.want {
 				t.Fatalf("gitBranch = %q, want %q", got, tc.want)
 			}
 			assertCalls(t, r.calls, [][]string{{"git", "-C", "/work", "rev-parse", "--abbrev-ref", "HEAD"}})

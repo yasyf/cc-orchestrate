@@ -120,7 +120,10 @@ func (b superset) CreateProject(ctx context.Context, spec ProjectSpec) (ProjectH
 	if err != nil {
 		return ProjectHandle{}, err
 	}
-	branch := b.gitBranch(ctx, spec.Cwd)
+	branch, err := b.gitBranch(ctx, spec.Cwd)
+	if err != nil {
+		return ProjectHandle{}, err
+	}
 	out, err := b.run(ctx, supersetBin, "workspaces", "create", "--local",
 		"--project", projectID, "--branch", branch, "--name", spec.Name, "--json")
 	if err != nil {
@@ -184,15 +187,19 @@ func matchProjectID(projects []supersetProject, cwd string) string {
 	return best
 }
 
-func (b superset) gitBranch(ctx context.Context, cwd string) string {
+// gitBranch is the checked-out branch of cwd, used as the workspace fork point.
+// A git execution failure (not a repo, git missing, no permission) propagates;
+// only a successful rev-parse with no branch — a detached HEAD or unborn branch —
+// falls back to "main".
+func (b superset) gitBranch(ctx context.Context, cwd string) (string, error) {
 	out, err := b.run(ctx, "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		return "main"
+		return "", fmt.Errorf("superset: resolve git branch in %s: %w", cwd, err)
 	}
 	if branch := strings.TrimSpace(string(out)); branch != "" && branch != "HEAD" {
-		return branch
+		return branch, nil
 	}
-	return "main"
+	return "main", nil
 }
 
 func (b superset) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
