@@ -3,6 +3,7 @@ package orchestrate
 import (
 	"context"
 	"database/sql"
+	"log"
 	"sync"
 	"time"
 
@@ -114,13 +115,20 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 	}
 	m.cancels[ag.ID] = cancel
 	m.mu.Unlock()
-	go runTailer(cctx, ag.SessionID, ag.Scope, m.interval, func(st Status) error {
-		applyStatus(cctx, db, ag.ID, st)
-		_, err := appendFn(cctx, &event.Event{
-			SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventStatus, Payload: jsonStatus(st),
+	go func() {
+		err := runTailer(cctx, ag.SessionID, ag.Scope, m.interval, func(st Status) error {
+			if err := applyStatus(cctx, db, ag.ID, st); err != nil {
+				return err
+			}
+			_, err := appendFn(cctx, &event.Event{
+				SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventStatus, Payload: jsonStatus(st),
+			})
+			return err
 		})
-		return err
-	})
+		if err != nil {
+			log.Printf("cc-orchestrate: tailer for agent %s stopped: %v", ag.ID, err)
+		}
+	}()
 }
 
 // stop cancels an agent's tailer and forgets it. It is a no-op for an agent with
