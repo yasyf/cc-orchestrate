@@ -29,7 +29,7 @@ type projectRow struct {
 	Backend         string
 	WorkspaceHandle string
 	Cwd             string
-	Status          string
+	Status          LifecycleStatus
 	CreatedAt       string
 }
 
@@ -45,7 +45,7 @@ type agentRow struct {
 	Name           string
 	Prompt         string
 	SubjectID      string
-	Status         string
+	Status         LifecycleStatus
 	State          string
 	Activity       string
 	Tokens         int
@@ -120,7 +120,7 @@ func getProject(ctx context.Context, db *sql.DB, idOrName string) (projectRow, e
 	return p, nil
 }
 
-func setProjectStatus(ctx context.Context, db *sql.DB, id, status string) error {
+func setProjectStatus(ctx context.Context, db *sql.DB, id string, status LifecycleStatus) error {
 	_, err := db.ExecContext(ctx, `UPDATE projects SET status = ? WHERE id = ?`, status, id)
 	if err != nil {
 		return fmt.Errorf("set project %q status: %w", id, err)
@@ -153,7 +153,7 @@ func listAgents(ctx context.Context, db *sql.DB, projectFilter string) ([]agentR
 }
 
 func listActiveAgents(ctx context.Context, db *sql.DB) ([]agentRow, error) {
-	return queryAgents(ctx, db, `SELECT `+agentColumns+` FROM agents WHERE status = 'active' ORDER BY created_at`)
+	return queryAgents(ctx, db, `SELECT `+agentColumns+` FROM agents WHERE status = ? ORDER BY created_at`, StatusActive)
 }
 
 func queryAgents(ctx context.Context, db *sql.DB, query string, args ...any) ([]agentRow, error) {
@@ -187,7 +187,7 @@ func getAgent(ctx context.Context, db *sql.DB, id string) (agentRow, error) {
 	return a, nil
 }
 
-func setAgentLifecycle(ctx context.Context, db *sql.DB, id, status string) error {
+func setAgentLifecycle(ctx context.Context, db *sql.DB, id string, status LifecycleStatus) error {
 	_, err := db.ExecContext(ctx, `UPDATE agents SET status = ? WHERE id = ?`, status, id)
 	if err != nil {
 		return fmt.Errorf("set agent %q lifecycle: %w", id, err)

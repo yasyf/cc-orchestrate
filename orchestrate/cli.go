@@ -526,7 +526,7 @@ func watchAllAgents(c *cobra.Command, d cmd.Deps) error {
 	var wg sync.WaitGroup
 	var firstErr error
 	for _, a := range views {
-		if a.Status != "active" {
+		if a.Status != string(StatusActive) {
 			continue
 		}
 		wg.Add(1)

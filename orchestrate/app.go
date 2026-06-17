@@ -36,6 +36,16 @@ const (
 	EventReport  = "orchestrate.report"  // agent → orchestrator report
 )
 
+// LifecycleStatus is the lifecycle state stored on a project or agent row. It is a
+// named type so a status field can never be assigned an arbitrary string.
+type LifecycleStatus string
+
+const (
+	StatusActive LifecycleStatus = "active" // running; matches daemon.Config.ActiveStatuses
+	StatusExited LifecycleStatus = "exited" // terminal: the agent's process is gone
+	StatusKilled LifecycleStatus = "killed" // terminal: the project and its workspace were torn down
+)
+
 func appPaths() paths.Paths { return paths.Paths{App: appDir} }
 
 func newClient() *daemon.Client { return daemon.NewClient(appPaths().SocketPath()) }

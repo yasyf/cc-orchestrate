@@ -40,7 +40,7 @@ type agentView struct {
 func newAgentView(a agentRow) agentView {
 	return agentView{
 		ID: a.ID, Name: a.Name, ProjectID: a.ProjectID, Backend: a.Backend,
-		Status: a.Status, State: a.State, Activity: a.Activity, Tokens: a.Tokens,
+		Status: string(a.Status), State: a.State, Activity: a.Activity, Tokens: a.Tokens,
 		UpdatedAt: a.UpdatedAt, SessionID: a.SessionID, Scope: a.Scope,
 	}
 }
@@ -220,7 +220,7 @@ type projectView struct {
 func newProjectView(p projectRow) projectView {
 	return projectView{
 		ID: p.ID, Name: p.Name, Backend: p.Backend, Workspace: p.WorkspaceHandle,
-		Cwd: p.Cwd, Status: p.Status, CreatedAt: p.CreatedAt,
+		Cwd: p.Cwd, Status: string(p.Status), CreatedAt: p.CreatedAt,
 	}
 }
 
@@ -292,7 +292,7 @@ func handleProjectCreate(hc daemon.HandlerCtx) daemon.Reply {
 	}
 	p := projectRow{
 		ID: projectSlug(b.Name), Name: b.Name, Backend: bname, WorkspaceHandle: handle.ID,
-		Cwd: cwd, Status: "active", CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Cwd: cwd, Status: StatusActive, CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := insertProject(hc.Ctx, hc.DB, p); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
@@ -331,10 +331,10 @@ func handleProjectActivate(hc daemon.HandlerCtx) daemon.Reply {
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	if err := setProjectStatus(hc.Ctx, hc.DB, proj.ID, "active"); err != nil {
+	if err := setProjectStatus(hc.Ctx, hc.DB, proj.ID, StatusActive); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	out, _ := json.Marshal(map[string]string{"project_id": proj.ID, "status": "active"})
+	out, _ := json.Marshal(map[string]string{"project_id": proj.ID, "status": string(StatusActive)})
 	return daemon.Reply{OK: true, Body: out}
 }
 
@@ -361,7 +361,7 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 	killErr := bk.Kill(hc.Ctx, backend.AgentHandle{
 		Backend: ag.Backend, ID: ag.TerminalHandle, ProjectID: ag.ProjectID, Name: ag.Name, SessionID: ag.SessionID,
 	})
-	if err := setAgentLifecycle(hc.Ctx, hc.DB, ag.ID, "exited"); err != nil {
+	if err := setAgentLifecycle(hc.Ctx, hc.DB, ag.ID, StatusExited); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
 	if _, err := hc.Append(hc.Ctx, &event.Event{
@@ -372,7 +372,7 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 	if killErr != nil {
 		return daemon.Reply{OK: false, Error: fmt.Errorf("kill agent %q: %w", ag.ID, killErr).Error()}
 	}
-	out, _ := json.Marshal(map[string]string{"agent_id": ag.ID, "status": "exited"})
+	out, _ := json.Marshal(map[string]string{"agent_id": ag.ID, "status": string(StatusExited)})
 	return daemon.Reply{OK: true, Body: out}
 }
 

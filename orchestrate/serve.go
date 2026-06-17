@@ -44,7 +44,7 @@ func serve(ctx context.Context) error {
 		AppName:        AppName,
 		Paths:          appPaths(),
 		Version:        Version,
-		ActiveStatuses: []string{"active"},
+		ActiveStatuses: []string{string(StatusActive)},
 		WindowAlive:    func(int) bool { return true },
 		// c.Type() (not c.EventType) so the SSE plane filters the same presence
 		// type these hooks emit, correct even for the Connectivity zero value.

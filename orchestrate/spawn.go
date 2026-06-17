@@ -19,7 +19,7 @@ import (
 // lifecycle is the subject lifecycle the orchestrator writes: a spawned agent's
 // subject is born "active" (matching daemon.Config.ActiveStatuses) and closes to
 // "exited" when the agent terminates.
-var lifecycle = subject.Lifecycle{Initial: "active", Closed: "exited"}
+var lifecycle = subject.Lifecycle{Initial: string(StatusActive), Closed: string(StatusExited)}
 
 // mcpServer is one entry of the child's --mcp-config: the orchestrate binary
 // re-invoked as the child's channel MCP server, scoped to its session and cwd.
@@ -160,7 +160,7 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 	ag := agentRow{
 		ID: sid, ProjectID: proj.ID, Backend: bname, TerminalHandle: handle.ID,
 		SessionID: sid, Scope: scope, Name: body.Name, Prompt: body.Prompt,
-		SubjectID: sub.ID, Status: "active", State: StateUnknown,
+		SubjectID: sub.ID, Status: StatusActive, State: StateUnknown,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := insertAgent(hc.Ctx, hc.DB, ag); err != nil {
