@@ -1,13 +1,19 @@
 package orchestrate
 
 import (
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
 	"github.com/yasyf/cc-interact/cmd"
+	"github.com/yasyf/cc-interact/daemon"
 
 	"github.com/yasyf/cc-orchestrate/backend"
 )
@@ -72,12 +78,19 @@ func backendsCmd() *cobra.Command {
 			Short: "List backends and their availability",
 			Args:  cobra.NoArgs,
 			RunE: func(c *cobra.Command, _ []string) error {
+				selected := selectedBackend()
 				rows := []backendRow{}
 				defaulted := false
 				for _, name := range backend.Precedence {
 					b, _ := backend.Get(name)
 					available := b.Available()
-					isDefault := available && !defaulted
+					isDefault := false
+					switch {
+					case selected != "":
+						isDefault = name == selected
+					case available && !defaulted:
+						isDefault = true
+					}
 					defaulted = defaulted || isDefault
 					rows = append(rows, backendRow{name: name, available: available, isDefault: isDefault})
 				}
@@ -89,15 +102,65 @@ func backendsCmd() *cobra.Command {
 			Use:   "select <backend>",
 			Short: "Persist the selected default backend",
 			Args:  cobra.ExactArgs(1),
-			RunE:  notImplemented,
+			RunE:  runBackendsSelect,
 		},
 	)
 	return c
 }
 
+// runBackendsSelect validates that the named backend is a known, installed
+// backend, then persists it as the selected default through the config-set op.
+func runBackendsSelect(c *cobra.Command, args []string) error {
+	name := args[0]
+	b, ok := backend.Get(name)
+	if !slices.Contains(backend.Precedence, name) || !ok || !b.Available() {
+		return fmt.Errorf("backend %q is not an available backend; run `%s backends list`", name, AppName)
+	}
+	ctx := c.Context()
+	d := deps()
+	if err := d.EnsureCurrent(ctx); err != nil {
+		return err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]string{"key": "backend", "value": name})
+	reply, err := newClient().Do(ctx, daemon.Envelope{
+		Op: opConfigSet, Session: AppName, ClaudePID: d.ClaudePID(), Scope: cwd, Body: body,
+	})
+	if err != nil {
+		return err
+	}
+	if !reply.OK {
+		return errors.New(reply.Error)
+	}
+	fmt.Fprintf(c.OutOrStdout(), "selected backend: %s\n", name)
+	return nil
+}
+
+// selectedBackend reads the persisted default backend straight from the state db
+// without spawning the daemon, returning "" when no db exists or none is selected.
+func selectedBackend() string {
+	dbPath := appPaths().DBPath()
+	if _, err := os.Stat(dbPath); err != nil {
+		return ""
+	}
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return ""
+	}
+	defer db.Close()
+	var value string
+	if db.QueryRow(`SELECT value FROM config WHERE key = 'backend'`).Scan(&value) != nil {
+		return ""
+	}
+	return value
+}
+
 // backendRow is one line of `backends list`: a backend name, whether its runtime
-// is installed, and whether it is the effective default (the first available one
-// until Phase 3 wires through a persisted selection).
+// is installed, and whether it is the effective default (the persisted selection,
+// or the first available one when none is selected).
 type backendRow struct {
 	name      string
 	available bool

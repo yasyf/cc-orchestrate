@@ -30,6 +30,10 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			prompt                  TEXT,
 			subject_id              TEXT,
 			status                  TEXT NOT NULL,
+			state                   TEXT NOT NULL DEFAULT 'unknown',
+			activity                TEXT,
+			tokens                  INTEGER NOT NULL DEFAULT 0,
+			updated_at              TEXT,
 			created_at              TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS config (
