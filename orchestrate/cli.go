@@ -139,7 +139,11 @@ func backendsCmd() *cobra.Command {
 			Short: "List backends and their availability",
 			Args:  cobra.NoArgs,
 			RunE: func(c *cobra.Command, _ []string) error {
-				fmt.Fprint(c.OutOrStdout(), backendsTable())
+				table, err := backendsTable()
+				if err != nil {
+					return err
+				}
+				fmt.Fprint(c.OutOrStdout(), table)
 				return nil
 			},
 		},
@@ -169,22 +173,30 @@ func runBackendsSelect(c *cobra.Command, args []string) error {
 }
 
 // selectedBackend reads the persisted default backend straight from the state db
-// without spawning the daemon, returning "" when no db exists or none is selected.
-func selectedBackend() string {
+// without spawning the daemon. It returns "" when no state db exists yet or no
+// backend is selected, and a wrapped error when the db cannot be opened or read —
+// so a corrupt or locked db is surfaced rather than silently read as unset.
+func selectedBackend() (string, error) {
 	dbPath := appPaths().DBPath()
 	if _, err := os.Stat(dbPath); err != nil {
-		return ""
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("stat state db: %w", err)
 	}
 	db, err := sql.Open("sqlite", dbPath+"?mode=ro&_pragma=busy_timeout(5000)")
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("open state db: %w", err)
 	}
 	defer db.Close()
 	var value string
-	if db.QueryRow(`SELECT value FROM config WHERE key = 'backend'`).Scan(&value) != nil {
-		return ""
+	switch err := db.QueryRow(`SELECT value FROM config WHERE key = 'backend'`).Scan(&value); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("read selected backend: %w", err)
 	}
-	return value
+	return value, nil
 }
 
 // backendRow is one line of `backends list`: a backend name, whether its runtime
@@ -200,8 +212,11 @@ type backendRow struct {
 // order with its install status and a marker on the effective default (the
 // persisted selection, or the first available one when none is selected). It
 // reads state straight off disk, so it needs no daemon.
-func backendsTable() string {
-	selected := selectedBackend()
+func backendsTable() (string, error) {
+	selected, err := selectedBackend()
+	if err != nil {
+		return "", err
+	}
 	rows := []backendRow{}
 	defaulted := false
 	for _, name := range backend.Precedence {
@@ -217,7 +232,7 @@ func backendsTable() string {
 		defaulted = defaulted || isDefault
 		rows = append(rows, backendRow{name: name, available: available, isDefault: isDefault})
 	}
-	return formatBackends(rows)
+	return formatBackends(rows), nil
 }
 
 // formatBackends renders backend rows as an aligned text table.

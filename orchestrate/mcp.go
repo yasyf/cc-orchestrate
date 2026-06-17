@@ -81,7 +81,13 @@ func mcpTools() []channel.Tool {
 			Name:        "backends_list",
 			Description: "List the agent placement backends, their install status, and the effective default. Needs no running daemon.",
 			InputSchema: objectSchema(map[string]any{}),
-			Handler:     func(context.Context, json.RawMessage) (string, bool) { return backendsTable(), false },
+			Handler: func(context.Context, json.RawMessage) (string, bool) {
+				table, err := backendsTable()
+				if err != nil {
+					return err.Error(), true
+				}
+				return table, false
+			},
 		},
 		{
 			Name:        "backend_select",
