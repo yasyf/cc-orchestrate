@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,16 +112,39 @@ func TestClaudeCommand(t *testing.T) {
 		if got := flagValue(argv, "--settings"); got != childSettings("/opt/cc-orchestrate") {
 			t.Errorf("--settings = %q", got)
 		}
+		if got := flagValue(argv, "--append-system-prompt"); got != spawnBrief("/opt/cc-orchestrate", "sid-1", "/work") {
+			t.Errorf("--append-system-prompt = %q", got)
+		}
 		if last := argv[len(argv)-1]; last != "fix the bug" {
 			t.Errorf("trailing arg = %q, want the prompt", last)
 		}
 	})
 	t.Run("empty prompt omits the trailing arg", func(t *testing.T) {
 		argv := claudeCommand("/opt/cc-orchestrate", "sid-1", "/work", "")
-		if last := argv[len(argv)-1]; last != childSettings("/opt/cc-orchestrate") {
-			t.Errorf("trailing arg = %q, want --settings value (no prompt)", last)
+		if last := argv[len(argv)-1]; last != spawnBrief("/opt/cc-orchestrate", "sid-1", "/work") {
+			t.Errorf("trailing arg = %q, want the brief value (no prompt)", last)
 		}
 	})
+}
+
+func TestSpawnBrief(t *testing.T) {
+	brief := spawnBrief("/opt/cc-orchestrate", "sid-1", "/work")
+	if want := "/opt/cc-orchestrate watch --session sid-1 --cwd /work"; !strings.Contains(brief, want) {
+		t.Errorf("brief missing watch command %q:\n%s", want, brief)
+	}
+	if !strings.Contains(brief, "orchestrate.message") {
+		t.Errorf("brief does not name the orchestrate.message event:\n%s", brief)
+	}
+	if !strings.Contains(brief, `"report"`) {
+		t.Errorf("brief does not mention the report tool:\n%s", brief)
+	}
+}
+
+func TestSpawnBriefShellQuotesSpaces(t *testing.T) {
+	brief := spawnBrief("/Apps/My Tools/cc-orchestrate", "sid-1", "/my work")
+	if want := "'/Apps/My Tools/cc-orchestrate' watch --session sid-1 --cwd '/my work'"; !strings.Contains(brief, want) {
+		t.Errorf("brief missing shell-quoted watch command %q:\n%s", want, brief)
+	}
 }
 
 func TestTailerManagerStartStop(t *testing.T) {

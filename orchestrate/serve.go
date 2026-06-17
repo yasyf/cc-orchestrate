@@ -17,6 +17,7 @@ import (
 const (
 	opSpawn           daemon.Op = "agent-spawn"
 	opSendMessage     daemon.Op = "agent-send-message"
+	opReport          daemon.Op = "agent-report"
 	opStatus          daemon.Op = "agent-status"
 	opList            daemon.Op = "agent-list"
 	opAgentKill       daemon.Op = "agent-kill"
@@ -69,6 +70,7 @@ func serve(ctx context.Context) error {
 	}
 	s.Register(opSpawn, handleSpawn)
 	s.Register(opSendMessage, handleSendMessage)
+	s.Register(opReport, handleReport)
 	s.Register(opStatus, handleStatus)
 	s.Register(opList, handleList)
 	s.Register(opAgentKill, handleAgentKill)

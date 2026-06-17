@@ -1,23 +1,33 @@
 package orchestrate
 
 import (
+	"cmp"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/yasyf/cc-interact/cmd"
+	"github.com/yasyf/cc-interact/consume"
 	"github.com/yasyf/cc-interact/daemon"
 
 	"github.com/yasyf/cc-orchestrate/backend"
 )
+
+// watchConsumer is the stream-consumer name `agent watch` registers under, keeping
+// its resume cursor distinct from the agent's own receive Monitor.
+const watchConsumer = "agent-watch"
 
 // defaultSession re-defaults the substrate commands' --session flag so the
 // orchestrator's own control commands resolve without passing it explicitly.
@@ -129,23 +139,7 @@ func backendsCmd() *cobra.Command {
 			Short: "List backends and their availability",
 			Args:  cobra.NoArgs,
 			RunE: func(c *cobra.Command, _ []string) error {
-				selected := selectedBackend()
-				rows := []backendRow{}
-				defaulted := false
-				for _, name := range backend.Precedence {
-					b, _ := backend.Get(name)
-					available := b.Available()
-					isDefault := false
-					switch {
-					case selected != "":
-						isDefault = name == selected
-					case available && !defaulted:
-						isDefault = true
-					}
-					defaulted = defaulted || isDefault
-					rows = append(rows, backendRow{name: name, available: available, isDefault: isDefault})
-				}
-				fmt.Fprint(c.OutOrStdout(), formatBackends(rows))
+				fmt.Fprint(c.OutOrStdout(), backendsTable())
 				return nil
 			},
 		},
@@ -216,6 +210,30 @@ type backendRow struct {
 	name      string
 	available bool
 	isDefault bool
+}
+
+// backendsTable renders the `backends list` view: every backend in precedence
+// order with its install status and a marker on the effective default (the
+// persisted selection, or the first available one when none is selected). It
+// reads state straight off disk, so it needs no daemon.
+func backendsTable() string {
+	selected := selectedBackend()
+	rows := []backendRow{}
+	defaulted := false
+	for _, name := range backend.Precedence {
+		b, _ := backend.Get(name)
+		available := b.Available()
+		isDefault := false
+		switch {
+		case selected != "":
+			isDefault = name == selected
+		case available && !defaulted:
+			isDefault = true
+		}
+		defaulted = defaulted || isDefault
+		rows = append(rows, backendRow{name: name, available: available, isDefault: isDefault})
+	}
+	return formatBackends(rows)
 }
 
 // formatBackends renders backend rows as an aligned text table.
@@ -441,7 +459,9 @@ func agentCmd() *cobra.Command {
 		Use:   "watch",
 		Short: "Stream agent status/report events (run under a Monitor)",
 		Args:  cobra.NoArgs,
-		RunE:  notImplemented,
+		RunE: func(c *cobra.Command, _ []string) error {
+			return runAgentWatch(c, watchID, watchAll)
+		},
 	}
 	watch.Flags().BoolVar(&watchAll, "all", false, "watch every agent")
 	watch.Flags().StringVar(&watchID, "id", "", "watch a single agent by id")
@@ -463,12 +483,177 @@ func agentCmd() *cobra.Command {
 	return c
 }
 
-// mcpCmd is the parent-facing MCP control server entry point.
+// runAgentWatch streams agent events as line-delimited JSON under the parent's
+// Monitor: a single agent (--id) verbatim, or every active agent (--all) with each
+// line tagged by its agent id so the parent can demultiplex. Exactly one of --id
+// and --all is required.
+func runAgentWatch(c *cobra.Command, id string, all bool) error {
+	if (id != "") == all {
+		return errors.New("pass exactly one of --id or --all")
+	}
+	ctx := c.Context()
+	d := deps()
+	if err := d.EnsureCurrent(ctx); err != nil {
+		return err
+	}
+	if all {
+		return watchAllAgents(c, d)
+	}
+	reply, err := runOp(c, opStatus, map[string]string{"agent_id": id})
+	if err != nil {
+		return err
+	}
+	var a agentView
+	if err := json.Unmarshal(reply.Body, &a); err != nil {
+		return err
+	}
+	out := c.OutOrStdout()
+	return streamAgent(ctx, d, a, func(data string) error {
+		_, err := fmt.Fprintln(out, data)
+		return err
+	})
+}
+
+// watchAllAgents streams every active agent's events concurrently, one goroutine
+// per subject, tagging each emitted line with its source agent id through a single
+// mutex-guarded writer so concurrent streams never interleave a line. The first
+// real stream error cancels the rest; a clean terminal/ctx end returns nil.
+func watchAllAgents(c *cobra.Command, d cmd.Deps) error {
+	reply, err := runOp(c, opList, map[string]string{"project": ""})
+	if err != nil {
+		return err
+	}
+	var views []agentView
+	if err := json.Unmarshal(reply.Body, &views); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(c.Context())
+	defer cancel()
+	out := c.OutOrStdout()
+	var writeMu, errMu sync.Mutex
+	var wg sync.WaitGroup
+	var firstErr error
+	for _, a := range views {
+		if a.Status != "active" {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := streamAgent(ctx, d, a, func(data string) error {
+				return emitTagged(out, &writeMu, a.ID, data)
+			})
+			if err != nil {
+				errMu.Lock()
+				firstErr = cmp.Or(firstErr, err)
+				errMu.Unlock()
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+	return firstErr
+}
+
+// streamAgent resolves an agent's subject and the daemon HTTP port, then streams
+// its event log to emit one event at a time, stopping on the agent's terminal exit
+// event or when ctx is cancelled.
+func streamAgent(ctx context.Context, d cmd.Deps, a agentView, emit func(string) error) error {
+	client := newClient()
+	subjectID, port, err := resolveAgentSubject(ctx, client, a.SessionID, a.Scope)
+	if err != nil {
+		return err
+	}
+	src := consume.StreamSource{
+		Port: port, SubjectID: subjectID, Consumer: watchConsumer, ClaudePID: os.Getpid(),
+		Paths: d.Paths, WindowAlive: d.WindowAlive,
+		Refresh: refreshAgentPort(client, a.SessionID, a.Scope),
+	}
+	return consume.ConsumeEvents(ctx, src, func(_ int64, data string) (bool, error) {
+		if err := emit(data); err != nil {
+			return false, err
+		}
+		return d.TerminalEvent(eventType(data)), nil
+	})
+}
+
+// taggedEvent wraps one agent's raw event with its agent id so `agent watch --all`
+// emits one self-describing JSON object per line.
+type taggedEvent struct {
+	AgentID string          `json:"agent_id"`
+	Event   json.RawMessage `json:"event"`
+}
+
+// emitTagged writes one agent's raw event wrapped with its id as a single JSON
+// line, serialized through mu so concurrent streams never interleave.
+func emitTagged(out io.Writer, mu *sync.Mutex, id, data string) error {
+	line, err := json.Marshal(taggedEvent{AgentID: id, Event: json.RawMessage(data)})
+	if err != nil {
+		return err
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	_, err = fmt.Fprintln(out, string(line))
+	return err
+}
+
+// resolveAgentSubject polls the daemon until a subject exists for the agent's
+// session+scope, returning its id and the daemon's HTTP handshake port. It
+// replicates cc-interact's unexported cmd.resolveSubject — unreachable across the
+// package boundary — differing only in the orchestrate consumer name.
+func resolveAgentSubject(ctx context.Context, client *daemon.Client, session, scope string) (string, int, error) {
+	for {
+		reply, err := client.Do(ctx, daemon.Envelope{
+			Op: daemon.OpResolve, Session: session, ClaudePID: os.Getpid(), Scope: scope, Consumer: watchConsumer,
+		})
+		if err != nil {
+			return "", 0, err
+		}
+		if reply.SubjectID != "" {
+			return reply.SubjectID, reply.HTTPPort, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", 0, ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// refreshAgentPort re-resolves the daemon's current HTTP port for a streaming
+// agent, so a version-skew daemon swap doesn't strand the SSE consumer. It
+// replicates cc-interact's unexported cmd.refreshHandshake.
+func refreshAgentPort(client *daemon.Client, session, scope string) func(context.Context) (int, error) {
+	return func(ctx context.Context) (int, error) {
+		reply, err := client.Do(ctx, daemon.Envelope{
+			Op: daemon.OpResolve, Session: session, ClaudePID: os.Getpid(), Scope: scope, Consumer: watchConsumer,
+		})
+		if err != nil {
+			return 0, err
+		}
+		return reply.HTTPPort, nil
+	}
+}
+
+// eventType extracts an event's "type" field from its raw JSON, feeding the
+// terminal-event check cc-interact's watch performs.
+func eventType(data string) string {
+	var e struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal([]byte(data), &e)
+	return e.Type
+}
+
+// mcpCmd is the parent-facing MCP control server entry point: a stdio JSON-RPC
+// server exposing the orchestration ops as MCP tools to the parent claude.
 func mcpCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "mcp",
 		Short: "Run the parent-facing MCP control server (stdio)",
 		Args:  cobra.NoArgs,
-		RunE:  notImplemented,
+		RunE: func(c *cobra.Command, _ []string) error {
+			return runMCP(c.Context(), c.InOrStdin(), c.OutOrStdout())
+		},
 	}
 }

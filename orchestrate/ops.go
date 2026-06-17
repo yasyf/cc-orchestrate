@@ -34,13 +34,14 @@ type agentView struct {
 	Tokens    int    `json:"tokens"`
 	UpdatedAt string `json:"updated_at"`
 	SessionID string `json:"session_id"`
+	Scope     string `json:"scope"`
 }
 
 func newAgentView(a agentRow) agentView {
 	return agentView{
 		ID: a.ID, Name: a.Name, ProjectID: a.ProjectID, Backend: a.Backend,
 		Status: a.Status, State: a.State, Activity: a.Activity, Tokens: a.Tokens,
-		UpdatedAt: a.UpdatedAt, SessionID: a.SessionID,
+		UpdatedAt: a.UpdatedAt, SessionID: a.SessionID, Scope: a.Scope,
 	}
 }
 
@@ -129,6 +130,40 @@ func handleSendMessage(hc daemon.HandlerCtx) daemon.Reply {
 	}
 	seq, err := hc.Append(hc.Ctx, &event.Event{
 		SubjectID: ag.SubjectID, Origin: event.OriginHuman, Type: EventMessage, Payload: messagePayload(b.Text),
+	})
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	body, _ := json.Marshal(map[string]int64{"seq": seq})
+	return daemon.Reply{OK: true, Body: body}
+}
+
+// reportPayload is the EventReport event body an agent's report tool appends: the
+// agent's message and its optional run state.
+type reportPayload struct {
+	Text  string `json:"text"`
+	State string `json:"state,omitempty"`
+}
+
+// handleReport answers agent-report by appending an OriginAgent EventReport to the
+// reporting agent's subject log. The subject is resolved from the child's session
+// and scope (the channel server stamps both), so the agent never needs to know its
+// own subject id. An unresolvable subject is an error.
+func handleReport(hc daemon.HandlerCtx) daemon.Reply {
+	var b reportPayload
+	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+		return daemon.Reply{OK: false, Error: "bad agent-report body: " + err.Error()}
+	}
+	sub, ok, err := hc.Subjects.Find(hc.Ctx, hc.Window, hc.Scope)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if !ok {
+		return daemon.Reply{OK: false, Error: "no subject for session " + hc.Env.Session + " in scope " + hc.Scope}
+	}
+	payload, _ := json.Marshal(b)
+	seq, err := hc.Append(hc.Ctx, &event.Event{
+		SubjectID: sub.ID, Origin: event.OriginAgent, Type: EventReport, Payload: payload,
 	})
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}

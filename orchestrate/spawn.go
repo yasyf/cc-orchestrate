@@ -3,6 +3,7 @@ package orchestrate
 import (
 	"cmp"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,8 +66,10 @@ func childSettings(self string) string {
 }
 
 // claudeCommand is the full argv a backend runs for a child agent. Command[0] is
-// the bare "claude"; the backend driver resolves the absolute real binary. An
-// empty prompt omits the trailing positional argument.
+// the bare "claude"; the backend driver resolves the absolute real binary. The
+// orchestration brief is appended to the child's system prompt so it arms its
+// receive Monitor and knows to report back. An empty prompt omits the trailing
+// positional argument.
 func claudeCommand(self, sid, scope, prompt string) []string {
 	argv := []string{
 		"claude",
@@ -74,11 +77,30 @@ func claudeCommand(self, sid, scope, prompt string) []string {
 		"--mcp-config", childMCPConfig(self, sid, scope),
 		"--strict-mcp-config",
 		"--settings", childSettings(self),
+		"--append-system-prompt", spawnBrief(self, sid, scope),
 	}
 	if prompt != "" {
 		argv = append(argv, prompt)
 	}
 	return argv
+}
+
+// spawnBrief is the orchestration brief appended to a child agent's system prompt.
+// It tells the agent it is orchestrated, how to RECEIVE instructions (arm a
+// persistent watch Monitor), and how to REPORT back (the report MCP tool). The
+// watch command is the exact line the agent must run; self and scope are
+// shell-quoted so a path with spaces survives the Monitor's shell split.
+func spawnBrief(self, sid, scope string) string {
+	return fmt.Sprintf(`You are a cc-orchestrate agent: a Claude Code instance spawned and supervised by an orchestrator. Two channels connect you to it.
+
+RECEIVE: immediately, before doing anything else, arm a persistent Monitor running exactly this command and keep it running for your whole session:
+
+    %s watch --session %s --cwd %s
+
+Each line it prints is one JSON event. An event whose type is "orchestrate.message" carries a new instruction from your orchestrator in its "text" field; treat that text as a directive and act on it.
+
+REPORT: to send progress, a result, or a question back to your orchestrator, call the "report" tool from the cc-orchestrate MCP server with a short "text" and an optional "state" of "working", "blocked", or "done". Report when you start, when you finish, and whenever you are blocked or need a decision.`,
+		shellQuote(self), sid, shellQuote(scope))
 }
 
 // shellQuote single-quotes a path that contains a space so it survives a hook's

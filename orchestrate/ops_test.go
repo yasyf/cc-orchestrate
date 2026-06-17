@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/yasyf/cc-interact/daemon"
 	"github.com/yasyf/cc-interact/event"
+	"github.com/yasyf/cc-interact/store"
+	"github.com/yasyf/cc-interact/subject"
 
 	"github.com/yasyf/cc-orchestrate/backend"
 )
@@ -140,6 +143,96 @@ func TestHandleSendMessageErrors(t *testing.T) {
 	}
 }
 
+// newFullDB opens a real ephemeral sqlite database with cc-interact's core schema
+// (subjects/events) plus the orchestrate schema, so the subject resolver has a
+// real table to write — newTestDB applies only the orchestrate tables.
+func newFullDB(t *testing.T) *sql.DB {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st.DB()
+}
+
+func TestHandleReport(t *testing.T) {
+	ctx := context.Background()
+	db := newFullDB(t)
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db, []string{"active"})}
+
+	// Create the child's subject keyed by its session id and scope, exactly as a
+	// spawn would. handleReport must resolve it from session + scope alone.
+	sub, _, err := subjects.Start(ctx, subject.Window{Session: "child-sid"}, "/work", "agent-child-sid", lifecycle, true)
+	if err != nil {
+		t.Fatalf("Start subject: %v", err)
+	}
+
+	var captured *event.Event
+	appendFn := func(_ context.Context, e *event.Event) (int64, error) {
+		captured = e
+		return 5, nil
+	}
+	hc := daemon.HandlerCtx{
+		Ctx:      ctx,
+		Env:      daemon.Envelope{Session: "child-sid", Body: mustJSON(t, map[string]string{"text": "halfway done", "state": "working"})},
+		Window:   subject.Window{Session: "child-sid"},
+		Scope:    "/work",
+		Subjects: subjects, DB: db, Append: appendFn,
+	}
+
+	reply := handleReport(hc)
+	if !reply.OK {
+		t.Fatalf("reply not ok: %s", reply.Error)
+	}
+	if captured == nil {
+		t.Fatal("Append was not called")
+	}
+	if captured.SubjectID != sub.ID {
+		t.Errorf("SubjectID = %q, want %q", captured.SubjectID, sub.ID)
+	}
+	if captured.Type != EventReport {
+		t.Errorf("Type = %q, want %q", captured.Type, EventReport)
+	}
+	if captured.Origin != event.OriginAgent {
+		t.Errorf("Origin = %q, want %q", captured.Origin, event.OriginAgent)
+	}
+	var pl reportPayload
+	if err := json.Unmarshal(captured.Payload, &pl); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if pl.Text != "halfway done" || pl.State != "working" {
+		t.Errorf("payload = %+v, want text=halfway done state=working", pl)
+	}
+	var rb struct {
+		Seq int64 `json:"seq"`
+	}
+	if err := json.Unmarshal(reply.Body, &rb); err != nil || rb.Seq != 5 {
+		t.Errorf("reply body = %s, want seq=5 (err %v)", reply.Body, err)
+	}
+}
+
+func TestHandleReportNoSubject(t *testing.T) {
+	ctx := context.Background()
+	db := newFullDB(t)
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db, []string{"active"})}
+	appendFn := func(context.Context, *event.Event) (int64, error) {
+		t.Fatal("Append must not be called without a subject")
+		return 0, nil
+	}
+	hc := daemon.HandlerCtx{
+		Ctx:      ctx,
+		Env:      daemon.Envelope{Session: "ghost", Body: mustJSON(t, map[string]string{"text": "x"})},
+		Window:   subject.Window{Session: "ghost"},
+		Scope:    "/nowhere",
+		Subjects: subjects, DB: db, Append: appendFn,
+	}
+	reply := handleReport(hc)
+	if reply.OK || reply.Error == "" {
+		t.Fatalf("reply = %+v, want ok=false with an error", reply)
+	}
+}
+
 func TestHandleStatus(t *testing.T) {
 	db := newTestDB(t)
 	mustInsertAgent(t, db, agentRow{
@@ -159,7 +252,7 @@ func TestHandleStatus(t *testing.T) {
 	want := agentView{
 		ID: "a1", Name: "worker", ProjectID: "p1", Backend: "tmux", Status: "active",
 		State: StateWorking, Activity: "Bash: ls", Tokens: 10,
-		UpdatedAt: "2026-06-16T00:00:00Z", SessionID: "sess-1",
+		UpdatedAt: "2026-06-16T00:00:00Z", SessionID: "sess-1", Scope: "/s",
 	}
 	if got != want {
 		t.Fatalf("status view = %+v, want %+v", got, want)
