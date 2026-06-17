@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -54,6 +55,35 @@ func cmuxRef(out []byte, prefix string) (string, error) {
 	return "", fmt.Errorf("cmux: no %s ref in output: %q", prefix, out)
 }
 
+// cmuxLaunchScript writes command as a self-removing POSIX script under a temp
+// path and returns the text cmux send must type into the pane shell: a bash
+// invocation of that path plus cmux's documented "\n" Enter. The argv rides the
+// script as file bytes (each token POSIX-quoted, the brief's embedded newlines
+// preserved) instead of being typed, because cmux send reinterprets any "\n",
+// "\r", or "\t" in the typed text as Enter/Enter/Tab — which would split the
+// multi-line --append-system-prompt brief into partial commands and let an
+// arbitrary prompt inject shell metacharacters. The only typed text is the temp
+// path, whose characters never include a backslash escape or a metacharacter.
+func cmuxLaunchScript(command []string) (string, error) {
+	quoted := make([]string, len(command))
+	for i, tok := range command {
+		quoted[i] = shellQuote(tok)
+	}
+	f, err := os.CreateTemp("", "cc-orchestrate-cmux-*.sh")
+	if err != nil {
+		return "", fmt.Errorf("cmux: create launch script: %w", err)
+	}
+	defer f.Close()
+	script := "rm -f -- \"$0\"\n" + strings.Join(quoted, " ") + "\n"
+	if _, err := f.WriteString(script); err != nil {
+		return "", fmt.Errorf("cmux: write launch script %s: %w", f.Name(), err)
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("cmux: close launch script %s: %w", f.Name(), err)
+	}
+	return "bash " + shellQuote(f.Name()) + `\n`, nil
+}
+
 func (b cmux) Name() string { return cmuxName }
 
 func (b cmux) Available() bool { return installed(cmuxBin) }
@@ -98,7 +128,11 @@ func (b cmux) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
 	if err != nil {
 		return AgentHandle{}, err
 	}
-	if _, err := b.run(ctx, cmuxBin, "send", "--workspace", spec.Project.ID, "--surface", surface, "--", strings.Join(spec.Command, " ")+`\n`); err != nil {
+	launch, err := cmuxLaunchScript(spec.Command)
+	if err != nil {
+		return AgentHandle{}, err
+	}
+	if _, err := b.run(ctx, cmuxBin, "send", "--workspace", spec.Project.ID, "--surface", surface, "--", launch); err != nil {
 		return AgentHandle{}, err
 	}
 	return AgentHandle{

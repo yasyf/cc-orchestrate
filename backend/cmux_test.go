@@ -1,8 +1,13 @@
 package backend
 
 import (
+	"bytes"
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -103,26 +108,6 @@ func TestCmux(t *testing.T) {
 			calls: []cmuxCall{{name: "cmux", args: []string{"list-workspaces", "--json"}}},
 		},
 		{
-			name: "Spawn opens a pane then sends the command with a trailing newline",
-			outputs: [][]byte{
-				[]byte("OK surface:10 pane:9 workspace:7\n"),
-				[]byte("OK surface:10 workspace:7\n"),
-			},
-			invoke: func(b cmux) (any, error) {
-				return b.Spawn(context.Background(), SpawnSpec{
-					Project:   ProjectHandle{Backend: "cmux", ID: "workspace:7"},
-					Name:      "agent-1",
-					Command:   []string{"echo", "hi"},
-					SessionID: "sess-abc",
-				})
-			},
-			want: AgentHandle{Backend: "cmux", ID: "surface:10", ProjectID: "workspace:7", Name: "agent-1", SessionID: "sess-abc"},
-			calls: []cmuxCall{
-				{name: "cmux", args: []string{"new-pane", "--workspace", "workspace:7"}},
-				{name: "cmux", args: []string{"send", "--workspace", "workspace:7", "--surface", "surface:10", "--", `echo hi\n`}},
-			},
-		},
-		{
 			name:    "ListAgents maps selected_surface_ref to agent ids scoped by workspace_ref",
 			outputs: [][]byte{[]byte(cmuxPanesJSON)},
 			invoke: func(b cmux) (any, error) {
@@ -167,6 +152,118 @@ func TestCmux(t *testing.T) {
 				t.Errorf("calls = %#v, want %#v", f.calls, tc.calls)
 			}
 		})
+	}
+}
+
+// TestCmuxSpawn proves the launch path: new-pane then a send whose typed text is
+// only a metacharacter-free `bash <temp-path>\n`, while the real argv (compact
+// JSON, a multi-line brief, and a prompt loaded with shell metacharacters) rides
+// a self-removing temp script that round-trips through bash with no injection.
+func TestCmuxSpawn(t *testing.T) {
+	work := t.TempDir()
+	// Stand-in for claude: record each argv element NUL-separated beside itself.
+	recorder := filepath.Join(work, "recorder.sh")
+	if err := os.WriteFile(recorder, []byte("#!/bin/bash\nprintf '%s\\0' \"$@\" > \"$(dirname \"$0\")/got.bin\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// If any of these markers were interpreted by a shell, the named file appears.
+	subst := filepath.Join(work, "PWNED_SUBST")
+	backtick := filepath.Join(work, "PWNED_BT")
+	semi := filepath.Join(work, "PWNED_SEMI")
+	brief := "line1\nline2 with 'quote' and \"dq\" and $(touch " + subst + ") and `touch " + backtick + "`"
+	command := []string{
+		recorder,
+		"--mcp-config", `{"a":"b c"}`,
+		"--append-system-prompt", brief,
+		"go ahead; touch " + semi,
+	}
+
+	f := &cmuxFakeRunner{outputs: [][]byte{
+		[]byte("OK surface:10 pane:9 workspace:7\n"),
+		[]byte("OK surface:10 workspace:7\n"),
+	}}
+	got, err := cmux{run: f.run}.Spawn(context.Background(), SpawnSpec{
+		Project:   ProjectHandle{Backend: "cmux", ID: "workspace:7"},
+		Name:      "agent-1",
+		Command:   command,
+		SessionID: "sess-abc",
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	want := AgentHandle{Backend: "cmux", ID: "surface:10", ProjectID: "workspace:7", Name: "agent-1", SessionID: "sess-abc"}
+	if got != want {
+		t.Errorf("handle = %#v, want %#v", got, want)
+	}
+	if len(f.calls) != 2 {
+		t.Fatalf("calls = %#v, want a new-pane then a send", f.calls)
+	}
+	if wantPane := []string{"new-pane", "--workspace", "workspace:7"}; !reflect.DeepEqual(f.calls[0].args, wantPane) {
+		t.Errorf("pane args = %#v, want %#v", f.calls[0].args, wantPane)
+	}
+
+	send := f.calls[1].args
+	if pre := []string{"send", "--workspace", "workspace:7", "--surface", "surface:10", "--"}; !reflect.DeepEqual(send[:len(pre)], pre) {
+		t.Errorf("send prefix = %#v, want %#v", send[:len(pre)], pre)
+	}
+	sent := send[len(send)-1]
+
+	// The typed text injects nothing: a bash invocation of the temp path plus the
+	// documented "\n" Enter, with no real newline or shell metacharacter from argv.
+	if !strings.HasPrefix(sent, "bash ") || !strings.HasSuffix(sent, `\n`) {
+		t.Fatalf("sent = %q, want `bash <path>\\n`", sent)
+	}
+	if strings.Contains(sent, "\n") {
+		t.Errorf("sent contains a real newline that cmux would type as Enter: %q", sent)
+	}
+	for _, meta := range []string{"$(", "`", ";", `"`, "PWNED"} {
+		if strings.Contains(sent, meta) {
+			t.Errorf("sent leaks %q from the argv: %q", meta, sent)
+		}
+	}
+
+	path := strings.TrimSuffix(strings.TrimPrefix(sent, "bash "), `\n`)
+	t.Cleanup(func() { os.Remove(path) })
+	script, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("launch script: %v", err)
+	}
+	if !strings.HasPrefix(string(script), "rm -f -- \"$0\"\n") {
+		t.Errorf("script does not self-remove first: %q", script)
+	}
+	// The metacharacters are carried in the file (quoted), never typed.
+	if !strings.Contains(string(script), "$(touch "+subst+")") {
+		t.Errorf("script dropped the brief's command substitution: %q", script)
+	}
+
+	// Drive bash exactly as the pane shell would: type only the path. The argv
+	// must reach the recorder intact and nothing must be interpreted as a shell.
+	if out, err := exec.Command("bash", path).CombinedOutput(); err != nil {
+		t.Fatalf("bash launch script: %v: %s", err, out)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("launch script did not remove itself: %v", err)
+	}
+	for _, marker := range []string{subst, backtick, semi} {
+		if _, err := os.Stat(marker); !os.IsNotExist(err) {
+			t.Errorf("injection executed: %s exists", marker)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(work, "got.bin"))
+	if err != nil {
+		t.Fatalf("recorder output: %v", err)
+	}
+	gotArgs := bytes.Split(raw, []byte{0})
+	gotArgs = gotArgs[:len(gotArgs)-1] // trailing NUL yields an empty tail element
+	wantArgs := command[1:]
+	if len(gotArgs) != len(wantArgs) {
+		t.Fatalf("recorder saw %d args %q, want %d %q", len(gotArgs), gotArgs, len(wantArgs), wantArgs)
+	}
+	for i, a := range wantArgs {
+		if string(gotArgs[i]) != a {
+			t.Errorf("arg[%d] = %q, want %q", i, gotArgs[i], a)
+		}
 	}
 }
 
