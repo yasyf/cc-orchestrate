@@ -70,13 +70,6 @@ func withSessionDefault(c *cobra.Command) *cobra.Command {
 	return c
 }
 
-// notImplemented is the placeholder RunE for every domain command until its phase
-// fills it in.
-func notImplemented(c *cobra.Command, _ []string) error {
-	fmt.Fprintln(c.OutOrStdout(), "not implemented yet")
-	return nil
-}
-
 // runOp is the shared control-command round trip: ensure the daemon is current,
 // send one domain envelope keyed to the orchestrator's session and cwd, and
 // return the reply (turning a non-ok reply into an error). A nil body sends no
