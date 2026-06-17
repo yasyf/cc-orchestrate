@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -79,7 +80,7 @@ func (b zellij) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentH
 	}
 	var panes []pane
 	if err := json.Unmarshal(out, &panes); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("zellij: cannot parse panes: %w", err)
 	}
 	agents := []AgentHandle{}
 	for _, p := range panes {

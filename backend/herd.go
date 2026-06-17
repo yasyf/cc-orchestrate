@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 )
 
 // herdName is the registry key; herdBin is the CLI herd invokes (note the
@@ -53,8 +54,10 @@ func decodeHerd[T any](b []byte) (T, error) {
 	var env struct {
 		Result T `json:"result"`
 	}
-	err := json.Unmarshal(b, &env)
-	return env.Result, err
+	if err := json.Unmarshal(b, &env); err != nil {
+		return env.Result, fmt.Errorf("herd: cannot parse response: %w", err)
+	}
+	return env.Result, nil
 }
 
 func (b herd) Name() string { return herdName }

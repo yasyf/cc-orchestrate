@@ -110,7 +110,7 @@ func (b cmux) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
 	}
 	var res cmuxWorkspaceList
 	if err := json.Unmarshal(out, &res); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cmux: cannot parse workspaces: %w", err)
 	}
 	projects := make([]ProjectHandle, len(res.Workspaces))
 	for i, w := range res.Workspaces {
@@ -151,7 +151,7 @@ func (b cmux) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentHan
 	}
 	var res cmuxPaneList
 	if err := json.Unmarshal(out, &res); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cmux: cannot parse panes: %w", err)
 	}
 	agents := make([]AgentHandle, len(res.Panes))
 	for i, p := range res.Panes {
