@@ -47,7 +47,7 @@ func (b tmux) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
 		return nil, err
 	}
 	projects := []ProjectHandle{}
-	for _, name := range tmuxLines(out) {
+	for _, name := range nonEmptyLines(out) {
 		projects = append(projects, ProjectHandle{Backend: tmuxName, ID: name, Name: name})
 	}
 	return projects, nil
@@ -76,7 +76,7 @@ func (b tmux) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentHan
 		return nil, err
 	}
 	agents := []AgentHandle{}
-	for _, line := range tmuxLines(out) {
+	for _, line := range nonEmptyLines(out) {
 		id, name, _ := strings.Cut(line, "\t")
 		agents = append(agents, AgentHandle{Backend: tmuxName, ID: id, ProjectID: project.ID, Name: name})
 	}
@@ -101,14 +101,4 @@ func (b tmux) SendText(ctx context.Context, agent AgentHandle, text string) erro
 	}
 	_, err := b.run(ctx, tmuxBin, "send-keys", "-t", agent.ID, "Enter")
 	return err
-}
-
-func tmuxLines(out []byte) []string {
-	lines := []string{}
-	for _, line := range strings.Split(string(out), "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			lines = append(lines, trimmed)
-		}
-	}
-	return lines
 }

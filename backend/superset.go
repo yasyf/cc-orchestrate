@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,10 +12,6 @@ import (
 
 // supersetBin is both the registry key and the CLI the superset backend drives.
 const supersetBin = "superset"
-
-// shellSafe is the set of characters a token may contain and still pass through
-// a POSIX shell unquoted; it mirrors Python's shlex.quote allowlist.
-const shellSafe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@%+=:,./-_"
 
 // superset places workspaces and spawns terminals through the superset CLI. It is
 // spawn-only: there is no send-text, capture, or per-terminal kill CLI, so kills
@@ -91,9 +86,9 @@ func (b superset) EnsureReady(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("superset: host service unreachable (run `superset start`): %w", err)
 	}
-	var status supersetStatus
-	if err := json.Unmarshal(out, &status); err != nil {
-		return fmt.Errorf("superset: cannot parse status: %w", err)
+	status, err := decodeJSON[supersetStatus](out, "superset", "status")
+	if err != nil {
+		return err
 	}
 	if !status.Running || !status.Healthy {
 		return fmt.Errorf("superset: host service not ready (running=%t healthy=%t); run `superset start`", status.Running, status.Healthy)
@@ -102,9 +97,9 @@ func (b superset) EnsureReady(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("superset: not authenticated (run `superset auth login`): %w", err)
 	}
-	var who supersetIdentity
-	if err := json.Unmarshal(out, &who); err != nil {
-		return fmt.Errorf("superset: cannot parse identity: %w", err)
+	who, err := decodeJSON[supersetIdentity](out, "superset", "identity")
+	if err != nil {
+		return err
 	}
 	if who.UserID == "" && who.Email == "" {
 		return errors.New("superset: no authenticated identity; run `superset auth login`")
@@ -129,9 +124,9 @@ func (b superset) CreateProject(ctx context.Context, spec ProjectSpec) (ProjectH
 	if err != nil {
 		return ProjectHandle{}, err
 	}
-	var ws supersetWorkspace
-	if err := json.Unmarshal(out, &ws); err != nil {
-		return ProjectHandle{}, fmt.Errorf("superset: cannot parse workspace: %w", err)
+	ws, err := decodeJSON[supersetWorkspace](out, "superset", "workspace")
+	if err != nil {
+		return ProjectHandle{}, err
 	}
 	return ProjectHandle{Backend: b.Name(), ID: ws.ID, Name: spec.Name, Cwd: spec.Cwd}, nil
 }
@@ -162,9 +157,9 @@ func (b superset) listSetupProjects(ctx context.Context) ([]supersetProject, err
 	if err != nil {
 		return nil, err
 	}
-	var projects []supersetProject
-	if err := json.Unmarshal(out, &projects); err != nil {
-		return nil, fmt.Errorf("superset: cannot parse projects: %w", err)
+	projects, err := decodeJSON[[]supersetProject](out, "superset", "projects")
+	if err != nil {
+		return nil, err
 	}
 	return projects, nil
 }
@@ -207,9 +202,9 @@ func (b superset) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	var workspaces []supersetWorkspace
-	if err := json.Unmarshal(out, &workspaces); err != nil {
-		return nil, fmt.Errorf("superset: cannot parse workspaces: %w", err)
+	workspaces, err := decodeJSON[[]supersetWorkspace](out, "superset", "workspaces")
+	if err != nil {
+		return nil, err
 	}
 	projects := make([]ProjectHandle, len(workspaces))
 	for i, w := range workspaces {
@@ -237,9 +232,9 @@ func (b superset) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error
 	if err != nil {
 		return AgentHandle{}, err
 	}
-	var term supersetTerminal
-	if err := json.Unmarshal(out, &term); err != nil {
-		return AgentHandle{}, fmt.Errorf("superset: cannot parse terminal: %w", err)
+	term, err := decodeJSON[supersetTerminal](out, "superset", "terminal")
+	if err != nil {
+		return AgentHandle{}, err
 	}
 	return AgentHandle{
 		Backend:   b.Name(),
@@ -271,37 +266,4 @@ func (b superset) Kill(ctx context.Context, agent AgentHandle) error {
 func (b superset) KillProject(ctx context.Context, project ProjectHandle) error {
 	_, err := b.run(ctx, supersetBin, "workspaces", "delete", project.ID, "--local", "--json")
 	return err
-}
-
-// wrapBashLogin renders command as a single `bash -lc <line>` string for the
-// superset terminal's --command. Two shells parse it: the terminal's login shell
-// (fish) parses the whole string and must receive the inner line fish-quoted,
-// while bash -lc reparses that line and needs each token POSIX-quoted.
-func wrapBashLogin(command []string) string {
-	quoted := make([]string, len(command))
-	for i, tok := range command {
-		quoted[i] = ShellQuote(tok)
-	}
-	return "bash -lc " + fishQuote(strings.Join(quoted, " "))
-}
-
-// ShellQuote renders s as a single POSIX-shell token, escaping each embedded
-// single quote by closing the quote, emitting an escaped quote, and reopening.
-func ShellQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	for _, r := range s {
-		if !strings.ContainsRune(shellSafe, r) {
-			return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-		}
-	}
-	return s
-}
-
-// fishQuote renders s as a single fish token. fish single quotes treat \\ and \'
-// as escapes (unlike POSIX), so backslashes and quotes are backslash-escaped in
-// place; backslashes are escaped first so the quote escapes are not doubled.
-func fishQuote(s string) string {
-	return "'" + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), "'", `\'`) + "'"
 }

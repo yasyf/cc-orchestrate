@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -65,10 +64,7 @@ func cmuxRef(out []byte, prefix string) (string, error) {
 // arbitrary prompt inject shell metacharacters. The only typed text is the temp
 // path, whose characters never include a backslash escape or a metacharacter.
 func cmuxLaunchScript(command []string) (string, error) {
-	quoted := make([]string, len(command))
-	for i, tok := range command {
-		quoted[i] = ShellQuote(tok)
-	}
+	quoted := quoteAll(command)
 	f, err := os.CreateTemp("", "cc-orchestrate-cmux-*.sh")
 	if err != nil {
 		return "", fmt.Errorf("cmux: create launch script: %w", err)
@@ -108,9 +104,9 @@ func (b cmux) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	var res cmuxWorkspaceList
-	if err := json.Unmarshal(out, &res); err != nil {
-		return nil, fmt.Errorf("cmux: cannot parse workspaces: %w", err)
+	res, err := decodeJSON[cmuxWorkspaceList](out, "cmux", "workspaces")
+	if err != nil {
+		return nil, err
 	}
 	projects := make([]ProjectHandle, len(res.Workspaces))
 	for i, w := range res.Workspaces {
@@ -149,9 +145,9 @@ func (b cmux) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentHan
 	if err != nil {
 		return nil, err
 	}
-	var res cmuxPaneList
-	if err := json.Unmarshal(out, &res); err != nil {
-		return nil, fmt.Errorf("cmux: cannot parse panes: %w", err)
+	res, err := decodeJSON[cmuxPaneList](out, "cmux", "panes")
+	if err != nil {
+		return nil, err
 	}
 	agents := make([]AgentHandle, len(res.Panes))
 	for i, p := range res.Panes {

@@ -2,8 +2,6 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -52,10 +50,8 @@ func (b zellij) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
 		return nil, err
 	}
 	projects := []ProjectHandle{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if name := strings.TrimSpace(line); name != "" {
-			projects = append(projects, ProjectHandle{Backend: zellijName, ID: name, Name: name})
-		}
+	for _, name := range nonEmptyLines(out) {
+		projects = append(projects, ProjectHandle{Backend: zellijName, ID: name, Name: name})
 	}
 	return projects, nil
 }
@@ -83,9 +79,9 @@ func (b zellij) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentH
 	if err != nil {
 		return nil, err
 	}
-	var panes []pane
-	if err := json.Unmarshal(out, &panes); err != nil {
-		return nil, fmt.Errorf("zellij: cannot parse panes: %w", err)
+	panes, err := decodeJSON[[]pane](out, "zellij", "panes")
+	if err != nil {
+		return nil, err
 	}
 	agents := []AgentHandle{}
 	for _, p := range panes {
