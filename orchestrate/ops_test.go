@@ -61,10 +61,11 @@ func gitRepo(t *testing.T, branch string) string {
 // Its Name is outside backend.Precedence, so it never interferes with the default
 // availability/selection ordering; ops address it by passing its name explicitly.
 type opBackend struct {
-	createdSpec      *backend.WorkstreamSpec
-	killedAgent      *backend.AgentHandle
-	killedWorkstream *backend.WorkstreamHandle
-	killErr          error
+	createdSpec       *backend.WorkstreamSpec
+	killedAgent       *backend.AgentHandle
+	killedWorkstream  *backend.WorkstreamHandle
+	killedWorkstreams *[]backend.WorkstreamHandle
+	killErr           error
 }
 
 func (opBackend) Name() backend.BackendName         { return "optest" }
@@ -94,6 +95,9 @@ func (b opBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
 func (b opBackend) KillWorkstream(_ context.Context, project backend.WorkstreamHandle) error {
 	if b.killedWorkstream != nil {
 		*b.killedWorkstream = project
+	}
+	if b.killedWorkstreams != nil {
+		*b.killedWorkstreams = append(*b.killedWorkstreams, project)
 	}
 	return b.killErr
 }
@@ -882,25 +886,40 @@ func TestHandleAgentKill(t *testing.T) {
 	})
 }
 
-// TestHandleRepoKill proves repo-kill is a soft, logical cascade: it marks every
-// workstream killed and their agents exited, marks the repo killed, and never calls
-// the backend (real backend/worktree teardown is per-workstream).
+// TestHandleRepoKill proves repo-kill is a real cascade: it tears down every
+// workstream's backend workspace, removes each non-primary worktree (the leak it
+// used to leave), cascades the workstreams' sprints to killed and their agents to
+// exited, and marks the repo killed.
 func TestHandleRepoKill(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	tailers = newTailerManager(ctx)
 
+	repo := gitRepo(t, "main")
+	wtPath, err := worktree.Add(ctx, repo, filepath.Join(t.TempDir(), "wt"), "feat-x")
+	if err != nil {
+		t.Fatalf("worktree.Add: %v", err)
+	}
+
 	db := newTestDB(t)
 	if err := insertRepo(ctx, db, repoRow{
-		ID: "p1", Name: "proj", Backend: "optest", Cwd: "/s", Status: StatusActive, CreatedAt: "t0",
+		ID: "p1", Name: "proj", Backend: "optest", Cwd: repo, Status: StatusActive, CreatedAt: "t0",
 	}); err != nil {
 		t.Fatalf("insertRepo: %v", err)
 	}
+	// The primary workstream is the repo root; a non-primary workstream owns a real
+	// worktree that repo-kill must remove.
 	if err := insertWorkstream(ctx, db, workstreamRow{
 		ID: "w1", RepoID: "p1", Name: "main", Backend: "optest", WorkspaceHandle: "ws-1",
-		Branch: "main", Worktree: "/s", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+		Branch: "main", Worktree: repo, IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
 	}); err != nil {
-		t.Fatalf("insertWorkstream: %v", err)
+		t.Fatalf("insertWorkstream w1: %v", err)
+	}
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w2", RepoID: "p1", Name: "feat-x", Backend: "optest", WorkspaceHandle: "ws-2",
+		Branch: "feat-x", Worktree: wtPath, IsPrimary: false, Status: StatusActive, CreatedAt: "t1",
+	}); err != nil {
+		t.Fatalf("insertWorkstream w2: %v", err)
 	}
 	if err := insertSprint(ctx, db, sprintRow{
 		ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0",
@@ -911,8 +930,8 @@ func TestHandleRepoKill(t *testing.T) {
 	mustInsertAgent(t, db, agentRow{ID: "a2", SprintID: "s1", Backend: "optest", SubjectID: "subj-2", Status: StatusActive, State: StateIdle, CreatedAt: "t1"})
 	mustInsertAgent(t, db, agentRow{ID: "a3", SprintID: "s1", Backend: "optest", SubjectID: "subj-3", Status: StatusExited, State: StateIdle, CreatedAt: "t2"})
 
-	var killed backend.WorkstreamHandle
-	backend.Register(opBackend{killedWorkstream: &killed})
+	var killed []backend.WorkstreamHandle
+	backend.Register(opBackend{killedWorkstreams: &killed})
 
 	var exited []string
 	appendFn := func(_ context.Context, e *event.Event) (int64, error) {
@@ -926,9 +945,17 @@ func TestHandleRepoKill(t *testing.T) {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
 
-	// A soft kill never calls the backend.
-	if (killed != backend.WorkstreamHandle{}) {
-		t.Fatalf("repo-kill called the backend: %+v", killed)
+	// Every workstream's backend workspace — primary and non-primary — is torn down.
+	killedIDs := map[string]bool{}
+	for _, h := range killed {
+		killedIDs[h.ID] = true
+	}
+	if len(killed) != 2 || !killedIDs["ws-1"] || !killedIDs["ws-2"] {
+		t.Fatalf("KillWorkstream handles = %+v, want ws-1 and ws-2", killed)
+	}
+	// The non-primary worktree is gone from disk — the leak repo-kill used to leave.
+	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+		t.Fatalf("non-primary worktree still present after repo-kill: stat err = %v", err)
 	}
 
 	proj, err := getRepo(ctx, db, "p1")
@@ -938,10 +965,12 @@ func TestHandleRepoKill(t *testing.T) {
 	if proj.Status != StatusKilled {
 		t.Fatalf("repo status = %q, want killed", proj.Status)
 	}
-	if ws, err := getWorkstream(ctx, db, "w1", ""); err != nil {
-		t.Fatal(err)
-	} else if ws.Status != StatusKilled {
-		t.Fatalf("workstream status = %q, want killed", ws.Status)
+	for _, id := range []string{"w1", "w2"} {
+		if ws, err := getWorkstream(ctx, db, id, ""); err != nil {
+			t.Fatal(err)
+		} else if ws.Status != StatusKilled {
+			t.Fatalf("workstream %s status = %q, want killed", id, ws.Status)
+		}
 	}
 	if sp, err := getSprint(ctx, db, "s1", ""); err != nil {
 		t.Fatal(err)

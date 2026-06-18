@@ -756,19 +756,55 @@ func markWorkstreamKilled(ctx context.Context, db *sql.DB, appendFn daemon.Appen
 	return clearActiveSelection(ctx, db, configActiveWorkstream, ws.ID)
 }
 
-// markRepoKilled cascades a repo to killed: every workstream is marked killed, each
-// workstream's sprints killed and their agents exited, then the repo itself, dropping
-// it as the active repo. It never calls the backend nor removes a worktree — a repo
-// kill is a soft, logical teardown; real backend and worktree teardown is
-// per-workstream (workstream-kill).
-func markRepoKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, repo repoRow) error {
+// tearDownWorkstream tears down a workstream's real resources: its backend
+// workspace and — only for a non-primary workstream on a backend that does not
+// manage its own worktree — its git worktree. It never removes a primary
+// workstream's worktree (the repo root) nor a ManagesWorktree backend's worktree
+// (the backend drops that on KillWorkstream). It touches no DB rows; the caller
+// marks the workstream killed and surfaces this error afterward, mirroring
+// handleAgentKill, so a half-dead workstream never lingers active.
+func tearDownWorkstream(ctx context.Context, bk backend.Backend, repo repoRow, ws workstreamRow) error {
+	killErr := bk.KillWorkstream(ctx, backend.WorkstreamHandle{
+		Backend: ws.Backend, ID: ws.WorkspaceHandle, Name: ws.Name, Cwd: ws.Worktree, Worktree: ws.Worktree,
+	})
+	var removeErr error
+	if !bk.Caps().Has(backend.ManagesWorktree) && !ws.IsPrimary {
+		removeErr = worktree.Remove(ctx, repo.Cwd, ws.Worktree)
+	}
+	if killErr != nil {
+		return fmt.Errorf("kill workstream %q: %w", ws.ID, killErr)
+	}
+	if removeErr != nil {
+		return fmt.Errorf("remove worktree for workstream %q: %w", ws.ID, removeErr)
+	}
+	return nil
+}
+
+// killRepo tears a repo down for real: it tears down every active workstream's
+// backend workspace and non-primary worktree, cascades each workstream's sprints to
+// killed and agents to exited, marks the repo killed, and drops it as the active
+// repo. Teardown errors are collected and surfaced only after every row is mutated,
+// mirroring handleAgentKill, so a half-dead repo never lingers active; an unknown
+// backend or failed teardown on one workstream does not abort the others.
+func killRepo(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, repo repoRow) error {
 	wss, err := listWorkstreams(ctx, db, repo.ID)
 	if err != nil {
 		return err
 	}
+	var teardownErr error
 	for _, ws := range wss {
 		if ws.Status != StatusActive {
 			continue
+		}
+		switch bk, ok := backend.Get(ws.Backend); {
+		case !ok:
+			if teardownErr == nil {
+				teardownErr = fmt.Errorf("unknown backend %q for workstream %q", ws.Backend, ws.ID)
+			}
+		default:
+			if err := tearDownWorkstream(ctx, bk, repo, ws); err != nil && teardownErr == nil {
+				teardownErr = err
+			}
 		}
 		if err := markWorkstreamKilled(ctx, db, appendFn, ws); err != nil {
 			return err
@@ -777,13 +813,16 @@ func markRepoKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc,
 	if err := setRepoStatus(ctx, db, repo.ID, StatusKilled); err != nil {
 		return err
 	}
-	return clearActiveSelection(ctx, db, configActiveRepo, repo.ID)
+	if err := clearActiveSelection(ctx, db, configActiveRepo, repo.ID); err != nil {
+		return err
+	}
+	return teardownErr
 }
 
-// handleRepoKill answers repo-kill: a soft, logical teardown that cascades every
-// workstream to killed, their sprints to killed, and their agents to exited, then
-// marks the repo killed. It never calls the backend nor removes a worktree — that
-// real teardown is per-workstream (workstream-kill).
+// handleRepoKill answers repo-kill: a real teardown that tears down every workstream's
+// backend workspace and non-primary worktree, cascades their sprints to killed and
+// agents to exited, then marks the repo killed. Teardown errors are surfaced after the
+// row mutations (mirroring handleAgentKill), so a half-dead repo never lingers active.
 func handleRepoKill(hc daemon.HandlerCtx) daemon.Reply {
 	var b struct {
 		ID string `json:"id"`
@@ -795,7 +834,7 @@ func handleRepoKill(hc daemon.HandlerCtx) daemon.Reply {
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	if err := markRepoKilled(hc.Ctx, hc.DB, hc.Append, repo); err != nil {
+	if err := killRepo(hc.Ctx, hc.DB, hc.Append, repo); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
 	out, _ := json.Marshal(map[string]string{"repo_id": repo.ID, "status": string(StatusKilled)})
@@ -977,21 +1016,12 @@ func handleWorkstreamKill(hc daemon.HandlerCtx) daemon.Reply {
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	killErr := bk.KillWorkstream(hc.Ctx, backend.WorkstreamHandle{
-		Backend: ws.Backend, ID: ws.WorkspaceHandle, Name: ws.Name, Cwd: ws.Worktree, Worktree: ws.Worktree,
-	})
-	var removeErr error
-	if !bk.Caps().Has(backend.ManagesWorktree) && !ws.IsPrimary {
-		removeErr = worktree.Remove(hc.Ctx, repo.Cwd, ws.Worktree)
-	}
+	teardownErr := tearDownWorkstream(hc.Ctx, bk, repo, ws)
 	if err := markWorkstreamKilled(hc.Ctx, hc.DB, hc.Append, ws); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	if killErr != nil {
-		return daemon.Reply{OK: false, Error: fmt.Errorf("kill workstream %q: %w", ws.ID, killErr).Error()}
-	}
-	if removeErr != nil {
-		return daemon.Reply{OK: false, Error: fmt.Errorf("remove worktree for workstream %q: %w", ws.ID, removeErr).Error()}
+	if teardownErr != nil {
+		return daemon.Reply{OK: false, Error: teardownErr.Error()}
 	}
 	out, _ := json.Marshal(map[string]string{"workstream_id": ws.ID, "status": string(StatusKilled)})
 	return daemon.Reply{OK: true, Body: out}
