@@ -112,7 +112,6 @@ func agentSlug(sid string) string { return "agent-" + sid }
 func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 	var body struct {
 		Project string `json:"project"`
-		Backend string `json:"backend"`
 		Name    string `json:"name"`
 		Cwd     string `json:"cwd"`
 		Prompt  string `json:"prompt"`
@@ -124,7 +123,7 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	bname := cmp.Or(backend.BackendName(body.Backend), proj.Backend)
+	bname := proj.Backend
 	b, ok := backend.Get(bname)
 	if !ok {
 		return daemon.Reply{OK: false, Error: "unknown backend: " + string(bname)}

@@ -388,14 +388,14 @@ func agentCmd() *cobra.Command {
 		Short: "Spawn and control child Claude Code agents",
 	}
 
-	var spawnProject, spawnBackend, spawnName, spawnCwd, spawnPrompt string
+	var spawnProject, spawnName, spawnCwd, spawnPrompt string
 	spawn := &cobra.Command{
 		Use:   "spawn",
 		Short: "Spawn a child agent into a project",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			reply, err := runOp(c, opSpawn, map[string]string{
-				"project": spawnProject, "backend": spawnBackend, "name": spawnName,
+				"project": spawnProject, "name": spawnName,
 				"cwd": spawnCwd, "prompt": spawnPrompt,
 			})
 			if err != nil {
@@ -417,7 +417,6 @@ func agentCmd() *cobra.Command {
 		},
 	}
 	spawn.Flags().StringVar(&spawnProject, "project", "", "project id or name to spawn into")
-	spawn.Flags().StringVar(&spawnBackend, "backend", "", "backend override (defaults to the project's backend)")
 	spawn.Flags().StringVar(&spawnName, "name", "", "human-readable agent name")
 	spawn.Flags().StringVar(&spawnCwd, "cwd", "", "working directory / scope (defaults to the project cwd)")
 	spawn.Flags().StringVar(&spawnPrompt, "prompt", "", "initial prompt for the child agent")

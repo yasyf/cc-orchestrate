@@ -122,7 +122,6 @@ func mcpTools() []channel.Tool {
 			"Spawn a child Claude Code agent into a project. The agent reports back via its report tool; watch its progress with agent_list / agent_status, or stream it live with `agent watch` under a Monitor.",
 			objectSchema(map[string]any{
 				"project": stringProp("project id or name to spawn into"),
-				"backend": stringProp("backend override (defaults to the project's backend)"),
 				"name":    stringProp("human-readable agent name"),
 				"cwd":     stringProp("working directory / scope (defaults to the project cwd)"),
 				"prompt":  stringProp("initial prompt for the child agent"),
