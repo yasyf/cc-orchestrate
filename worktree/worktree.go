@@ -41,10 +41,14 @@ func Remove(ctx context.Context, repoRoot, dest string) error {
 }
 
 // CurrentBranch returns the branch checked out at repoRoot, via
-// git -C <repoRoot> rev-parse --abbrev-ref HEAD. A git failure (not a repo, git
-// missing) propagates wrapped with its stderr.
+// git -C <repoRoot> symbolic-ref --short HEAD. symbolic-ref resolves the branch
+// even on an unborn HEAD — a freshly initialized repo with no commits — where
+// rev-parse --abbrev-ref HEAD fails; a repo create against such a repo therefore
+// names its primary workstream after the unborn branch instead of erroring. A
+// detached HEAD has no branch and propagates as a wrapped error, as does any git
+// failure (not a repo, git missing).
 func CurrentBranch(ctx context.Context, repoRoot string) (string, error) {
-	out, err := run(ctx, repoRoot, "git rev-parse", "git", "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := run(ctx, repoRoot, "git symbolic-ref", "git", "symbolic-ref", "--short", "HEAD")
 	if err != nil {
 		return "", err
 	}

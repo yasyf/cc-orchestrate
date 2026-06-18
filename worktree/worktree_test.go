@@ -102,6 +102,20 @@ func TestCurrentBranch(t *testing.T) {
 		}
 	})
 
+	t.Run("reports the branch on an unborn HEAD", func(t *testing.T) {
+		// A freshly initialized repo with no commits: rev-parse --abbrev-ref HEAD
+		// would fail here, but symbolic-ref resolves the unborn branch.
+		repo := t.TempDir()
+		mustRun(t, ctx, repo, "git", "init", "-b", "main")
+		got, err := CurrentBranch(ctx, repo)
+		if err != nil {
+			t.Fatalf("CurrentBranch on unborn HEAD: %v", err)
+		}
+		if got != "main" {
+			t.Fatalf("CurrentBranch = %q, want main", got)
+		}
+	})
+
 	t.Run("errors outside a repo", func(t *testing.T) {
 		if _, err := CurrentBranch(ctx, t.TempDir()); err == nil {
 			t.Fatal("CurrentBranch outside a repo: want error, got nil")
