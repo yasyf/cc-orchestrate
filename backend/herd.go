@@ -67,19 +67,19 @@ func (b herd) Available() bool { return installed(herdBin) }
 // EnsureReady is a no-op: the herdr server auto-starts on first command.
 func (b herd) EnsureReady(ctx context.Context) error { return nil }
 
-func (b herd) CreateProject(ctx context.Context, spec ProjectSpec) (ProjectHandle, error) {
+func (b herd) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error) {
 	out, err := b.run(ctx, herdBin, "workspace", "create", "--cwd", spec.Cwd, "--label", spec.Name)
 	if err != nil {
-		return ProjectHandle{}, err
+		return WorkstreamHandle{}, err
 	}
 	res, err := decodeHerd[herdCreateResult](out)
 	if err != nil {
-		return ProjectHandle{}, err
+		return WorkstreamHandle{}, err
 	}
-	return ProjectHandle{Backend: b.Name(), ID: res.Workspace.WorkspaceID, Name: spec.Name, Cwd: spec.Cwd}, nil
+	return WorkstreamHandle{Backend: b.Name(), ID: res.Workspace.WorkspaceID, Name: spec.Name, Cwd: spec.Cwd, Worktree: spec.Cwd}, nil
 }
 
-func (b herd) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
+func (b herd) ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error) {
 	out, err := b.run(ctx, herdBin, "workspace", "list")
 	if err != nil {
 		return nil, err
@@ -88,15 +88,15 @@ func (b herd) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	projects := make([]ProjectHandle, len(res.Workspaces))
+	workstreams := make([]WorkstreamHandle, len(res.Workspaces))
 	for i, w := range res.Workspaces {
-		projects[i] = ProjectHandle{Backend: b.Name(), ID: w.WorkspaceID, Name: w.Label}
+		workstreams[i] = WorkstreamHandle{Backend: b.Name(), ID: w.WorkspaceID, Name: w.Label}
 	}
-	return projects, nil
+	return workstreams, nil
 }
 
 func (b herd) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
-	args := append([]string{"agent", "start", spec.Name, "--workspace", spec.Project.ID, "--cwd", spec.Cwd, "--"}, spec.Command...)
+	args := append([]string{"agent", "start", spec.Name, "--workspace", spec.Workstream.ID, "--cwd", spec.Cwd, "--"}, spec.Command...)
 	out, err := b.run(ctx, herdBin, args...)
 	if err != nil {
 		return AgentHandle{}, err
@@ -106,15 +106,15 @@ func (b herd) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
 		return AgentHandle{}, err
 	}
 	return AgentHandle{
-		Backend:   b.Name(),
-		ID:        res.Agent.PaneID,
-		ProjectID: spec.Project.ID,
-		Name:      spec.Name,
-		SessionID: spec.SessionID,
+		Backend:      b.Name(),
+		ID:           res.Agent.PaneID,
+		WorkstreamID: spec.Workstream.ID,
+		Name:         spec.Name,
+		SessionID:    spec.SessionID,
 	}, nil
 }
 
-func (b herd) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentHandle, error) {
+func (b herd) ListAgents(ctx context.Context, workstream WorkstreamHandle) ([]AgentHandle, error) {
 	out, err := b.run(ctx, herdBin, "agent", "list")
 	if err != nil {
 		return nil, err
@@ -125,10 +125,10 @@ func (b herd) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentHan
 	}
 	agents := []AgentHandle{}
 	for _, a := range res.Agents {
-		if a.WorkspaceID != project.ID {
+		if a.WorkspaceID != workstream.ID {
 			continue
 		}
-		agents = append(agents, AgentHandle{Backend: b.Name(), ID: a.PaneID, ProjectID: a.WorkspaceID, Name: a.Name})
+		agents = append(agents, AgentHandle{Backend: b.Name(), ID: a.PaneID, WorkstreamID: a.WorkspaceID, Name: a.Name})
 	}
 	return agents, nil
 }
@@ -138,8 +138,8 @@ func (b herd) Kill(ctx context.Context, agent AgentHandle) error {
 	return err
 }
 
-func (b herd) KillProject(ctx context.Context, project ProjectHandle) error {
-	_, err := b.run(ctx, herdBin, "workspace", "close", project.ID)
+func (b herd) KillWorkstream(ctx context.Context, workstream WorkstreamHandle) error {
+	_, err := b.run(ctx, herdBin, "workspace", "close", workstream.ID)
 	return err
 }
 

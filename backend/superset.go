@@ -15,7 +15,7 @@ const supersetBin = "superset"
 
 // superset places workspaces and spawns terminals through the superset CLI. It is
 // spawn-only: there is no send-text, capture, or per-terminal kill CLI, so kills
-// happen by claude --session-id identity and projects/agents are tracked upstream.
+// happen by claude --session-id identity and workstreams/agents are tracked upstream.
 type superset struct{ run runner }
 
 func init() { Register(superset{run: execRunner}) }
@@ -40,7 +40,7 @@ type supersetProject struct {
 }
 
 // supersetWorkspace is a `superset workspaces ...` entry; its id is the workspace
-// a project handle wraps.
+// a workstream handle wraps.
 type supersetWorkspace struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -73,11 +73,31 @@ var resolveClaude = func() (string, error) {
 	return "", fmt.Errorf("superset: no claude on PATH outside %s", wrapperDir)
 }
 
+// supersetWorktreeBase returns the directory under which the superset host
+// service places per-workspace git worktrees on this machine, laid out as
+// <base>/<projectID>/<branch>. The superset CLI exposes no filesystem path on the
+// workspace object (verified against v0.2.23: `workspaces list --local --json`
+// returns only id/name/branch/projectId/projectName/hostId/type/createdAt/
+// hostName), so CreateWorkstream reconstructs the adopted worktree path from this
+// observed layout. It is a package var so tests can pin it without reading the
+// invoking user's home.
+var supersetWorktreeBase = func() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".superset", "worktrees"), nil
+}
+
 func (b superset) Name() BackendName { return supersetBin }
 
 func (b superset) Available() bool { return installed(supersetBin) }
 
-func (b superset) Caps() Caps { return Caps{} }
+// Caps advertises ManagesWorktree: superset forks and owns its own git worktree
+// per workspace, so cc-orchestrate adopts the returned WorkstreamHandle.Worktree
+// rather than creating one. It is otherwise pure-LCD (no native send/capture/
+// enumerate path).
+func (b superset) Caps() Caps { return Capabilities(ManagesWorktree) }
 
 // EnsureReady verifies the host service is running and healthy and that a user is
 // authenticated; it never logs in. The two checks fail loud with the command to run.
@@ -107,28 +127,40 @@ func (b superset) EnsureReady(ctx context.Context) error {
 	return nil
 }
 
-// CreateProject resolves (or imports) the superset project for spec.Cwd, then
-// forks a local workspace for it on the directory's git branch. The workspace id
-// is the project handle other calls address.
-func (b superset) CreateProject(ctx context.Context, spec ProjectSpec) (ProjectHandle, error) {
+// CreateWorkstream resolves (or imports) the superset project for spec.Cwd, then
+// forks a local workspace for it on spec.Branch. superset owns the worktree, so
+// the returned handle's Worktree is the path superset placed it at —
+// <supersetWorktreeBase>/<projectID>/<branch> — which cc-orchestrate adopts. The
+// branch is required: the superset CLI rejects a workspace create without one, so
+// an empty spec.Branch is an error rather than a silent default.
+func (b superset) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error) {
+	if spec.Branch == "" {
+		return WorkstreamHandle{}, fmt.Errorf("superset: create workspace %q: branch is required", spec.Name)
+	}
 	projectID, err := b.resolveProjectID(ctx, spec.Cwd)
 	if err != nil {
-		return ProjectHandle{}, err
-	}
-	branch, err := b.gitBranch(ctx, spec.Cwd)
-	if err != nil {
-		return ProjectHandle{}, err
+		return WorkstreamHandle{}, err
 	}
 	out, err := b.run(ctx, supersetBin, "workspaces", "create", "--local",
-		"--project", projectID, "--branch", branch, "--name", spec.Name, "--json")
+		"--project", projectID, "--branch", spec.Branch, "--name", spec.Name, "--json")
 	if err != nil {
-		return ProjectHandle{}, err
+		return WorkstreamHandle{}, err
 	}
 	ws, err := decodeJSON[supersetWorkspace](out, "superset", "workspace")
 	if err != nil {
-		return ProjectHandle{}, err
+		return WorkstreamHandle{}, err
 	}
-	return ProjectHandle{Backend: b.Name(), ID: ws.ID, Name: spec.Name, Cwd: spec.Cwd}, nil
+	base, err := supersetWorktreeBase()
+	if err != nil {
+		return WorkstreamHandle{}, err
+	}
+	return WorkstreamHandle{
+		Backend:  b.Name(),
+		ID:       ws.ID,
+		Name:     spec.Name,
+		Cwd:      spec.Cwd,
+		Worktree: filepath.Join(base, projectID, spec.Branch),
+	}, nil
 }
 
 func (b superset) resolveProjectID(ctx context.Context, cwd string) (string, error) {
@@ -182,22 +214,7 @@ func matchProjectID(projects []supersetProject, cwd string) string {
 	return best
 }
 
-// gitBranch is the checked-out branch of cwd, used as the workspace fork point.
-// A git execution failure (not a repo, git missing, no permission) propagates;
-// only a successful rev-parse with no branch — a detached HEAD or unborn branch —
-// falls back to "main".
-func (b superset) gitBranch(ctx context.Context, cwd string) (string, error) {
-	out, err := b.run(ctx, "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
-	if err != nil {
-		return "", fmt.Errorf("superset: resolve git branch in %s: %w", cwd, err)
-	}
-	if branch := strings.TrimSpace(string(out)); branch != "" && branch != "HEAD" {
-		return branch, nil
-	}
-	return "main", nil
-}
-
-func (b superset) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
+func (b superset) ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error) {
 	out, err := b.run(ctx, supersetBin, "workspaces", "list", "--local", "--json")
 	if err != nil {
 		return nil, err
@@ -206,11 +223,11 @@ func (b superset) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	projects := make([]ProjectHandle, len(workspaces))
+	workstreams := make([]WorkstreamHandle, len(workspaces))
 	for i, w := range workspaces {
-		projects[i] = ProjectHandle{Backend: b.Name(), ID: w.ID, Name: w.Name}
+		workstreams[i] = WorkstreamHandle{Backend: b.Name(), ID: w.ID, Name: w.Name}
 	}
-	return projects, nil
+	return workstreams, nil
 }
 
 // Spawn runs spec.Command in a new terminal of the project's workspace. The argv
@@ -227,7 +244,7 @@ func (b superset) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error
 		command[0] = claude
 	}
 	out, err := b.run(ctx, supersetBin, "terminals", "create",
-		"--workspace", spec.Project.ID, "--cwd", spec.Cwd,
+		"--workspace", spec.Workstream.ID, "--cwd", spec.Cwd,
 		"--command", wrapBashLogin(command), "--json")
 	if err != nil {
 		return AgentHandle{}, err
@@ -237,17 +254,17 @@ func (b superset) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error
 		return AgentHandle{}, err
 	}
 	return AgentHandle{
-		Backend:   b.Name(),
-		ID:        term.TerminalID,
-		ProjectID: spec.Project.ID,
-		Name:      spec.Name,
-		SessionID: spec.SessionID,
+		Backend:      b.Name(),
+		ID:           term.TerminalID,
+		WorkstreamID: spec.Workstream.ID,
+		Name:         spec.Name,
+		SessionID:    spec.SessionID,
 	}, nil
 }
 
 // ListAgents always returns empty: superset has no running-agent CLI, so the
 // orchestrate agents table is the source of truth.
-func (b superset) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentHandle, error) {
+func (b superset) ListAgents(ctx context.Context, workstream WorkstreamHandle) ([]AgentHandle, error) {
 	return []AgentHandle{}, nil
 }
 
@@ -262,8 +279,8 @@ func (b superset) Kill(ctx context.Context, agent AgentHandle) error {
 	return err
 }
 
-// KillProject deletes the workspace, which SIGHUP→SIGKILLs all of its terminals.
-func (b superset) KillProject(ctx context.Context, project ProjectHandle) error {
-	_, err := b.run(ctx, supersetBin, "workspaces", "delete", project.ID, "--local", "--json")
+// KillWorkstream deletes the workspace, which SIGHUP→SIGKILLs all of its terminals.
+func (b superset) KillWorkstream(ctx context.Context, workstream WorkstreamHandle) error {
+	_, err := b.run(ctx, supersetBin, "workspaces", "delete", workstream.ID, "--local", "--json")
 	return err
 }

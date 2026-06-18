@@ -71,7 +71,7 @@ func recorder(out string) (*[]recordedCall, runner) {
 
 func TestZellijArgv(t *testing.T) {
 	ctx := context.Background()
-	project := ProjectHandle{Backend: "zellij", ID: "proj-1", Name: "Proj 1", Cwd: "/work"}
+	project := WorkstreamHandle{Backend: "zellij", ID: "proj-1", Name: "Proj 1", Cwd: "/work"}
 	tests := []struct {
 		name string
 		out  string
@@ -79,17 +79,17 @@ func TestZellijArgv(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "CreateProject sanitizes the session name",
+			name: "CreateWorkstream sanitizes the session name",
 			call: func(b zellij) error {
-				_, err := b.CreateProject(ctx, ProjectSpec{Name: "My Proj!", Cwd: "/work"})
+				_, err := b.CreateWorkstream(ctx, WorkstreamSpec{Name: "My Proj!", Cwd: "/work"})
 				return err
 			},
 			want: []string{"zellij", "attach", "--create-background", "My-Proj-"},
 		},
 		{
-			name: "ListProjects",
+			name: "ListWorkstreams",
 			out:  realSessionsList,
-			call: func(b zellij) error { _, err := b.ListProjects(ctx); return err },
+			call: func(b zellij) error { _, err := b.ListWorkstreams(ctx); return err },
 			want: []string{"zellij", "list-sessions", "--no-formatting", "--short"},
 		},
 		{
@@ -97,7 +97,7 @@ func TestZellijArgv(t *testing.T) {
 			out:  "terminal_1\n",
 			call: func(b zellij) error {
 				_, err := b.Spawn(ctx, SpawnSpec{
-					Project: project, Name: "agent", Cwd: "/work",
+					Workstream: project, Name: "agent", Cwd: "/work",
 					Command: []string{"claude", "--dangerously-skip-permissions"}, SessionID: "sess-9",
 				})
 				return err
@@ -117,13 +117,13 @@ func TestZellijArgv(t *testing.T) {
 		{
 			name: "Kill targets the pane by id",
 			call: func(b zellij) error {
-				return b.Kill(ctx, AgentHandle{Backend: "zellij", ID: "terminal_1", ProjectID: "proj-1"})
+				return b.Kill(ctx, AgentHandle{Backend: "zellij", ID: "terminal_1", WorkstreamID: "proj-1"})
 			},
 			want: []string{"zellij", "--session", "proj-1", "action", "close-pane", "--pane-id", "terminal_1"},
 		},
 		{
-			name: "KillProject",
-			call: func(b zellij) error { return b.KillProject(ctx, project) },
+			name: "KillWorkstream",
+			call: func(b zellij) error { return b.KillWorkstream(ctx, project) },
 			want: []string{"zellij", "kill-session", "proj-1"},
 		},
 	}
@@ -149,7 +149,7 @@ func TestZellijArgv(t *testing.T) {
 func TestZellijSendText(t *testing.T) {
 	ctx := context.Background()
 	calls, r := recorder("")
-	agent := AgentHandle{Backend: "zellij", ID: "terminal_1", ProjectID: "proj-1"}
+	agent := AgentHandle{Backend: "zellij", ID: "terminal_1", WorkstreamID: "proj-1"}
 	if err := (zellij{run: r}).SendText(ctx, agent, "hi -n there"); err != nil {
 		t.Fatalf("SendText: %v", err)
 	}
@@ -171,13 +171,13 @@ func TestZellijSendText(t *testing.T) {
 func TestZellijSpawnExtractsPaneID(t *testing.T) {
 	_, r := recorder("terminal_1\n")
 	agent, err := zellij{run: r}.Spawn(context.Background(), SpawnSpec{
-		Project: ProjectHandle{ID: "proj-1"}, Name: "agent", Cwd: "/work",
+		Workstream: WorkstreamHandle{ID: "proj-1"}, Name: "agent", Cwd: "/work",
 		Command: []string{"sleep", "600"}, SessionID: "sess-9",
 	})
 	if err != nil {
 		t.Fatalf("Spawn failed: %v", err)
 	}
-	want := AgentHandle{Backend: "zellij", ID: "terminal_1", ProjectID: "proj-1", Name: "agent", SessionID: "sess-9"}
+	want := AgentHandle{Backend: "zellij", ID: "terminal_1", WorkstreamID: "proj-1", Name: "agent", SessionID: "sess-9"}
 	if agent != want {
 		t.Fatalf("agent mismatch:\n got: %+v\nwant: %+v", agent, want)
 	}
@@ -185,25 +185,25 @@ func TestZellijSpawnExtractsPaneID(t *testing.T) {
 
 func TestZellijListAgentsParsesRealJSON(t *testing.T) {
 	_, r := recorder(realPanesJSON)
-	agents, err := zellij{run: r}.ListAgents(context.Background(), ProjectHandle{ID: "proj-1"})
+	agents, err := zellij{run: r}.ListAgents(context.Background(), WorkstreamHandle{ID: "proj-1"})
 	if err != nil {
 		t.Fatalf("ListAgents failed: %v", err)
 	}
 	want := []AgentHandle{
-		{Backend: "zellij", ID: "terminal_1", ProjectID: "proj-1", Name: "myagent"},
+		{Backend: "zellij", ID: "terminal_1", WorkstreamID: "proj-1", Name: "myagent"},
 	}
 	if !slices.Equal(agents, want) {
 		t.Fatalf("agents mismatch:\n got: %+v\nwant: %+v", agents, want)
 	}
 }
 
-func TestZellijListProjectsParsesRealList(t *testing.T) {
+func TestZellijListWorkstreamsParsesRealList(t *testing.T) {
 	_, r := recorder(realSessionsList)
-	projects, err := zellij{run: r}.ListProjects(context.Background())
+	projects, err := zellij{run: r}.ListWorkstreams(context.Background())
 	if err != nil {
-		t.Fatalf("ListProjects failed: %v", err)
+		t.Fatalf("ListWorkstreams failed: %v", err)
 	}
-	want := []ProjectHandle{
+	want := []WorkstreamHandle{
 		{Backend: "zellij", ID: "bioqa-build-10366", Name: "bioqa-build-10366"},
 		{Backend: "zellij", ID: "bioqa-build-51694", Name: "bioqa-build-51694"},
 		{Backend: "zellij", ID: "ccorch-verify-zj", Name: "ccorch-verify-zj"},

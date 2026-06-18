@@ -89,9 +89,23 @@ func TestSupersetMetadata(t *testing.T) {
 	if b.Name() != "superset" {
 		t.Errorf("Name() = %q, want superset", b.Name())
 	}
-	if got := b.Caps(); got.Has(CanSendText) || got.Has(CanCapture) || got.Has(CanEnumerate) {
-		t.Errorf("Caps() = %+v, want spawn-only (no native capabilities)", got)
+	got := b.Caps()
+	if got.Has(CanSendText) || got.Has(CanCapture) || got.Has(CanEnumerate) {
+		t.Errorf("Caps() = %+v, want no CanSendText/CanCapture/CanEnumerate", got)
 	}
+	if !got.Has(ManagesWorktree) {
+		t.Errorf("Caps() = %+v, want ManagesWorktree", got)
+	}
+}
+
+// stubWorktreeBase pins supersetWorktreeBase to base for the duration of the test,
+// so the worktree path CreateWorkstream derives is deterministic without depending
+// on the invoking user's home.
+func stubWorktreeBase(t *testing.T, base string) {
+	t.Helper()
+	orig := supersetWorktreeBase
+	supersetWorktreeBase = func() (string, error) { return base, nil }
+	t.Cleanup(func() { supersetWorktreeBase = orig })
 }
 
 func TestSupersetEnsureReady(t *testing.T) {
@@ -145,85 +159,102 @@ func TestSupersetEnsureReady(t *testing.T) {
 	}
 }
 
-func TestSupersetCreateProjectExistingProject(t *testing.T) {
+func TestSupersetCreateWorkstreamExistingProject(t *testing.T) {
+	stubWorktreeBase(t, "/wt")
 	cwd := "/Users/yasyf/Code/cc-orchestrate"
 	r := &supersetRunner{outs: []string{
 		supersetProjectsJSON,        // projects list --local --json
-		"feature/login\n",           // git rev-parse
 		supersetWorkspaceCreateJSON, // workspaces create
 	}}
-	got, err := superset{run: r.run}.CreateProject(context.Background(), ProjectSpec{Name: "cc-orch-test", Cwd: cwd})
+	got, err := superset{run: r.run}.CreateWorkstream(context.Background(), WorkstreamSpec{Name: "cc-orch-test", Cwd: cwd, RepoCwd: cwd, Branch: "feature/login"})
 	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
+		t.Fatalf("CreateWorkstream: %v", err)
 	}
 	assertCalls(t, r.calls, [][]string{
 		{"superset", "projects", "list", "--local", "--json"},
-		{"git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"},
 		{"superset", "workspaces", "create", "--local",
 			"--project", "48f92b66-fbd7-473f-a7ad-6b8e583e933a",
 			"--branch", "feature/login", "--name", "cc-orch-test", "--json"},
 	})
-	want := ProjectHandle{Backend: "superset", ID: "d1e2f3a4-0000-4aaa-bbbb-ccccddddeeee", Name: "cc-orch-test", Cwd: cwd}
+	want := WorkstreamHandle{
+		Backend: "superset", ID: "d1e2f3a4-0000-4aaa-bbbb-ccccddddeeee", Name: "cc-orch-test", Cwd: cwd,
+		Worktree: "/wt/48f92b66-fbd7-473f-a7ad-6b8e583e933a/feature/login",
+	}
 	if got != want {
 		t.Fatalf("handle = %+v, want %+v", got, want)
 	}
 }
 
-func TestSupersetCreateProjectImportsWhenMissing(t *testing.T) {
+func TestSupersetCreateWorkstreamImportsWhenMissing(t *testing.T) {
+	stubWorktreeBase(t, "/wt")
 	cwd := "/Users/yasyf/Code/brand-new"
 	listWith := `[{"id":"new-proj-id","name":"brand-new","slug":"brand-new","setUp":"yes","path":"/Users/yasyf/Code/brand-new"}]`
 	r := &supersetRunner{outs: []string{
 		supersetProjectsJSON,        // list: cwd absent
 		`{"id":"new-proj-id"}`,      // setup --import
 		listWith,                    // list: cwd now present
-		"main\n",                    // git rev-parse
 		supersetWorkspaceCreateJSON, // workspaces create
 	}}
-	got, err := superset{run: r.run}.CreateProject(context.Background(), ProjectSpec{Name: "brand-new", Cwd: cwd})
+	got, err := superset{run: r.run}.CreateWorkstream(context.Background(), WorkstreamSpec{Name: "brand-new", Cwd: cwd, RepoCwd: cwd, Branch: "main"})
 	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
+		t.Fatalf("CreateWorkstream: %v", err)
 	}
 	assertCalls(t, r.calls, [][]string{
 		{"superset", "projects", "list", "--local", "--json"},
 		{"superset", "projects", "setup", "--import", cwd, "--local", "--json"},
 		{"superset", "projects", "list", "--local", "--json"},
-		{"git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"},
 		{"superset", "workspaces", "create", "--local",
 			"--project", "new-proj-id", "--branch", "main", "--name", "brand-new", "--json"},
 	})
 	if got.ID != "d1e2f3a4-0000-4aaa-bbbb-ccccddddeeee" {
 		t.Fatalf("workspace id = %q, want d1e2f3a4-...", got.ID)
 	}
+	if want := "/wt/new-proj-id/main"; got.Worktree != want {
+		t.Fatalf("worktree = %q, want %q", got.Worktree, want)
+	}
 }
 
-func TestSupersetListProjectsParsesRealJSON(t *testing.T) {
+// TestSupersetCreateWorkstreamRequiresBranch proves CreateWorkstream fails loud on
+// an empty branch (the superset CLI rejects a workspace create without one) before
+// any CLI call, rather than silently defaulting.
+func TestSupersetCreateWorkstreamRequiresBranch(t *testing.T) {
+	r := &supersetRunner{}
+	if _, err := (superset{run: r.run}).CreateWorkstream(context.Background(), WorkstreamSpec{Name: "x", Cwd: "/work"}); err == nil {
+		t.Fatal("CreateWorkstream: want error for empty branch, got nil")
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("want no CLI calls before the branch check, got %v", r.calls)
+	}
+}
+
+func TestSupersetListWorkstreamsParsesRealJSON(t *testing.T) {
 	r := &supersetRunner{outs: []string{supersetWorkspacesJSON}}
-	got, err := superset{run: r.run}.ListProjects(context.Background())
+	got, err := superset{run: r.run}.ListWorkstreams(context.Background())
 	if err != nil {
-		t.Fatalf("ListProjects: %v", err)
+		t.Fatalf("ListWorkstreams: %v", err)
 	}
 	assertCalls(t, r.calls, [][]string{{"superset", "workspaces", "list", "--local", "--json"}})
-	want := []ProjectHandle{
+	want := []WorkstreamHandle{
 		{Backend: "superset", ID: "99b1c139-7250-4cd9-9b40-fda16963d665", Name: "main"},
 		{Backend: "superset", ID: "c4f1ce2a-16f8-4006-866e-53b83bc1006a", Name: "yasyf/expensive-tilapia"},
 	}
 	if !slices.Equal(got, want) {
-		t.Fatalf("projects = %+v, want %+v", got, want)
+		t.Fatalf("workstreams = %+v, want %+v", got, want)
 	}
 }
 
 func TestSupersetSpawn(t *testing.T) {
 	ctx := context.Background()
-	project := ProjectHandle{Backend: "superset", ID: "ws-1"}
+	workstream := WorkstreamHandle{Backend: "superset", ID: "ws-1"}
 
 	t.Run("absolute claude path is wrapped and quoted", func(t *testing.T) {
 		r := &supersetRunner{outs: []string{supersetTerminalCreateJSON}}
 		got, err := superset{run: r.run}.Spawn(ctx, SpawnSpec{
-			Project:   project,
-			Name:      "agent-a",
-			Cwd:       "/work",
-			Command:   []string{"/Users/yasyf/.local/bin/claude", "--session-id", "sess-1", "-p", "hello world"},
-			SessionID: "sess-1",
+			Workstream: workstream,
+			Name:       "agent-a",
+			Cwd:        "/work",
+			Command:    []string{"/Users/yasyf/.local/bin/claude", "--session-id", "sess-1", "-p", "hello world"},
+			SessionID:  "sess-1",
 		})
 		if err != nil {
 			t.Fatalf("Spawn: %v", err)
@@ -234,7 +265,7 @@ func TestSupersetSpawn(t *testing.T) {
 			"--workspace", "ws-1", "--cwd", "/work",
 			"--command", wantCmd, "--json",
 		}})
-		want := AgentHandle{Backend: "superset", ID: "term_9f8e7d6c5b4a", ProjectID: "ws-1", Name: "agent-a", SessionID: "sess-1"}
+		want := AgentHandle{Backend: "superset", ID: "term_9f8e7d6c5b4a", WorkstreamID: "ws-1", Name: "agent-a", SessionID: "sess-1"}
 		if got != want {
 			t.Fatalf("agent = %+v, want %+v", got, want)
 		}
@@ -246,7 +277,7 @@ func TestSupersetSpawn(t *testing.T) {
 		defer func() { resolveClaude = orig }()
 		r := &supersetRunner{outs: []string{supersetTerminalCreateJSON}}
 		if _, err := (superset{run: r.run}).Spawn(ctx, SpawnSpec{
-			Project: project, Name: "agent-b", Cwd: "/work",
+			Workstream: workstream, Name: "agent-b", Cwd: "/work",
 			Command: []string{"claude", "--session-id", "s2", "-p", "hi"}, SessionID: "s2",
 		}); err != nil {
 			t.Fatalf("Spawn: %v", err)
@@ -264,7 +295,7 @@ func TestSupersetSpawn(t *testing.T) {
 		defer func() { resolveClaude = orig }()
 		r := &supersetRunner{}
 		if _, err := (superset{run: r.run}).Spawn(ctx, SpawnSpec{
-			Project: project, Name: "agent-c", Cwd: "/work", Command: []string{"claude", "-p", "hi"},
+			Workstream: workstream, Name: "agent-c", Cwd: "/work", Command: []string{"claude", "-p", "hi"},
 		}); err == nil {
 			t.Fatal("Spawn: want error, got nil")
 		}
@@ -294,17 +325,17 @@ func TestSupersetKill(t *testing.T) {
 	})
 }
 
-func TestSupersetKillProject(t *testing.T) {
+func TestSupersetKillWorkstream(t *testing.T) {
 	r := &supersetRunner{outs: []string{`{"deleted":["ws-1"]}`}}
-	if err := (superset{run: r.run}).KillProject(context.Background(), ProjectHandle{ID: "ws-1"}); err != nil {
-		t.Fatalf("KillProject: %v", err)
+	if err := (superset{run: r.run}).KillWorkstream(context.Background(), WorkstreamHandle{ID: "ws-1"}); err != nil {
+		t.Fatalf("KillWorkstream: %v", err)
 	}
 	assertCalls(t, r.calls, [][]string{{"superset", "workspaces", "delete", "ws-1", "--local", "--json"}})
 }
 
 func TestSupersetListAgentsIsEmptyAndQuiet(t *testing.T) {
 	r := &supersetRunner{}
-	got, err := superset{run: r.run}.ListAgents(context.Background(), ProjectHandle{ID: "ws-1"})
+	got, err := superset{run: r.run}.ListAgents(context.Background(), WorkstreamHandle{ID: "ws-1"})
 	if err != nil {
 		t.Fatalf("ListAgents: %v", err)
 	}
@@ -334,38 +365,6 @@ func TestMatchProjectID(t *testing.T) {
 			if got := matchProjectID(projects, tc.cwd); got != tc.want {
 				t.Fatalf("matchProjectID(%q) = %q, want %q", tc.cwd, got, tc.want)
 			}
-		})
-	}
-}
-
-func TestSupersetGitBranch(t *testing.T) {
-	ctx := context.Background()
-	cases := []struct {
-		name    string
-		out     string
-		err     error
-		want    string
-		wantErr bool
-	}{
-		{name: "uses the checked-out branch", out: "feature/login\n", want: "feature/login"},
-		{name: "defaults to main on detached HEAD", out: "HEAD\n", want: "main"},
-		{name: "defaults to main on empty output", out: "\n", want: "main"},
-		{name: "propagates a git execution failure", err: errors.New("not a repo"), wantErr: true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := &supersetRunner{outs: []string{tc.out}, errs: []error{tc.err}}
-			got, err := (superset{run: r.run}).gitBranch(ctx, "/work")
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("gitBranch err = nil, want a wrapped git failure")
-				}
-			} else if err != nil {
-				t.Fatalf("gitBranch err = %v, want nil", err)
-			} else if got != tc.want {
-				t.Fatalf("gitBranch = %q, want %q", got, tc.want)
-			}
-			assertCalls(t, r.calls, [][]string{{"git", "-C", "/work", "rev-parse", "--abbrev-ref", "HEAD"}})
 		})
 	}
 }

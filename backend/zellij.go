@@ -36,29 +36,29 @@ func (b zellij) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }
 
 func (b zellij) EnsureReady(ctx context.Context) error { return nil }
 
-func (b zellij) CreateProject(ctx context.Context, spec ProjectSpec) (ProjectHandle, error) {
+func (b zellij) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error) {
 	session := sanitizeSession(spec.Name)
 	if _, err := b.run(ctx, zellijBin, "attach", "--create-background", session); err != nil {
-		return ProjectHandle{}, err
+		return WorkstreamHandle{}, err
 	}
-	return ProjectHandle{Backend: zellijName, ID: session, Name: spec.Name, Cwd: spec.Cwd}, nil
+	return WorkstreamHandle{Backend: zellijName, ID: session, Name: spec.Name, Cwd: spec.Cwd, Worktree: spec.Cwd}, nil
 }
 
-func (b zellij) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
+func (b zellij) ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error) {
 	out, err := b.run(ctx, zellijBin, "list-sessions", "--no-formatting", "--short")
 	if err != nil {
 		return nil, err
 	}
-	projects := []ProjectHandle{}
+	workstreams := []WorkstreamHandle{}
 	for _, name := range nonEmptyLines(out) {
-		projects = append(projects, ProjectHandle{Backend: zellijName, ID: name, Name: name})
+		workstreams = append(workstreams, WorkstreamHandle{Backend: zellijName, ID: name, Name: name})
 	}
-	return projects, nil
+	return workstreams, nil
 }
 
 func (b zellij) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
 	args := append(
-		[]string{"--session", spec.Project.ID, "action", "new-pane", "--cwd", spec.Cwd, "--name", spec.Name, "--"},
+		[]string{"--session", spec.Workstream.ID, "action", "new-pane", "--cwd", spec.Cwd, "--name", spec.Name, "--"},
 		spec.Command...,
 	)
 	out, err := b.run(ctx, zellijBin, args...)
@@ -66,16 +66,16 @@ func (b zellij) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) 
 		return AgentHandle{}, err
 	}
 	return AgentHandle{
-		Backend:   zellijName,
-		ID:        strings.TrimSpace(string(out)),
-		ProjectID: spec.Project.ID,
-		Name:      spec.Name,
-		SessionID: spec.SessionID,
+		Backend:      zellijName,
+		ID:           strings.TrimSpace(string(out)),
+		WorkstreamID: spec.Workstream.ID,
+		Name:         spec.Name,
+		SessionID:    spec.SessionID,
 	}, nil
 }
 
-func (b zellij) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentHandle, error) {
-	out, err := b.run(ctx, zellijBin, "--session", project.ID, "action", "list-panes", "--json")
+func (b zellij) ListAgents(ctx context.Context, workstream WorkstreamHandle) ([]AgentHandle, error) {
+	out, err := b.run(ctx, zellijBin, "--session", workstream.ID, "action", "list-panes", "--json")
 	if err != nil {
 		return nil, err
 	}
@@ -89,32 +89,32 @@ func (b zellij) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentH
 			continue
 		}
 		agents = append(agents, AgentHandle{
-			Backend:   zellijName,
-			ID:        paneID(p),
-			ProjectID: project.ID,
-			Name:      p.Title,
+			Backend:      zellijName,
+			ID:           paneID(p),
+			WorkstreamID: workstream.ID,
+			Name:         p.Title,
 		})
 	}
 	return agents, nil
 }
 
 func (b zellij) Kill(ctx context.Context, agent AgentHandle) error {
-	_, err := b.run(ctx, zellijBin, "--session", agent.ProjectID, "action", "close-pane", "--pane-id", agent.ID)
+	_, err := b.run(ctx, zellijBin, "--session", agent.WorkstreamID, "action", "close-pane", "--pane-id", agent.ID)
 	return err
 }
 
-func (b zellij) KillProject(ctx context.Context, project ProjectHandle) error {
-	_, err := b.run(ctx, zellijBin, "kill-session", project.ID)
+func (b zellij) KillWorkstream(ctx context.Context, workstream WorkstreamHandle) error {
+	_, err := b.run(ctx, zellijBin, "kill-session", workstream.ID)
 	return err
 }
 
 // SendText writes text into the agent's pane within its session, then submits it
-// by writing a carriage-return byte (13). agent.ProjectID is the zellij session.
+// by writing a carriage-return byte (13). agent.WorkstreamID is the zellij session.
 func (b zellij) SendText(ctx context.Context, agent AgentHandle, text string) error {
-	if _, err := b.run(ctx, zellijBin, "--session", agent.ProjectID, "action", "write-chars", "-p", agent.ID, "--", text); err != nil {
+	if _, err := b.run(ctx, zellijBin, "--session", agent.WorkstreamID, "action", "write-chars", "-p", agent.ID, "--", text); err != nil {
 		return err
 	}
-	_, err := b.run(ctx, zellijBin, "--session", agent.ProjectID, "action", "write", "-p", agent.ID, "13")
+	_, err := b.run(ctx, zellijBin, "--session", agent.WorkstreamID, "action", "write", "-p", agent.ID, "13")
 	return err
 }
 

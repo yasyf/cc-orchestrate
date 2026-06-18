@@ -87,19 +87,19 @@ func (b cmux) Available() bool { return installed(cmuxBin) }
 // EnsureReady is a no-op: the cmux socket daemon auto-starts on first command.
 func (b cmux) EnsureReady(ctx context.Context) error { return nil }
 
-func (b cmux) CreateProject(ctx context.Context, spec ProjectSpec) (ProjectHandle, error) {
+func (b cmux) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error) {
 	out, err := b.run(ctx, cmuxBin, "new-workspace", "--cwd", spec.Cwd, "--name", spec.Name)
 	if err != nil {
-		return ProjectHandle{}, err
+		return WorkstreamHandle{}, err
 	}
 	id, err := cmuxRef(out, "workspace:")
 	if err != nil {
-		return ProjectHandle{}, err
+		return WorkstreamHandle{}, err
 	}
-	return ProjectHandle{Backend: b.Name(), ID: id, Name: spec.Name, Cwd: spec.Cwd}, nil
+	return WorkstreamHandle{Backend: b.Name(), ID: id, Name: spec.Name, Cwd: spec.Cwd, Worktree: spec.Cwd}, nil
 }
 
-func (b cmux) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
+func (b cmux) ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error) {
 	out, err := b.run(ctx, cmuxBin, "list-workspaces", "--json")
 	if err != nil {
 		return nil, err
@@ -108,15 +108,15 @@ func (b cmux) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	projects := make([]ProjectHandle, len(res.Workspaces))
+	workstreams := make([]WorkstreamHandle, len(res.Workspaces))
 	for i, w := range res.Workspaces {
-		projects[i] = ProjectHandle{Backend: b.Name(), ID: w.Ref, Name: w.Title, Cwd: w.CurrentDirectory}
+		workstreams[i] = WorkstreamHandle{Backend: b.Name(), ID: w.Ref, Name: w.Title, Cwd: w.CurrentDirectory}
 	}
-	return projects, nil
+	return workstreams, nil
 }
 
 func (b cmux) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
-	out, err := b.run(ctx, cmuxBin, "new-pane", "--workspace", spec.Project.ID)
+	out, err := b.run(ctx, cmuxBin, "new-pane", "--workspace", spec.Workstream.ID)
 	if err != nil {
 		return AgentHandle{}, err
 	}
@@ -128,20 +128,20 @@ func (b cmux) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
 	if err != nil {
 		return AgentHandle{}, err
 	}
-	if _, err := b.run(ctx, cmuxBin, "send", "--workspace", spec.Project.ID, "--surface", surface, "--", launch); err != nil {
+	if _, err := b.run(ctx, cmuxBin, "send", "--workspace", spec.Workstream.ID, "--surface", surface, "--", launch); err != nil {
 		return AgentHandle{}, err
 	}
 	return AgentHandle{
-		Backend:   b.Name(),
-		ID:        surface,
-		ProjectID: spec.Project.ID,
-		Name:      spec.Name,
-		SessionID: spec.SessionID,
+		Backend:      b.Name(),
+		ID:           surface,
+		WorkstreamID: spec.Workstream.ID,
+		Name:         spec.Name,
+		SessionID:    spec.SessionID,
 	}, nil
 }
 
-func (b cmux) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentHandle, error) {
-	out, err := b.run(ctx, cmuxBin, "list-panes", "--workspace", project.ID, "--json")
+func (b cmux) ListAgents(ctx context.Context, workstream WorkstreamHandle) ([]AgentHandle, error) {
+	out, err := b.run(ctx, cmuxBin, "list-panes", "--workspace", workstream.ID, "--json")
 	if err != nil {
 		return nil, err
 	}
@@ -151,18 +151,18 @@ func (b cmux) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentHan
 	}
 	agents := make([]AgentHandle, len(res.Panes))
 	for i, p := range res.Panes {
-		agents[i] = AgentHandle{Backend: b.Name(), ID: p.SelectedSurfaceRef, ProjectID: res.WorkspaceRef}
+		agents[i] = AgentHandle{Backend: b.Name(), ID: p.SelectedSurfaceRef, WorkstreamID: res.WorkspaceRef}
 	}
 	return agents, nil
 }
 
 func (b cmux) Kill(ctx context.Context, agent AgentHandle) error {
-	_, err := b.run(ctx, cmuxBin, "close-surface", "--workspace", agent.ProjectID, "--surface", agent.ID)
+	_, err := b.run(ctx, cmuxBin, "close-surface", "--workspace", agent.WorkstreamID, "--surface", agent.ID)
 	return err
 }
 
-func (b cmux) KillProject(ctx context.Context, project ProjectHandle) error {
-	_, err := b.run(ctx, cmuxBin, "close-workspace", "--workspace", project.ID)
+func (b cmux) KillWorkstream(ctx context.Context, workstream WorkstreamHandle) error {
+	_, err := b.run(ctx, cmuxBin, "close-workspace", "--workspace", workstream.ID)
 	return err
 }
 
@@ -170,10 +170,10 @@ func (b cmux) KillProject(ctx context.Context, project ProjectHandle) error {
 // enter key event rather than an embedded "\n" — cmux send reinterprets \n/\r/\t,
 // which would split a multi-line message into partial commands.
 func (b cmux) SendText(ctx context.Context, agent AgentHandle, text string) error {
-	if _, err := b.run(ctx, cmuxBin, "send", "--workspace", agent.ProjectID, "--surface", agent.ID, "--", text); err != nil {
+	if _, err := b.run(ctx, cmuxBin, "send", "--workspace", agent.WorkstreamID, "--surface", agent.ID, "--", text); err != nil {
 		return err
 	}
-	_, err := b.run(ctx, cmuxBin, "send-key", "--workspace", agent.ProjectID, "--surface", agent.ID, "enter")
+	_, err := b.run(ctx, cmuxBin, "send-key", "--workspace", agent.WorkstreamID, "--surface", agent.ID, "enter")
 	return err
 }
 

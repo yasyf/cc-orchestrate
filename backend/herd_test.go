@@ -44,30 +44,30 @@ func TestHerdMethods(t *testing.T) {
 		check    func(t *testing.T, got any)
 	}{
 		{
-			name:   "CreateProject parses result.workspace.workspace_id",
+			name:   "CreateWorkstream parses result.workspace.workspace_id",
 			output: herdCreateOut,
 			invoke: func(ctx context.Context, b herd) (any, error) {
-				return b.CreateProject(ctx, ProjectSpec{Name: "cc-orch-test-ws", Cwd: "/tmp"})
+				return b.CreateWorkstream(ctx, WorkstreamSpec{Name: "cc-orch-test-ws", Cwd: "/tmp"})
 			},
 			wantArgv: []string{"workspace", "create", "--cwd", "/tmp", "--label", "cc-orch-test-ws"},
 			check: func(t *testing.T, got any) {
-				p := got.(ProjectHandle)
-				want := ProjectHandle{Backend: "herd", ID: "w65466e4ca40bb5", Name: "cc-orch-test-ws", Cwd: "/tmp"}
+				p := got.(WorkstreamHandle)
+				want := WorkstreamHandle{Backend: "herd", ID: "w65466e4ca40bb5", Name: "cc-orch-test-ws", Cwd: "/tmp", Worktree: "/tmp"}
 				if p != want {
 					t.Errorf("project = %+v, want %+v", p, want)
 				}
 			},
 		},
 		{
-			name:   "ListProjects maps workspaces",
+			name:   "ListWorkstreams maps workspaces",
 			output: herdWorkspaceListOut,
 			invoke: func(ctx context.Context, b herd) (any, error) {
-				return b.ListProjects(ctx)
+				return b.ListWorkstreams(ctx)
 			},
 			wantArgv: []string{"workspace", "list"},
 			check: func(t *testing.T, got any) {
-				ps := got.([]ProjectHandle)
-				want := []ProjectHandle{{Backend: "herd", ID: "w6545b068248ab4", Name: "~"}}
+				ps := got.([]WorkstreamHandle)
+				want := []WorkstreamHandle{{Backend: "herd", ID: "w6545b068248ab4", Name: "~"}}
 				if !slices.Equal(ps, want) {
 					t.Errorf("projects = %+v, want %+v", ps, want)
 				}
@@ -78,17 +78,17 @@ func TestHerdMethods(t *testing.T) {
 			output: herdStartOut,
 			invoke: func(ctx context.Context, b herd) (any, error) {
 				return b.Spawn(ctx, SpawnSpec{
-					Project:   ProjectHandle{Backend: "herd", ID: "w65466e4ca40bb5"},
-					Name:      "cc-orch-test-agent",
-					Cwd:       "/tmp",
-					Command:   []string{"sh", "-c", "sleep 120"},
-					SessionID: "sess-abc",
+					Workstream: WorkstreamHandle{Backend: "herd", ID: "w65466e4ca40bb5"},
+					Name:       "cc-orch-test-agent",
+					Cwd:        "/tmp",
+					Command:    []string{"sh", "-c", "sleep 120"},
+					SessionID:  "sess-abc",
 				})
 			},
 			wantArgv: []string{"agent", "start", "cc-orch-test-agent", "--workspace", "w65466e4ca40bb5", "--cwd", "/tmp", "--", "sh", "-c", "sleep 120"},
 			check: func(t *testing.T, got any) {
 				a := got.(AgentHandle)
-				want := AgentHandle{Backend: "herd", ID: "w65466e4ca40bb5-2", ProjectID: "w65466e4ca40bb5", Name: "cc-orch-test-agent", SessionID: "sess-abc"}
+				want := AgentHandle{Backend: "herd", ID: "w65466e4ca40bb5-2", WorkstreamID: "w65466e4ca40bb5", Name: "cc-orch-test-agent", SessionID: "sess-abc"}
 				if a != want {
 					t.Errorf("agent = %+v, want %+v", a, want)
 				}
@@ -98,12 +98,12 @@ func TestHerdMethods(t *testing.T) {
 			name:   "ListAgents returns agents in the project workspace",
 			output: herdAgentListOut,
 			invoke: func(ctx context.Context, b herd) (any, error) {
-				return b.ListAgents(ctx, ProjectHandle{Backend: "herd", ID: "w65466e4ca40bb5"})
+				return b.ListAgents(ctx, WorkstreamHandle{Backend: "herd", ID: "w65466e4ca40bb5"})
 			},
 			wantArgv: []string{"agent", "list"},
 			check: func(t *testing.T, got any) {
 				as := got.([]AgentHandle)
-				want := []AgentHandle{{Backend: "herd", ID: "w65466e4ca40bb5-2", ProjectID: "w65466e4ca40bb5", Name: "cc-orch-test-agent"}}
+				want := []AgentHandle{{Backend: "herd", ID: "w65466e4ca40bb5-2", WorkstreamID: "w65466e4ca40bb5", Name: "cc-orch-test-agent"}}
 				if !slices.Equal(as, want) {
 					t.Errorf("agents = %+v, want %+v", as, want)
 				}
@@ -113,7 +113,7 @@ func TestHerdMethods(t *testing.T) {
 			name:   "ListAgents filters out foreign workspaces",
 			output: herdAgentListOut,
 			invoke: func(ctx context.Context, b herd) (any, error) {
-				return b.ListAgents(ctx, ProjectHandle{Backend: "herd", ID: "wOTHER0000000000"})
+				return b.ListAgents(ctx, WorkstreamHandle{Backend: "herd", ID: "wOTHER0000000000"})
 			},
 			wantArgv: []string{"agent", "list"},
 			check: func(t *testing.T, got any) {
@@ -131,10 +131,10 @@ func TestHerdMethods(t *testing.T) {
 			wantArgv: []string{"pane", "close", "w65466e4ca40bb5-2"},
 		},
 		{
-			name:   "KillProject closes the workspace",
+			name:   "KillWorkstream closes the workspace",
 			output: herdWorkspaceCloseOut,
 			invoke: func(ctx context.Context, b herd) (any, error) {
-				return nil, b.KillProject(ctx, ProjectHandle{Backend: "herd", ID: "w65466e4ca40bb5"})
+				return nil, b.KillWorkstream(ctx, WorkstreamHandle{Backend: "herd", ID: "w65466e4ca40bb5"})
 			},
 			wantArgv: []string{"workspace", "close", "w65466e4ca40bb5"},
 		},

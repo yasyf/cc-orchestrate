@@ -87,21 +87,21 @@ func TestCmux(t *testing.T) {
 		calls   []cmuxCall
 	}{
 		{
-			name:    "CreateProject parses the workspace ref from the OK line",
+			name:    "CreateWorkstream parses the workspace ref from the OK line",
 			outputs: [][]byte{[]byte("OK workspace:7\n")},
 			invoke: func(b cmux) (any, error) {
-				return b.CreateProject(context.Background(), ProjectSpec{Name: "ccorch-fixture", Cwd: "/tmp/ccorch-fix"})
+				return b.CreateWorkstream(context.Background(), WorkstreamSpec{Name: "ccorch-fixture", Cwd: "/tmp/ccorch-fix"})
 			},
-			want:  ProjectHandle{Backend: "cmux", ID: "workspace:7", Name: "ccorch-fixture", Cwd: "/tmp/ccorch-fix"},
+			want:  WorkstreamHandle{Backend: "cmux", ID: "workspace:7", Name: "ccorch-fixture", Cwd: "/tmp/ccorch-fix", Worktree: "/tmp/ccorch-fix"},
 			calls: []cmuxCall{{name: "cmux", args: []string{"new-workspace", "--cwd", "/tmp/ccorch-fix", "--name", "ccorch-fixture"}}},
 		},
 		{
-			name:    "ListProjects maps ref/title/current_directory from JSON",
+			name:    "ListWorkstreams maps ref/title/current_directory from JSON",
 			outputs: [][]byte{[]byte(cmuxWorkspacesJSON)},
 			invoke: func(b cmux) (any, error) {
-				return b.ListProjects(context.Background())
+				return b.ListWorkstreams(context.Background())
 			},
-			want: []ProjectHandle{
+			want: []WorkstreamHandle{
 				{Backend: "cmux", ID: "workspace:7", Name: "ccorch-fixture", Cwd: "/tmp/ccorch-fix"},
 				{Backend: "cmux", ID: "workspace:1", Name: "~/C/bioqa", Cwd: "/Users/yasyf/Code/bioqa"},
 			},
@@ -111,11 +111,11 @@ func TestCmux(t *testing.T) {
 			name:    "ListAgents maps selected_surface_ref to agent ids scoped by workspace_ref",
 			outputs: [][]byte{[]byte(cmuxPanesJSON)},
 			invoke: func(b cmux) (any, error) {
-				return b.ListAgents(context.Background(), ProjectHandle{Backend: "cmux", ID: "workspace:7"})
+				return b.ListAgents(context.Background(), WorkstreamHandle{Backend: "cmux", ID: "workspace:7"})
 			},
 			want: []AgentHandle{
-				{Backend: "cmux", ID: "surface:10", ProjectID: "workspace:7"},
-				{Backend: "cmux", ID: "surface:11", ProjectID: "workspace:7"},
+				{Backend: "cmux", ID: "surface:10", WorkstreamID: "workspace:7"},
+				{Backend: "cmux", ID: "surface:11", WorkstreamID: "workspace:7"},
 			},
 			calls: []cmuxCall{{name: "cmux", args: []string{"list-panes", "--workspace", "workspace:7", "--json"}}},
 		},
@@ -123,16 +123,16 @@ func TestCmux(t *testing.T) {
 			name:    "Kill closes the agent surface",
 			outputs: [][]byte{[]byte("OK surface:10 workspace:7\n")},
 			invoke: func(b cmux) (any, error) {
-				return nil, b.Kill(context.Background(), AgentHandle{Backend: "cmux", ID: "surface:10", ProjectID: "workspace:7"})
+				return nil, b.Kill(context.Background(), AgentHandle{Backend: "cmux", ID: "surface:10", WorkstreamID: "workspace:7"})
 			},
 			want:  nil,
 			calls: []cmuxCall{{name: "cmux", args: []string{"close-surface", "--workspace", "workspace:7", "--surface", "surface:10"}}},
 		},
 		{
-			name:    "KillProject closes the workspace",
+			name:    "KillWorkstream closes the workspace",
 			outputs: [][]byte{[]byte("OK workspace:7\n")},
 			invoke: func(b cmux) (any, error) {
-				return nil, b.KillProject(context.Background(), ProjectHandle{Backend: "cmux", ID: "workspace:7"})
+				return nil, b.KillWorkstream(context.Background(), WorkstreamHandle{Backend: "cmux", ID: "workspace:7"})
 			},
 			want:  nil,
 			calls: []cmuxCall{{name: "cmux", args: []string{"close-workspace", "--workspace", "workspace:7"}}},
@@ -141,7 +141,7 @@ func TestCmux(t *testing.T) {
 			name:    "SendText types the text then submits a separate enter key",
 			outputs: [][]byte{[]byte(""), []byte("")},
 			invoke: func(b cmux) (any, error) {
-				return nil, b.SendText(context.Background(), AgentHandle{Backend: "cmux", ID: "surface:10", ProjectID: "workspace:7"}, "hi -n there")
+				return nil, b.SendText(context.Background(), AgentHandle{Backend: "cmux", ID: "surface:10", WorkstreamID: "workspace:7"}, "hi -n there")
 			},
 			want: nil,
 			calls: []cmuxCall{
@@ -195,16 +195,16 @@ func TestCmuxSpawn(t *testing.T) {
 		[]byte("OK surface:10 workspace:7\n"),
 	}}
 	got, err := cmux{run: f.run}.Spawn(context.Background(), SpawnSpec{
-		Project:   ProjectHandle{Backend: "cmux", ID: "workspace:7"},
-		Name:      "agent-1",
-		Command:   command,
-		SessionID: "sess-abc",
+		Workstream: WorkstreamHandle{Backend: "cmux", ID: "workspace:7"},
+		Name:       "agent-1",
+		Command:    command,
+		SessionID:  "sess-abc",
 	})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	want := AgentHandle{Backend: "cmux", ID: "surface:10", ProjectID: "workspace:7", Name: "agent-1", SessionID: "sess-abc"}
+	want := AgentHandle{Backend: "cmux", ID: "surface:10", WorkstreamID: "workspace:7", Name: "agent-1", SessionID: "sess-abc"}
 	if got != want {
 		t.Errorf("handle = %#v, want %#v", got, want)
 	}

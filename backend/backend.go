@@ -18,41 +18,52 @@ type BackendName string
 // wins unless the user selects another.
 var Precedence = []BackendName{"herd", "superset", "cmux", "zellij", "tmux"}
 
-// ProjectSpec describes a project to create on a backend.
-type ProjectSpec struct {
-	Name string
-	Cwd  string
+// WorkstreamSpec describes a workstream to create on a backend. A workstream is
+// the cwd-bearing unit of isolation: one git worktree on its own branch. Cwd is
+// the worktree path cc-orchestrate hands a backend that does not fork its own;
+// RepoCwd is the repo root that worktree derives from, and Branch is the branch it
+// tracks. A backend that advertises ManagesWorktree forks the worktree itself off
+// Branch and reports the path it used in WorkstreamHandle.Worktree.
+type WorkstreamSpec struct {
+	Name    string
+	Cwd     string
+	Branch  string
+	RepoCwd string
 }
 
-// SpawnSpec describes an agent to spawn into a project. Command is the full argv
-// the backend runs in a placed terminal (typically a claude invocation);
+// SpawnSpec describes an agent to spawn into a workstream. Command is the full
+// argv the backend runs in a placed terminal (typically a claude invocation);
 // SessionID is that child's deterministic --session-id, which backends without a
 // per-terminal kill (superset) use to terminate the process by identity.
 type SpawnSpec struct {
-	Project   ProjectHandle
-	Name      string
-	Cwd       string
-	Command   []string
-	SessionID string
+	Workstream WorkstreamHandle
+	Name       string
+	Cwd        string
+	Command    []string
+	SessionID  string
 }
 
-// ProjectHandle identifies a backend workspace.
-type ProjectHandle struct {
-	Backend BackendName
-	ID      string
-	Name    string
-	Cwd     string
+// WorkstreamHandle identifies the backend workspace backing one workstream.
+// Worktree is the git worktree path the backend launched in: the Cwd
+// cc-orchestrate handed it, or — for a backend that advertises ManagesWorktree —
+// the path the backend forked and now owns, which cc-orchestrate adopts.
+type WorkstreamHandle struct {
+	Backend  BackendName
+	ID       string
+	Name     string
+	Cwd      string
+	Worktree string
 }
 
 // AgentHandle identifies a spawned agent's backend terminal. SessionID carries the
 // child's claude --session-id so a backend that can't address its terminal (superset)
 // can still kill the process by identity.
 type AgentHandle struct {
-	Backend   BackendName
-	ID        string
-	ProjectID string
-	Name      string
-	SessionID string
+	Backend      BackendName
+	ID           string
+	WorkstreamID string
+	Name         string
+	SessionID    string
 }
 
 // Capability is one native fast path a backend can perform itself instead of
@@ -71,6 +82,13 @@ const (
 	// CanEnumerate means ListAgents returns the live agent set, so boot reconcile
 	// may prune DB rows the backend no longer reports.
 	CanEnumerate
+	// ManagesWorktree means the backend forks and owns its own git worktree per
+	// workstream (cc-orchestrate adopts the returned WorkstreamHandle.Worktree);
+	// its absence means cc-orchestrate creates the worktree itself and passes it
+	// as WorkstreamSpec.Cwd. Like CanEnumerate it is a trait capability with no
+	// corresponding optional interface, so it stays out of the caps_test Sender
+	// invariant.
+	ManagesWorktree
 )
 
 // Caps is the set of capabilities a backend supports. The zero value supports
@@ -94,12 +112,12 @@ type Backend interface {
 	Name() BackendName
 	Available() bool
 	EnsureReady(ctx context.Context) error
-	CreateProject(ctx context.Context, spec ProjectSpec) (ProjectHandle, error)
-	ListProjects(ctx context.Context) ([]ProjectHandle, error)
+	CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error)
+	ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error)
 	Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error)
-	ListAgents(ctx context.Context, project ProjectHandle) ([]AgentHandle, error)
+	ListAgents(ctx context.Context, workstream WorkstreamHandle) ([]AgentHandle, error)
 	Kill(ctx context.Context, agent AgentHandle) error
-	KillProject(ctx context.Context, project ProjectHandle) error
+	KillWorkstream(ctx context.Context, workstream WorkstreamHandle) error
 	Caps() Caps
 }
 

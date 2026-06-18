@@ -33,52 +33,52 @@ func (b tmux) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }
 
 func (b tmux) EnsureReady(ctx context.Context) error { return nil }
 
-func (b tmux) CreateProject(ctx context.Context, spec ProjectSpec) (ProjectHandle, error) {
+func (b tmux) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error) {
 	session := tmuxNameReplacer.Replace(spec.Name)
 	if _, err := b.run(ctx, tmuxBin, "new-session", "-d", "-s", session, "-c", spec.Cwd); err != nil {
-		return ProjectHandle{}, err
+		return WorkstreamHandle{}, err
 	}
-	return ProjectHandle{Backend: tmuxName, ID: session, Name: spec.Name, Cwd: spec.Cwd}, nil
+	return WorkstreamHandle{Backend: tmuxName, ID: session, Name: spec.Name, Cwd: spec.Cwd, Worktree: spec.Cwd}, nil
 }
 
-func (b tmux) ListProjects(ctx context.Context) ([]ProjectHandle, error) {
+func (b tmux) ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error) {
 	out, err := b.run(ctx, tmuxBin, "list-sessions", "-F", "#{session_name}")
 	if err != nil {
 		return nil, err
 	}
-	projects := []ProjectHandle{}
+	workstreams := []WorkstreamHandle{}
 	for _, name := range nonEmptyLines(out) {
-		projects = append(projects, ProjectHandle{Backend: tmuxName, ID: name, Name: name})
+		workstreams = append(workstreams, WorkstreamHandle{Backend: tmuxName, ID: name, Name: name})
 	}
-	return projects, nil
+	return workstreams, nil
 }
 
 func (b tmux) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
 	out, err := b.run(ctx, tmuxBin, append([]string{
 		"new-window", "-d", "-P", "-F", "#{pane_id}",
-		"-t", spec.Project.ID, "-n", spec.Name, "-c", spec.Cwd, "--",
+		"-t", spec.Workstream.ID, "-n", spec.Name, "-c", spec.Cwd, "--",
 	}, spec.Command...)...)
 	if err != nil {
 		return AgentHandle{}, err
 	}
 	return AgentHandle{
-		Backend:   tmuxName,
-		ID:        strings.TrimSpace(string(out)),
-		ProjectID: spec.Project.ID,
-		Name:      spec.Name,
-		SessionID: spec.SessionID,
+		Backend:      tmuxName,
+		ID:           strings.TrimSpace(string(out)),
+		WorkstreamID: spec.Workstream.ID,
+		Name:         spec.Name,
+		SessionID:    spec.SessionID,
 	}, nil
 }
 
-func (b tmux) ListAgents(ctx context.Context, project ProjectHandle) ([]AgentHandle, error) {
-	out, err := b.run(ctx, tmuxBin, "list-panes", "-s", "-t", project.ID, "-F", "#{pane_id}\t#{window_name}")
+func (b tmux) ListAgents(ctx context.Context, workstream WorkstreamHandle) ([]AgentHandle, error) {
+	out, err := b.run(ctx, tmuxBin, "list-panes", "-s", "-t", workstream.ID, "-F", "#{pane_id}\t#{window_name}")
 	if err != nil {
 		return nil, err
 	}
 	agents := []AgentHandle{}
 	for _, line := range nonEmptyLines(out) {
 		id, name, _ := strings.Cut(line, "\t")
-		agents = append(agents, AgentHandle{Backend: tmuxName, ID: id, ProjectID: project.ID, Name: name})
+		agents = append(agents, AgentHandle{Backend: tmuxName, ID: id, WorkstreamID: workstream.ID, Name: name})
 	}
 	return agents, nil
 }
@@ -88,8 +88,8 @@ func (b tmux) Kill(ctx context.Context, agent AgentHandle) error {
 	return err
 }
 
-func (b tmux) KillProject(ctx context.Context, project ProjectHandle) error {
-	_, err := b.run(ctx, tmuxBin, "kill-session", "-t", project.ID)
+func (b tmux) KillWorkstream(ctx context.Context, workstream WorkstreamHandle) error {
+	_, err := b.run(ctx, tmuxBin, "kill-session", "-t", workstream.ID)
 	return err
 }
 
