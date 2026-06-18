@@ -116,7 +116,7 @@ offers it and falling back to documented text formats where it doesn't. Rules:
 ## SQLite & State
 
 State lives under `paths.Paths{App: ".cc-orchestrate"}` → `~/.cc-orchestrate/`. The
-consumer's tables (`projects`, `agents`, `config`) are created through
+consumer's tables (`repos`, `workstreams`, `sprints`, `agents`, `config`) are created through
 `daemon.Config.Migrate` and queried through `HandlerCtx.DB`; cc-interact owns the
 `subjects` and `events` tables, which you touch only via `subject.Resolver` and the
 `Append` chokepoint. cc-interact has no migration framework beyond `Config.Migrate`,
