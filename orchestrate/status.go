@@ -6,20 +6,23 @@ import (
 	"strings"
 )
 
-// Derived agent states, surfaced on Status.State and persisted in the agents
-// table's state column.
+// State is a derived agent state, surfaced on Status.State and persisted in the
+// agents table's state column.
+type State string
+
+// Derived agent states.
 const (
-	StateWorking  = "working"        // an assistant tool_use has no matching tool_result yet
-	StateIdle     = "idle"           // the last assistant turn ended with stop_reason end_turn
-	StateAwaiting = "awaiting-input" // a pending AskUserQuestion is blocking on the user
-	StateUnknown  = "unknown"        // no assistant activity observed yet
+	StateWorking  State = "working"        // an assistant tool_use has no matching tool_result yet
+	StateIdle     State = "idle"           // the last assistant turn ended with stop_reason end_turn
+	StateAwaiting State = "awaiting-input" // a pending AskUserQuestion is blocking on the user
+	StateUnknown  State = "unknown"        // no assistant activity observed yet
 )
 
 // Status is the transcript-derived snapshot of an agent: its coarse state, the
 // last tool it invoked with that tool's primary target, the last assistant text
 // block, and the cumulative token count across the session.
 type Status struct {
-	State    string
+	State    State
 	Tool     string
 	Target   string
 	LastText string
@@ -161,7 +164,7 @@ func (a *statusAcc) status() Status {
 	}
 }
 
-func (a *statusAcc) state() string {
+func (a *statusAcc) state() State {
 	if len(a.pending) > 0 {
 		for _, name := range a.pending {
 			if name == "AskUserQuestion" {

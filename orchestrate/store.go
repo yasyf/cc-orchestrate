@@ -48,7 +48,7 @@ type agentRow struct {
 	Prompt         string
 	SubjectID      string
 	Status         LifecycleStatus
-	State          string
+	State          State
 	Activity       string
 	Tokens         int
 	UpdatedAt      string

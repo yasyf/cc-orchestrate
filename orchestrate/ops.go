@@ -41,7 +41,7 @@ type agentView struct {
 func newAgentView(a agentRow) agentView {
 	return agentView{
 		ID: a.ID, Name: a.Name, ProjectID: a.ProjectID, Backend: string(a.Backend),
-		Status: string(a.Status), State: a.State, Activity: a.Activity, Tokens: a.Tokens,
+		Status: string(a.Status), State: string(a.State), Activity: a.Activity, Tokens: a.Tokens,
 		UpdatedAt: a.UpdatedAt, SessionID: a.SessionID, Scope: a.Scope,
 	}
 }
@@ -59,29 +59,57 @@ type statusPayload struct {
 
 func jsonStatus(st Status) json.RawMessage {
 	b, _ := json.Marshal(statusPayload{
-		Type: EventStatus, State: st.State, Tool: st.Tool, Target: st.Target, LastText: st.LastText, Tokens: st.Tokens,
+		Type: EventStatus, State: string(st.State), Tool: st.Tool, Target: st.Target, LastText: st.LastText, Tokens: st.Tokens,
 	})
 	return b
 }
 
+// messageEvent is the EventMessage body delivered over the LCD; Type discriminates
+// the frame for a stream consumer reading the SSE payload alone.
+type messageEvent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
 func messagePayload(text string) json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"type": EventMessage, "text": text})
+	b, _ := json.Marshal(messageEvent{Type: EventMessage, Text: text})
 	return b
+}
+
+// exitedEvent is the terminal EventExited body; Type discriminates the frame.
+type exitedEvent struct {
+	Type string `json:"type"`
 }
 
 func exitedPayload() json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"type": EventExited})
+	b, _ := json.Marshal(exitedEvent{Type: EventExited})
 	return b
+}
+
+// inboundEvent is the EventInbound audit body the transcript tailer appends when a
+// typed turn lands; Type discriminates the frame.
+type inboundEvent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 func inboundPayload(text string) json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"type": EventInbound, "text": text})
+	b, _ := json.Marshal(inboundEvent{Type: EventInbound, Text: text})
 	return b
 }
 
+// spawnedEvent is the EventSpawned body appended when an agent is created; Type
+// discriminates the frame.
+type spawnedEvent struct {
+	Type     string `json:"type"`
+	AgentID  string `json:"agent_id"`
+	Backend  string `json:"backend"`
+	Terminal string `json:"terminal"`
+}
+
 func spawnedPayload(ag agentRow) json.RawMessage {
-	b, _ := json.Marshal(map[string]string{
-		"type": EventSpawned, "agent_id": ag.ID, "backend": string(ag.Backend), "terminal": ag.TerminalHandle,
+	b, _ := json.Marshal(spawnedEvent{
+		Type: EventSpawned, AgentID: ag.ID, Backend: string(ag.Backend), Terminal: ag.TerminalHandle,
 	})
 	return b
 }
@@ -207,9 +235,16 @@ func transportLabel(native bool) string {
 	return "event"
 }
 
-// reportPayload is the EventReport event body an agent's report tool appends: the
-// agent's message and its optional run state. Type discriminates the frame for a
-// stream consumer reading the SSE payload alone.
+// reportRequest is the agent-report inbound request body an agent's report tool
+// sends: the agent's message and its optional run state.
+type reportRequest struct {
+	Text  string `json:"text"`
+	State string `json:"state,omitempty"`
+}
+
+// reportPayload is the EventReport event body the handler appends from a
+// reportRequest. Type discriminates the frame for a stream consumer reading the
+// SSE payload alone.
 type reportPayload struct {
 	Type  string `json:"type"`
 	Text  string `json:"text"`
@@ -221,7 +256,7 @@ type reportPayload struct {
 // and scope (the channel server stamps both), so the agent never needs to know its
 // own subject id. An unresolvable subject is an error.
 func handleReport(hc daemon.HandlerCtx) daemon.Reply {
-	var b reportPayload
+	var b reportRequest
 	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
 		return daemon.Reply{OK: false, Error: "bad agent-report body: " + err.Error()}
 	}
@@ -232,8 +267,7 @@ func handleReport(hc daemon.HandlerCtx) daemon.Reply {
 	if !ok {
 		return daemon.Reply{OK: false, Error: "no subject for session " + hc.Env.Session + " in scope " + hc.Scope}
 	}
-	b.Type = EventReport
-	payload, _ := json.Marshal(b)
+	payload, _ := json.Marshal(reportPayload{Type: EventReport, Text: b.Text, State: b.State})
 	seq, err := hc.Append(hc.Ctx, &event.Event{
 		SubjectID: sub.ID, Origin: event.OriginAgent, Type: EventReport, Payload: payload,
 	})

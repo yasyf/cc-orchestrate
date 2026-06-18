@@ -351,6 +351,38 @@ func TestHandleSpawn(t *testing.T) {
 	}
 }
 
+// TestSpawnedPayloadTerminalKey guards the map→struct conversion of the
+// EventSpawned body: the "terminal" key must survive serialization even when the
+// agent has no terminal handle yet, proving the struct field carries no omitempty.
+func TestSpawnedPayloadTerminalKey(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		ag       agentRow
+		wantTerm string
+	}{
+		{"with terminal handle", agentRow{ID: "a1", Backend: "spawntest", TerminalHandle: "term-1"}, "term-1"},
+		{"empty terminal handle still emits the key", agentRow{ID: "a2", Backend: "spawntest", TerminalHandle: ""}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got map[string]json.RawMessage
+			if err := json.Unmarshal(spawnedPayload(tc.ag), &got); err != nil {
+				t.Fatalf("spawnedPayload produced invalid JSON: %v", err)
+			}
+			raw, ok := got["terminal"]
+			if !ok {
+				t.Fatalf("spawned payload missing \"terminal\" key: %v", got)
+			}
+			var term string
+			if err := json.Unmarshal(raw, &term); err != nil {
+				t.Fatalf("terminal value not a string: %v", err)
+			}
+			if term != tc.wantTerm {
+				t.Errorf("terminal = %q, want %q", term, tc.wantTerm)
+			}
+		})
+	}
+}
+
 func contains(ss []string, want string) bool {
 	for _, s := range ss {
 		if s == want {

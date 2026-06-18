@@ -437,7 +437,7 @@ func TestHandleStatus(t *testing.T) {
 	}
 	want := agentView{
 		ID: "a1", Name: "worker", ProjectID: "p1", Backend: "tmux", Status: "active",
-		State: StateWorking, Activity: "Bash: ls", Tokens: 10,
+		State: string(StateWorking), Activity: "Bash: ls", Tokens: 10,
 		UpdatedAt: "2026-06-16T00:00:00Z", SessionID: "sess-1", Scope: "/s",
 	}
 	if got != want {
