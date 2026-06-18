@@ -16,6 +16,87 @@ import (
 	"github.com/yasyf/cc-interact/subject"
 )
 
+// TestWorkstreamCommandTree asserts the `workstream` group (alias `ws`) carries
+// its four subcommands and their flags, and that `agent spawn` gained --workstream
+// alongside --repo. The tree is built from Root() and never executes a RunE, so it
+// needs no daemon.
+func TestWorkstreamCommandTree(t *testing.T) {
+	root := Root()
+
+	ws, _, err := root.Find([]string{"workstream"})
+	if err != nil || ws.Name() != "workstream" {
+		t.Fatalf("Find(workstream) = %v, %v", ws, err)
+	}
+	if !ws.HasAlias("ws") {
+		t.Errorf("workstream missing alias ws; aliases=%v", ws.Aliases)
+	}
+
+	for _, tc := range []struct {
+		sub   string
+		flags []string
+	}{
+		{"list", []string{"repo"}},
+		{"create", []string{"repo", "branch"}},
+		{"activate", []string{"repo"}},
+		{"kill", []string{"repo"}},
+	} {
+		t.Run("workstream "+tc.sub, func(t *testing.T) {
+			sub, _, err := root.Find([]string{"workstream", tc.sub})
+			if err != nil || sub.Name() != tc.sub {
+				t.Fatalf("Find(workstream %s) = %v, %v", tc.sub, sub, err)
+			}
+			for _, f := range tc.flags {
+				if sub.Flags().Lookup(f) == nil {
+					t.Errorf("workstream %s missing --%s flag", tc.sub, f)
+				}
+			}
+		})
+	}
+
+	spawn, _, err := root.Find([]string{"agent", "spawn"})
+	if err != nil || spawn.Name() != "spawn" {
+		t.Fatalf("Find(agent spawn) = %v, %v", spawn, err)
+	}
+	for _, f := range []string{"repo", "workstream", "sprint"} {
+		if spawn.Flags().Lookup(f) == nil {
+			t.Errorf("agent spawn missing --%s flag", f)
+		}
+	}
+}
+
+// TestSprintCommandTree asserts the `sprint` group carries its three subcommands,
+// each gated by a --workstream flag. The tree is built from Root() and never
+// executes a RunE, so it needs no daemon.
+func TestSprintCommandTree(t *testing.T) {
+	root := Root()
+
+	sprint, _, err := root.Find([]string{"sprint"})
+	if err != nil || sprint.Name() != "sprint" {
+		t.Fatalf("Find(sprint) = %v, %v", sprint, err)
+	}
+
+	for _, tc := range []struct {
+		sub   string
+		flags []string
+	}{
+		{"list", []string{"workstream"}},
+		{"create", []string{"workstream"}},
+		{"activate", []string{"workstream"}},
+	} {
+		t.Run("sprint "+tc.sub, func(t *testing.T) {
+			sub, _, err := root.Find([]string{"sprint", tc.sub})
+			if err != nil || sub.Name() != tc.sub {
+				t.Fatalf("Find(sprint %s) = %v, %v", tc.sub, sub, err)
+			}
+			for _, f := range tc.flags {
+				if sub.Flags().Lookup(f) == nil {
+					t.Errorf("sprint %s missing --%s flag", tc.sub, f)
+				}
+			}
+		})
+	}
+}
+
 // TestAgentWatchObservesReport proves the parent watch streams an agent's
 // orchestrate.report event (Origin=agent). streamAgent builds its StreamSource with
 // a zero-value ExcludeOrigin, so the observer sees every origin; under cc-interact

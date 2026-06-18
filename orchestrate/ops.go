@@ -16,18 +16,33 @@ import (
 	"github.com/yasyf/cc-interact/event"
 
 	"github.com/yasyf/cc-orchestrate/backend"
+	"github.com/yasyf/cc-orchestrate/ccnotes"
+	"github.com/yasyf/cc-orchestrate/worktree"
 )
 
-// slugInvalid collapses every run of non-slug characters in a project name to a
-// single hyphen when deriving a project's canonical id.
+// slugInvalid collapses every run of non-slug characters in a repo name to a
+// single hyphen when deriving a repo's canonical id.
 var slugInvalid = regexp.MustCompile(`[^a-z0-9]+`)
+
+// Config keys persisted in the config table that record the orchestrator's
+// current selection, the defaults an agent spawn falls back through.
+const (
+	configBackend          = "backend"
+	configActiveRepo       = "active-repo"
+	configActiveWorkstream = "active-workstream"
+	configActiveSprint     = "active-sprint"
+)
+
+// defaultSprintName is the name of the default sprint auto-created with every
+// workstream — the planning group an agent spawns into when no sprint is named.
+const defaultSprintName = "main"
 
 // agentView is the JSON shape every agent-facing op returns: the persisted agent
 // fields a parent inspects, flattened from agentRow.
 type agentView struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	ProjectID string `json:"project_id"`
+	SprintID  string `json:"sprint_id"`
 	Backend   string `json:"backend"`
 	Status    string `json:"status"`
 	State     string `json:"state"`
@@ -40,7 +55,7 @@ type agentView struct {
 
 func newAgentView(a agentRow) agentView {
 	return agentView{
-		ID: a.ID, Name: a.Name, ProjectID: a.ProjectID, Backend: string(a.Backend),
+		ID: a.ID, Name: a.Name, SprintID: a.SprintID, Backend: string(a.Backend),
 		Status: string(a.Status), State: string(a.State), Activity: a.Activity, Tokens: a.Tokens,
 		UpdatedAt: a.UpdatedAt, SessionID: a.SessionID, Scope: a.Scope,
 	}
@@ -134,25 +149,27 @@ func handleStatus(hc daemon.HandlerCtx) daemon.Reply {
 }
 
 // handleList answers agent-list with every agent, optionally filtered to one
-// project resolved by id or name. An absent body lists all.
+// repo resolved by id or name. An absent body lists all.
 func handleList(hc daemon.HandlerCtx) daemon.Reply {
 	var b struct {
-		Project string `json:"project"`
+		Repo string `json:"repo"`
 	}
 	if len(hc.Env.Body) > 0 {
 		if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
 			return daemon.Reply{OK: false, Error: "bad agent-list body: " + err.Error()}
 		}
 	}
-	filter := b.Project
-	if filter != "" {
-		proj, err := getProject(hc.Ctx, hc.DB, b.Project)
-		if err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+	var agents []agentRow
+	var err error
+	if b.Repo != "" {
+		repo, repoErr := getRepo(hc.Ctx, hc.DB, b.Repo)
+		if repoErr != nil {
+			return daemon.Reply{OK: false, Error: repoErr.Error()}
 		}
-		filter = proj.ID
+		agents, err = listRepoAgents(hc.Ctx, hc.DB, repo.ID)
+	} else {
+		agents, err = listAgents(hc.Ctx, hc.DB, "")
 	}
-	agents, err := listAgents(hc.Ctx, hc.DB, filter)
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
@@ -293,43 +310,167 @@ func handleConfigSet(hc daemon.HandlerCtx) daemon.Reply {
 	return daemon.Reply{OK: true}
 }
 
-// projectView is the JSON shape every project-facing op returns, flattened from
-// projectRow so a parent never sees the internal column names.
-type projectView struct {
+// repoView is the JSON shape every repo-facing op returns, flattened from
+// repoRow so a parent never sees the internal column names.
+type repoView struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Backend   string `json:"backend"`
-	Workspace string `json:"workspace"`
 	Cwd       string `json:"cwd"`
 	Status    string `json:"status"`
 	CreatedAt string `json:"created_at"`
 }
 
-func newProjectView(p projectRow) projectView {
-	return projectView{
-		ID: p.ID, Name: p.Name, Backend: string(p.Backend), Workspace: p.WorkspaceHandle,
+func newRepoView(p repoRow) repoView {
+	return repoView{
+		ID: p.ID, Name: p.Name, Backend: string(p.Backend),
 		Cwd: p.Cwd, Status: string(p.Status), CreatedAt: p.CreatedAt,
 	}
 }
 
-// projectSlug derives a project's stable, unique canonical id from its name: the
-// name slugified, plus a short uuid suffix so two projects of the same name never
-// collide on the primary key.
-func projectSlug(name string) string {
+// workstreamView is the JSON shape every workstream-facing op returns, flattened
+// from workstreamRow so a parent never sees the internal column names.
+type workstreamView struct {
+	ID        string `json:"id"`
+	RepoID    string `json:"repo_id"`
+	Name      string `json:"name"`
+	Backend   string `json:"backend"`
+	Branch    string `json:"branch"`
+	Worktree  string `json:"worktree"`
+	IsPrimary bool   `json:"is_primary"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+}
+
+func newWorkstreamView(w workstreamRow) workstreamView {
+	return workstreamView{
+		ID: w.ID, RepoID: w.RepoID, Name: w.Name, Backend: string(w.Backend),
+		Branch: w.Branch, Worktree: w.Worktree, IsPrimary: w.IsPrimary,
+		Status: string(w.Status), CreatedAt: w.CreatedAt,
+	}
+}
+
+// sprintView is the JSON shape every sprint-facing op returns, flattened from
+// sprintRow so a parent never sees the internal column names.
+type sprintView struct {
+	ID           string `json:"id"`
+	WorkstreamID string `json:"workstream_id"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"created_at"`
+}
+
+func newSprintView(sp sprintRow) sprintView {
+	return sprintView{
+		ID: sp.ID, WorkstreamID: sp.WorkstreamID, Name: sp.Name,
+		Status: string(sp.Status), CreatedAt: sp.CreatedAt,
+	}
+}
+
+// slugID derives a stable, unique canonical id from a display name: the name
+// slugified, plus a short uuid suffix so two records of the same name never
+// collide on the primary key. fallback is used when the name has no slug
+// characters.
+func slugID(name, fallback string) string {
 	base := strings.Trim(slugInvalid.ReplaceAllString(strings.ToLower(name), "-"), "-")
 	if base == "" {
-		base = "project"
+		base = fallback
 	}
 	return base + "-" + uuid.NewString()[:8]
 }
 
-// resolveBackend picks the backend for a project: the explicit name, else the
+func repoSlug(name string) string       { return slugID(name, "repo") }
+func workstreamSlug(name string) string { return slugID(name, "workstream") }
+func sprintSlug(name string) string     { return slugID(name, "sprint") }
+
+// resolveRepoID resolves a repo reference to its canonical id, returning "" when ref
+// is empty so a by-name lookup downstream stays unscoped. It is the shared
+// repo-scoping step the workstream and sprint ops thread into their by-name lookups.
+func resolveRepoID(hc daemon.HandlerCtx, ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+	repo, err := getRepo(hc.Ctx, hc.DB, ref)
+	if err != nil {
+		return "", err
+	}
+	return repo.ID, nil
+}
+
+// resolveWorkstreamRef resolves a workstream by id or name, scoping a by-name lookup
+// to repoRef's repo when repoRef is set so two repos may hold a workstream of the
+// same name without colliding.
+func resolveWorkstreamRef(hc daemon.HandlerCtx, ref, repoRef string) (workstreamRow, error) {
+	repoID, err := resolveRepoID(hc, repoRef)
+	if err != nil {
+		return workstreamRow{}, err
+	}
+	return getWorkstream(hc.Ctx, hc.DB, ref, repoID)
+}
+
+// createDefaultSprint inserts a workstream's default sprint — the planning group an
+// agent spawns into when no sprint is named — named defaultSprintName and active,
+// bound to ccnotesSprint (empty when cc-notes is not in play). It is the shared step
+// both handleRepoCreate (for the primary workstream) and handleWorkstreamCreate run
+// right after persisting their workstream row.
+func createDefaultSprint(ctx context.Context, db *sql.DB, workstreamID, ccnotesSprint string) error {
+	return insertSprint(ctx, db, sprintRow{
+		ID: sprintSlug(defaultSprintName), WorkstreamID: workstreamID,
+		Name: defaultSprintName, CCNotesSprint: ccnotesSprint, Status: StatusActive, CreatedAt: nowStamp(),
+	})
+}
+
+// provisionCCNotes provisions a cc-notes project for a new workstream and a sprint
+// for its default sprint, when cc-notes is enabled for the repo at repoRoot. It
+// returns the project and default-sprint ids (both empty when cc-notes is not in
+// play, so the caller stores empty bindings and skips every cc-notes call).
+// projectName titles the project; the sprint is titled defaultSprintName. It is the
+// shared cc-notes step both handleRepoCreate (primary workstream) and
+// handleWorkstreamCreate run before persisting their workstream row, so a cc-notes
+// failure surfaces before the local insert and leaves the row uncreated.
+func provisionCCNotes(ctx context.Context, repoRoot, projectName string) (project, sprint string, err error) {
+	if !ccnotes.Enabled(ctx, repoRoot) {
+		return "", "", nil
+	}
+	project, err = ccnotes.CreateProject(ctx, repoRoot, projectName)
+	if err != nil {
+		return "", "", err
+	}
+	sprint, err = ccnotes.CreateSprint(ctx, repoRoot, project, defaultSprintName)
+	if err != nil {
+		return "", "", err
+	}
+	return project, sprint, nil
+}
+
+// colocateJJ colocates an independent jj repo inside path when repoRoot tracks with
+// jj, so a worktree on a jj-managed repo gets its own jj store; it is a no-op for a
+// plain git repo. path must be the worktree itself, not repoRoot.
+func colocateJJ(ctx context.Context, repoRoot, path string) error {
+	if !worktree.UsesJJ(repoRoot) {
+		return nil
+	}
+	return worktree.InitJJ(ctx, path)
+}
+
+// pathComponent sanitizes a workstream name into a single filesystem path
+// component (no slashes, lowercased), so a worktree directory derived from a
+// branchy name like "feature/x" stays one level deep under the worktrees base.
+func pathComponent(name string) string {
+	base := strings.Trim(slugInvalid.ReplaceAllString(strings.ToLower(name), "-"), "-")
+	if base == "" {
+		base = "workstream"
+	}
+	return base
+}
+
+// resolveBackend picks the backend for a repo: the explicit name, else the
 // persisted selection, else the first available one. It errors when an explicit
 // or selected backend is unknown, or when none is available.
 func resolveBackend(hc daemon.HandlerCtx, explicit string) (backend.Backend, backend.BackendName, error) {
 	name := backend.BackendName(explicit)
 	if name == "" {
-		value, found, err := getConfig(hc.Ctx, hc.DB, "backend")
+		value, found, err := getConfig(hc.Ctx, hc.DB, configBackend)
 		if err != nil {
 			return nil, "", err
 		}
@@ -355,17 +496,23 @@ func resolveBackend(hc daemon.HandlerCtx, explicit string) (backend.Backend, bac
 	return b, b.Name(), nil
 }
 
-// handleProjectCreate answers project-create: it resolves the backend, creates
-// the backend workspace, persists the project row keyed by a slug of its name,
-// and reports the new id, workspace handle, and backend.
-func handleProjectCreate(hc daemon.HandlerCtx) daemon.Reply {
+// handleRepoCreate answers repo-create: it resolves the backend, forks the repo's
+// primary workstream backend workspace and provisions its cc-notes bindings, and only
+// once those succeed persists the repo row keyed by a slug of its name, the primary
+// workstream bound to that workspace, and the workstream's own default sprint — so a
+// backend or cc-notes failure never orphans a repo row. The primary workstream tracks
+// the repo's current branch: its worktree is the repo root for a backend cc-orchestrate
+// drives with git, or the backend's own forked worktree for a ManagesWorktree backend
+// (superset). It reports the new repo id, the primary workstream's workspace handle,
+// and the backend.
+func handleRepoCreate(hc daemon.HandlerCtx) daemon.Reply {
 	var b struct {
 		Name    string `json:"name"`
 		Backend string `json:"backend"`
 		Cwd     string `json:"cwd"`
 	}
 	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad project-create body: " + err.Error()}
+		return daemon.Reply{OK: false, Error: "bad repo-create body: " + err.Error()}
 	}
 	bk, bname, err := resolveBackend(hc, b.Backend)
 	if err != nil {
@@ -378,30 +525,55 @@ func handleProjectCreate(hc daemon.HandlerCtx) daemon.Reply {
 	if !filepath.IsAbs(cwd) {
 		cwd = filepath.Join(hc.Scope, cwd)
 	}
-	handle, err := bk.CreateProject(hc.Ctx, backend.ProjectSpec{Name: b.Name, Cwd: cwd})
+	branch, err := worktree.CurrentBranch(hc.Ctx, cwd)
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	p := projectRow{
-		ID: projectSlug(b.Name), Name: b.Name, Backend: bname, WorkspaceHandle: handle.ID,
-		Cwd: cwd, Status: StatusActive, CreatedAt: nowStamp(),
-	}
-	if err := insertProject(hc.Ctx, hc.DB, p); err != nil {
+	handle, err := bk.CreateWorkstream(hc.Ctx, backend.WorkstreamSpec{Name: branch, Cwd: cwd, RepoCwd: cwd, Branch: branch})
+	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	out, _ := json.Marshal(map[string]string{"project_id": p.ID, "workspace": handle.ID, "backend": string(bname)})
+	ccProject, ccSprint, err := provisionCCNotes(hc.Ctx, cwd, b.Name)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	// A ManagesWorktree backend owns its own forked worktree; adopt the path it
+	// returns. Every other backend's primary workstream is the repo root itself.
+	worktreePath := cwd
+	if bk.Caps().Has(backend.ManagesWorktree) {
+		worktreePath = handle.Worktree
+	}
+	p := repoRow{
+		ID: repoSlug(b.Name), Name: b.Name, Backend: bname,
+		Cwd: cwd, Status: StatusActive, CreatedAt: nowStamp(),
+	}
+	if err := insertRepo(hc.Ctx, hc.DB, p); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	w := workstreamRow{
+		ID: workstreamSlug(branch), RepoID: p.ID, Name: branch, Backend: bname,
+		WorkspaceHandle: handle.ID, Branch: branch, Worktree: worktreePath, IsPrimary: true,
+		CCNotesProject: ccProject, Status: StatusActive, CreatedAt: nowStamp(),
+	}
+	if err := insertWorkstream(hc.Ctx, hc.DB, w); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := createDefaultSprint(hc.Ctx, hc.DB, w.ID, ccSprint); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	out, _ := json.Marshal(map[string]string{"repo_id": p.ID, "workspace": handle.ID, "backend": string(bname)})
 	return daemon.Reply{OK: true, Body: out}
 }
 
-// handleProjectList answers project-list with every project's flattened view.
-func handleProjectList(hc daemon.HandlerCtx) daemon.Reply {
-	projects, err := listProjects(hc.Ctx, hc.DB)
+// handleRepoList answers repo-list with every repo's flattened view.
+func handleRepoList(hc daemon.HandlerCtx) daemon.Reply {
+	repos, err := listRepos(hc.Ctx, hc.DB)
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	views := make([]projectView, len(projects))
-	for i, p := range projects {
-		views[i] = newProjectView(p)
+	views := make([]repoView, len(repos))
+	for i, p := range repos {
+		views[i] = newRepoView(p)
 	}
 	body, err := json.Marshal(views)
 	if err != nil {
@@ -410,42 +582,59 @@ func handleProjectList(hc daemon.HandlerCtx) daemon.Reply {
 	return daemon.Reply{OK: true, Body: body}
 }
 
-// handleProjectActivate answers project-activate: it resolves the project (by id
-// or name, erroring when missing) and marks it active.
-func handleProjectActivate(hc daemon.HandlerCtx) daemon.Reply {
+// handleRepoActivate answers repo-activate: it resolves the repo (by id
+// or name, erroring when missing), marks it active, and records it as the active
+// repo so an agent spawn with no repo or workstream falls back to its primary
+// workstream. Activating a repo resets the precedence chain — it clears the
+// higher-precedence active workstream and sprint — so the most recent activation
+// wins and a stale active sprint can never silently misroute a bare spawn.
+func handleRepoActivate(hc daemon.HandlerCtx) daemon.Reply {
 	var b struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad project-activate body: " + err.Error()}
+		return daemon.Reply{OK: false, Error: "bad repo-activate body: " + err.Error()}
 	}
-	proj, err := getProject(hc.Ctx, hc.DB, b.ID)
+	repo, err := getRepo(hc.Ctx, hc.DB, b.ID)
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	if err := setProjectStatus(hc.Ctx, hc.DB, proj.ID, StatusActive); err != nil {
+	if err := setRepoStatus(hc.Ctx, hc.DB, repo.ID, StatusActive); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	out, _ := json.Marshal(map[string]string{"project_id": proj.ID, "status": string(StatusActive)})
+	if err := setConfig(hc.Ctx, hc.DB, configActiveRepo, repo.ID); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := clearConfig(hc.Ctx, hc.DB, configActiveWorkstream); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := clearConfig(hc.Ctx, hc.DB, configActiveSprint); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	out, _ := json.Marshal(map[string]string{"repo_id": repo.ID, "status": string(StatusActive)})
 	return daemon.Reply{OK: true, Body: out}
 }
 
 // backendAgentHandle resolves an agent's backend handle: its terminal addressed
-// within the project's backend workspace. The handle's ProjectID is the backend
-// WorkspaceHandle (what cmux's --workspace and zellij's --session expect), not the
-// orchestrate project id stored on the agent row — those are different values, and
-// addressing the terminal needs the backend one.
+// within its workstream's backend workspace, reached through the agent's sprint. The
+// handle's WorkstreamID is the backend WorkspaceHandle (what cmux's --workspace and
+// zellij's --session expect), not the orchestrate workstream id — those are
+// different values, and addressing the terminal needs the backend one.
 func backendAgentHandle(hc daemon.HandlerCtx, ag agentRow) (backend.AgentHandle, error) {
-	proj, err := getProject(hc.Ctx, hc.DB, ag.ProjectID)
+	sprint, err := getSprint(hc.Ctx, hc.DB, ag.SprintID, "")
+	if err != nil {
+		return backend.AgentHandle{}, err
+	}
+	ws, err := getWorkstream(hc.Ctx, hc.DB, sprint.WorkstreamID, "")
 	if err != nil {
 		return backend.AgentHandle{}, err
 	}
 	return backend.AgentHandle{
-		Backend:   ag.Backend,
-		ID:        ag.TerminalHandle,
-		ProjectID: proj.WorkspaceHandle,
-		Name:      ag.Name,
-		SessionID: ag.SessionID,
+		Backend:      ag.Backend,
+		ID:           ag.TerminalHandle,
+		WorkstreamID: ws.WorkspaceHandle,
+		Name:         ag.Name,
+		SessionID:    ag.SessionID,
 	}, nil
 }
 
@@ -465,7 +654,7 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
 	if ag.Status != StatusActive {
-		// Already terminal (e.g. its project was killed while a caller held the id):
+		// Already terminal (e.g. its repo was killed while a caller held the id):
 		// idempotent no-op, never a second EventExited or a re-kill of a dead terminal.
 		out, _ := json.Marshal(map[string]string{"agent_id": ag.ID, "status": string(ag.Status)})
 		return daemon.Reply{OK: true, Body: out}
@@ -491,7 +680,7 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 
 // softExitAgent stops an agent's transcript tailer, marks its row exited, and
 // appends a terminal OriginSystem EventExited. It is the shared teardown for an
-// agent the backend no longer hosts — the project-kill cascade and the boot
+// agent the backend no longer hosts — the repo-kill cascade and the boot
 // reconcile prune — and never calls the backend itself.
 func softExitAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow) error {
 	tailers.stop(ag.ID)
@@ -504,13 +693,26 @@ func softExitAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, 
 	return err
 }
 
-// markProjectKilled soft-exits every active agent of a project, then marks the
-// project killed. It never calls the backend: a caller that must also tear down
-// the workspace calls bk.KillProject first and surfaces its error after these row
-// writes (mirroring handleAgentKill). Reused by boot reconcile when a workspace
-// has vanished out-of-band.
-func markProjectKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, proj projectRow) error {
-	agents, err := listAgents(ctx, db, proj.ID)
+// clearActiveSelection drops the active-* config key when its stored id is the
+// entity being killed, so a killed repo, workstream, or sprint can never linger as a
+// bare-spawn fallback target. It mirrors the terminal-state guard in handleAgentKill.
+func clearActiveSelection(ctx context.Context, db *sql.DB, key, killedID string) error {
+	id, found, err := getConfig(ctx, db, key)
+	if err != nil {
+		return err
+	}
+	if found && id == killedID {
+		return clearConfig(ctx, db, key)
+	}
+	return nil
+}
+
+// markSprintKilled soft-exits every active agent of a sprint, then marks the sprint
+// killed and drops it as the active sprint. Like markWorkstreamKilled it never calls
+// the backend nor removes a worktree — a sprint has none, it shares its workstream's.
+// Reused by the repo- and workstream-kill cascades and boot reconcile.
+func markSprintKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, sp sprintRow) error {
+	agents, err := listAgents(ctx, db, sp.ID)
 	if err != nil {
 		return err
 	}
@@ -522,39 +724,393 @@ func markProjectKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFu
 			return err
 		}
 	}
-	return setProjectStatus(ctx, db, proj.ID, StatusKilled)
+	if err := setSprintStatus(ctx, db, sp.ID, StatusKilled); err != nil {
+		return err
+	}
+	return clearActiveSelection(ctx, db, configActiveSprint, sp.ID)
 }
 
-// handleProjectKill answers project-kill: it tears down the project's backend
-// workspace (which kills all its terminals at once), cascades its agents to exited,
-// and marks the project killed. The backend-kill error is surfaced after the row
-// mutations, mirroring handleAgentKill, so a half-dead workspace never lingers
-// active.
-func handleProjectKill(hc daemon.HandlerCtx) daemon.Reply {
+// markWorkstreamKilled cascades a workstream to killed: every active sprint is marked
+// killed and its agents exited, then the workstream itself, dropping it as the active
+// workstream. It never calls the backend nor removes the worktree: a caller that must
+// also tear those down
+// (workstream-kill) does so first and surfaces the error after these row writes
+// (mirroring handleAgentKill). Reused by the repo-kill cascade and boot reconcile
+// when a workspace has vanished out-of-band.
+func markWorkstreamKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ws workstreamRow) error {
+	sprints, err := listSprints(ctx, db, ws.ID)
+	if err != nil {
+		return err
+	}
+	for _, sp := range sprints {
+		if sp.Status != StatusActive {
+			continue
+		}
+		if err := markSprintKilled(ctx, db, appendFn, sp); err != nil {
+			return err
+		}
+	}
+	if err := setWorkstreamStatus(ctx, db, ws.ID, StatusKilled); err != nil {
+		return err
+	}
+	return clearActiveSelection(ctx, db, configActiveWorkstream, ws.ID)
+}
+
+// markRepoKilled cascades a repo to killed: every workstream is marked killed, each
+// workstream's sprints killed and their agents exited, then the repo itself, dropping
+// it as the active repo. It never calls the backend nor removes a worktree — a repo
+// kill is a soft, logical teardown; real backend and worktree teardown is
+// per-workstream (workstream-kill).
+func markRepoKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, repo repoRow) error {
+	wss, err := listWorkstreams(ctx, db, repo.ID)
+	if err != nil {
+		return err
+	}
+	for _, ws := range wss {
+		if ws.Status != StatusActive {
+			continue
+		}
+		if err := markWorkstreamKilled(ctx, db, appendFn, ws); err != nil {
+			return err
+		}
+	}
+	if err := setRepoStatus(ctx, db, repo.ID, StatusKilled); err != nil {
+		return err
+	}
+	return clearActiveSelection(ctx, db, configActiveRepo, repo.ID)
+}
+
+// handleRepoKill answers repo-kill: a soft, logical teardown that cascades every
+// workstream to killed, their sprints to killed, and their agents to exited, then
+// marks the repo killed. It never calls the backend nor removes a worktree — that
+// real teardown is per-workstream (workstream-kill).
+func handleRepoKill(hc daemon.HandlerCtx) daemon.Reply {
 	var b struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad project-kill body: " + err.Error()}
+		return daemon.Reply{OK: false, Error: "bad repo-kill body: " + err.Error()}
 	}
-	proj, err := getProject(hc.Ctx, hc.DB, b.ID)
+	repo, err := getRepo(hc.Ctx, hc.DB, b.ID)
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	bk, ok := backend.Get(proj.Backend)
-	if !ok {
-		return daemon.Reply{OK: false, Error: "unknown backend: " + string(proj.Backend)}
+	if err := markRepoKilled(hc.Ctx, hc.DB, hc.Append, repo); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	killErr := bk.KillProject(hc.Ctx, backend.ProjectHandle{
-		Backend: proj.Backend, ID: proj.WorkspaceHandle, Name: proj.Name, Cwd: proj.Cwd,
+	out, _ := json.Marshal(map[string]string{"repo_id": repo.ID, "status": string(StatusKilled)})
+	return daemon.Reply{OK: true, Body: out}
+}
+
+// handleWorkstreamCreate answers workstream-create: it resolves the repo, then
+// branches on whether the backend manages its own worktree. A ManagesWorktree
+// backend (superset) forks its own worktree off the branch and cc-orchestrate
+// adopts the path it returns; every other backend takes a worktree cc-orchestrate
+// creates with git (an independent jj repo colocated inside it when the repo tracks
+// with jj) and runs in it as its cwd. Either path yields exactly one worktree per
+// workstream. The new workstream gets its own default sprint, so a simple flow never
+// touches sprints.
+func handleWorkstreamCreate(hc daemon.HandlerCtx) daemon.Reply {
+	var b struct {
+		Repo   string `json:"repo"`
+		Name   string `json:"name"`
+		Branch string `json:"branch"`
+	}
+	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+		return daemon.Reply{OK: false, Error: "bad workstream-create body: " + err.Error()}
+	}
+	repo, err := getRepo(hc.Ctx, hc.DB, b.Repo)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	bk, ok := backend.Get(repo.Backend)
+	if !ok {
+		return daemon.Reply{OK: false, Error: "unknown backend: " + string(repo.Backend)}
+	}
+	if err := bk.EnsureReady(hc.Ctx); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	branch := cmp.Or(b.Branch, b.Name)
+	repoRoot := repo.Cwd
+
+	var path, workspaceHandle string
+	if bk.Caps().Has(backend.ManagesWorktree) {
+		handle, err := bk.CreateWorkstream(hc.Ctx, backend.WorkstreamSpec{Name: b.Name, Cwd: repoRoot, RepoCwd: repoRoot, Branch: branch})
+		if err != nil {
+			return daemon.Reply{OK: false, Error: err.Error()}
+		}
+		path, workspaceHandle = handle.Worktree, handle.ID
+		if err := colocateJJ(hc.Ctx, repoRoot, path); err != nil {
+			return daemon.Reply{OK: false, Error: err.Error()}
+		}
+	} else {
+		dest := filepath.Join(worktreesBase(), repo.ID, pathComponent(b.Name))
+		path, err = worktree.Add(hc.Ctx, repoRoot, dest, branch)
+		if err != nil {
+			return daemon.Reply{OK: false, Error: err.Error()}
+		}
+		if err := colocateJJ(hc.Ctx, repoRoot, path); err != nil {
+			return daemon.Reply{OK: false, Error: err.Error()}
+		}
+		handle, err := bk.CreateWorkstream(hc.Ctx, backend.WorkstreamSpec{Name: b.Name, Cwd: path, RepoCwd: repoRoot, Branch: branch})
+		if err != nil {
+			return daemon.Reply{OK: false, Error: err.Error()}
+		}
+		workspaceHandle = handle.ID
+	}
+
+	ccProject, ccSprint, err := provisionCCNotes(hc.Ctx, repoRoot, b.Name)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	w := workstreamRow{
+		ID: workstreamSlug(b.Name), RepoID: repo.ID, Name: b.Name, Backend: repo.Backend,
+		WorkspaceHandle: workspaceHandle, Branch: branch, Worktree: path, IsPrimary: false,
+		CCNotesProject: ccProject, Status: StatusActive, CreatedAt: nowStamp(),
+	}
+	if err := insertWorkstream(hc.Ctx, hc.DB, w); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := createDefaultSprint(hc.Ctx, hc.DB, w.ID, ccSprint); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	out, _ := json.Marshal(map[string]string{
+		"workstream_id": w.ID, "repo_id": repo.ID, "workspace": workspaceHandle, "branch": branch, "worktree": path,
 	})
-	if err := markProjectKilled(hc.Ctx, hc.DB, hc.Append, proj); err != nil {
+	return daemon.Reply{OK: true, Body: out}
+}
+
+// handleWorkstreamList answers workstream-list with every workstream's flattened
+// view, optionally filtered to one repo resolved by id or name.
+func handleWorkstreamList(hc daemon.HandlerCtx) daemon.Reply {
+	var b struct {
+		Repo string `json:"repo"`
+	}
+	if len(hc.Env.Body) > 0 {
+		if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+			return daemon.Reply{OK: false, Error: "bad workstream-list body: " + err.Error()}
+		}
+	}
+	filter := ""
+	if b.Repo != "" {
+		repo, err := getRepo(hc.Ctx, hc.DB, b.Repo)
+		if err != nil {
+			return daemon.Reply{OK: false, Error: err.Error()}
+		}
+		filter = repo.ID
+	}
+	wss, err := listWorkstreams(hc.Ctx, hc.DB, filter)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	views := make([]workstreamView, len(wss))
+	for i, w := range wss {
+		views[i] = newWorkstreamView(w)
+	}
+	body, err := json.Marshal(views)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	return daemon.Reply{OK: true, Body: body}
+}
+
+// handleWorkstreamActivate answers workstream-activate: it resolves the workstream
+// (by id or name, scoped to a repo when given to disambiguate; erroring when
+// missing), marks it active, and records it as the active workstream so an agent
+// spawn with no explicit target lands in it. Activating a workstream resets the
+// precedence chain — it sets the active repo to the workstream's repo and clears the
+// higher-precedence active sprint — so the most recent activation wins.
+func handleWorkstreamActivate(hc daemon.HandlerCtx) daemon.Reply {
+	var b struct {
+		ID   string `json:"id"`
+		Repo string `json:"repo"`
+	}
+	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+		return daemon.Reply{OK: false, Error: "bad workstream-activate body: " + err.Error()}
+	}
+	ws, err := resolveWorkstreamRef(hc, b.ID, b.Repo)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := setWorkstreamStatus(hc.Ctx, hc.DB, ws.ID, StatusActive); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := setConfig(hc.Ctx, hc.DB, configActiveWorkstream, ws.ID); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := setConfig(hc.Ctx, hc.DB, configActiveRepo, ws.RepoID); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := clearConfig(hc.Ctx, hc.DB, configActiveSprint); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	out, _ := json.Marshal(map[string]string{"workstream_id": ws.ID, "status": string(StatusActive)})
+	return daemon.Reply{OK: true, Body: out}
+}
+
+// handleWorkstreamKill answers workstream-kill: a real teardown. It tears down the
+// workstream's backend workspace and — for a backend that does not manage its own
+// worktree, and only for a non-primary workstream — removes its git worktree, then
+// cascades its agents to exited and marks the workstream killed. It never removes a
+// primary workstream's worktree (the repo root) nor a ManagesWorktree backend's
+// worktree (the backend owns that and drops it on KillWorkstream). It then cascades
+// the workstream's sprints to killed and their agents to exited. The teardown errors
+// are surfaced after the row mutations, mirroring handleAgentKill, so a half-dead
+// workstream never lingers active.
+func handleWorkstreamKill(hc daemon.HandlerCtx) daemon.Reply {
+	var b struct {
+		ID   string `json:"id"`
+		Repo string `json:"repo"`
+	}
+	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+		return daemon.Reply{OK: false, Error: "bad workstream-kill body: " + err.Error()}
+	}
+	ws, err := resolveWorkstreamRef(hc, b.ID, b.Repo)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	bk, ok := backend.Get(ws.Backend)
+	if !ok {
+		return daemon.Reply{OK: false, Error: "unknown backend: " + string(ws.Backend)}
+	}
+	repo, err := getRepo(hc.Ctx, hc.DB, ws.RepoID)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	killErr := bk.KillWorkstream(hc.Ctx, backend.WorkstreamHandle{
+		Backend: ws.Backend, ID: ws.WorkspaceHandle, Name: ws.Name, Cwd: ws.Worktree, Worktree: ws.Worktree,
+	})
+	var removeErr error
+	if !bk.Caps().Has(backend.ManagesWorktree) && !ws.IsPrimary {
+		removeErr = worktree.Remove(hc.Ctx, repo.Cwd, ws.Worktree)
+	}
+	if err := markWorkstreamKilled(hc.Ctx, hc.DB, hc.Append, ws); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
 	if killErr != nil {
-		return daemon.Reply{OK: false, Error: fmt.Errorf("kill project %q: %w", proj.ID, killErr).Error()}
+		return daemon.Reply{OK: false, Error: fmt.Errorf("kill workstream %q: %w", ws.ID, killErr).Error()}
 	}
-	out, _ := json.Marshal(map[string]string{"project_id": proj.ID, "status": string(StatusKilled)})
+	if removeErr != nil {
+		return daemon.Reply{OK: false, Error: fmt.Errorf("remove worktree for workstream %q: %w", ws.ID, removeErr).Error()}
+	}
+	out, _ := json.Marshal(map[string]string{"workstream_id": ws.ID, "status": string(StatusKilled)})
+	return daemon.Reply{OK: true, Body: out}
+}
+
+// handleSprintCreate answers sprint-create: it resolves the workstream (by id or
+// name, scoped to a repo when given to disambiguate), inserts a new sprint under it,
+// and reports the sprint id. A sprint shares its workstream's worktree — it has no
+// worktree of its own.
+func handleSprintCreate(hc daemon.HandlerCtx) daemon.Reply {
+	var b struct {
+		Workstream string `json:"workstream"`
+		Repo       string `json:"repo"`
+		Name       string `json:"name"`
+	}
+	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+		return daemon.Reply{OK: false, Error: "bad sprint-create body: " + err.Error()}
+	}
+	ws, err := resolveWorkstreamRef(hc, b.Workstream, b.Repo)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	ccSprint := ""
+	if ws.CCNotesProject != "" && ccnotes.Enabled(hc.Ctx, ws.Worktree) {
+		ccSprint, err = ccnotes.CreateSprint(hc.Ctx, ws.Worktree, ws.CCNotesProject, b.Name)
+		if err != nil {
+			return daemon.Reply{OK: false, Error: err.Error()}
+		}
+	}
+	sp := sprintRow{
+		ID: sprintSlug(b.Name), WorkstreamID: ws.ID, Name: b.Name,
+		CCNotesSprint: ccSprint, Status: StatusActive, CreatedAt: nowStamp(),
+	}
+	if err := insertSprint(hc.Ctx, hc.DB, sp); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	out, _ := json.Marshal(map[string]string{"sprint_id": sp.ID, "workstream_id": ws.ID, "name": sp.Name})
+	return daemon.Reply{OK: true, Body: out}
+}
+
+// handleSprintList answers sprint-list with every sprint's flattened view, optionally
+// filtered to one workstream resolved by id or name (scoped to a repo when given).
+func handleSprintList(hc daemon.HandlerCtx) daemon.Reply {
+	var b struct {
+		Workstream string `json:"workstream"`
+		Repo       string `json:"repo"`
+	}
+	if len(hc.Env.Body) > 0 {
+		if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+			return daemon.Reply{OK: false, Error: "bad sprint-list body: " + err.Error()}
+		}
+	}
+	filter := ""
+	if b.Workstream != "" {
+		ws, err := resolveWorkstreamRef(hc, b.Workstream, b.Repo)
+		if err != nil {
+			return daemon.Reply{OK: false, Error: err.Error()}
+		}
+		filter = ws.ID
+	}
+	sprints, err := listSprints(hc.Ctx, hc.DB, filter)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	views := make([]sprintView, len(sprints))
+	for i, sp := range sprints {
+		views[i] = newSprintView(sp)
+	}
+	body, err := json.Marshal(views)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	return daemon.Reply{OK: true, Body: body}
+}
+
+// handleSprintActivate answers sprint-activate: it resolves the sprint (by id or
+// name, scoped to a workstream when given to disambiguate), marks it active, and
+// records it as the active sprint so an agent spawn with no explicit target lands in
+// it. Activating a sprint resets the precedence chain — it sets the active workstream
+// to the sprint's workstream and the active repo to that workstream's repo — so the
+// whole bare-spawn fallback chain points at the most recent activation.
+func handleSprintActivate(hc daemon.HandlerCtx) daemon.Reply {
+	var b struct {
+		ID         string `json:"id"`
+		Workstream string `json:"workstream"`
+		Repo       string `json:"repo"`
+	}
+	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
+		return daemon.Reply{OK: false, Error: "bad sprint-activate body: " + err.Error()}
+	}
+	workstreamID := ""
+	if b.Workstream != "" {
+		ws, err := resolveWorkstreamRef(hc, b.Workstream, b.Repo)
+		if err != nil {
+			return daemon.Reply{OK: false, Error: err.Error()}
+		}
+		workstreamID = ws.ID
+	}
+	sp, err := getSprint(hc.Ctx, hc.DB, b.ID, workstreamID)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	ws, err := getWorkstream(hc.Ctx, hc.DB, sp.WorkstreamID, "")
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := setSprintStatus(hc.Ctx, hc.DB, sp.ID, StatusActive); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := setConfig(hc.Ctx, hc.DB, configActiveSprint, sp.ID); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := setConfig(hc.Ctx, hc.DB, configActiveWorkstream, sp.WorkstreamID); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	if err := setConfig(hc.Ctx, hc.DB, configActiveRepo, ws.RepoID); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
+	out, _ := json.Marshal(map[string]string{"sprint_id": sp.ID, "status": string(StatusActive)})
 	return daemon.Reply{OK: true, Body: out}
 }
 

@@ -195,22 +195,22 @@ type spawnBackend struct {
 func (spawnBackend) Name() backend.BackendName         { return "spawntest" }
 func (spawnBackend) Available() bool                   { return true }
 func (spawnBackend) EnsureReady(context.Context) error { return nil }
-func (spawnBackend) ListProjects(context.Context) ([]backend.ProjectHandle, error) {
+func (spawnBackend) ListWorkstreams(context.Context) ([]backend.WorkstreamHandle, error) {
 	return nil, nil
 }
-func (spawnBackend) CreateProject(context.Context, backend.ProjectSpec) (backend.ProjectHandle, error) {
-	return backend.ProjectHandle{}, nil
+func (spawnBackend) CreateWorkstream(context.Context, backend.WorkstreamSpec) (backend.WorkstreamHandle, error) {
+	return backend.WorkstreamHandle{}, nil
 }
 func (b spawnBackend) Spawn(_ context.Context, spec backend.SpawnSpec) (backend.AgentHandle, error) {
 	*b.spec = spec
 	return backend.AgentHandle{Backend: "spawntest", ID: "term-1", SessionID: spec.SessionID}, nil
 }
-func (spawnBackend) ListAgents(context.Context, backend.ProjectHandle) ([]backend.AgentHandle, error) {
+func (spawnBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
 	return nil, nil
 }
-func (spawnBackend) Kill(context.Context, backend.AgentHandle) error          { return nil }
-func (spawnBackend) KillProject(context.Context, backend.ProjectHandle) error { return nil }
-func (spawnBackend) Caps() backend.Caps                                       { return backend.Caps{} }
+func (spawnBackend) Kill(context.Context, backend.AgentHandle) error                { return nil }
+func (spawnBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error { return nil }
+func (spawnBackend) Caps() backend.Caps                                             { return backend.Caps{} }
 
 func TestHandleSpawn(t *testing.T) {
 	old := pollInterval
@@ -234,11 +234,24 @@ func TestHandleSpawn(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	db := st.DB()
 
-	if err := insertProject(ctx, db, projectRow{
-		ID: "p1", Name: "alpha", Backend: "spawntest", WorkspaceHandle: "ws-1",
+	if err := insertRepo(ctx, db, repoRow{
+		ID: "p1", Name: "alpha", Backend: "spawntest",
 		Cwd: "/tmp/alpha", Status: "active", CreatedAt: "t0",
 	}); err != nil {
-		t.Fatalf("insertProject: %v", err)
+		t.Fatalf("insertRepo: %v", err)
+	}
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "spawntest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/tmp/alpha", IsPrimary: true, Status: "active", CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertWorkstream: %v", err)
+	}
+	// The primary workstream's default sprint: a spawn keyed only to --repo resolves
+	// the repo's primary workstream and then its default sprint.
+	if err := insertSprint(ctx, db, sprintRow{
+		ID: "s1", WorkstreamID: "w1", Name: "main", Status: "active", CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
 	}
 
 	subjects := subject.Resolver{Store: store.NewSubjectStore(db, []string{"active"})}
@@ -252,7 +265,7 @@ func TestHandleSpawn(t *testing.T) {
 		mu.Unlock()
 		return 1, nil
 	}
-	body := mustJSON(t, map[string]string{"project": "p1", "name": "worker", "prompt": "fix it"})
+	body := mustJSON(t, map[string]string{"repo": "p1", "name": "worker", "prompt": "fix it"})
 	hc := daemon.HandlerCtx{
 		Ctx: ctx, Env: daemon.Envelope{Body: body},
 		Window: subject.Window{Session: "parent", ClaudePID: 4242},
@@ -285,7 +298,7 @@ func TestHandleSpawn(t *testing.T) {
 		t.Fatalf("getAgent: %v", err)
 	}
 	want := agentRow{
-		ID: out.AgentID, ProjectID: "p1", Backend: "spawntest", TerminalHandle: "term-1",
+		ID: out.AgentID, SprintID: "s1", Backend: "spawntest", TerminalHandle: "term-1",
 		SessionID: out.AgentID, Scope: "/tmp/alpha", Name: "worker", Prompt: "fix it",
 		SubjectID: out.SubjectID, Status: "active", State: StateUnknown,
 		CreatedAt: ag.CreatedAt,
@@ -408,4 +421,44 @@ func keysOf(m map[string]*tailerCancel) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestHandleSpawnRejectsKilledHierarchy proves a spawn fails loud when any level of
+// the resolved hierarchy — sprint, workstream, or repo — is no longer active, so a
+// live agent can never attach to a soft-killed target. The guard fires before the
+// backend or subject is touched, so no event is ever appended.
+func TestHandleSpawnRejectsKilledHierarchy(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name                           string
+		repoStatus, wsStatus, spStatus LifecycleStatus
+	}{
+		{"killed sprint", StatusActive, StatusActive, StatusKilled},
+		{"killed workstream", StatusActive, StatusKilled, StatusActive},
+		{"killed repo", StatusKilled, StatusActive, StatusActive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newTestDB(t)
+			if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "spawntest", Cwd: "/tmp/a", Status: tc.repoStatus, CreatedAt: "t0"}); err != nil {
+				t.Fatalf("insertRepo: %v", err)
+			}
+			if err := insertWorkstream(ctx, db, workstreamRow{
+				ID: "w1", RepoID: "p1", Name: "main", Backend: "spawntest", WorkspaceHandle: "ws-1",
+				Branch: "main", Worktree: "/tmp/a", IsPrimary: true, Status: tc.wsStatus, CreatedAt: "t0",
+			}); err != nil {
+				t.Fatalf("insertWorkstream: %v", err)
+			}
+			if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: tc.spStatus, CreatedAt: "t0"}); err != nil {
+				t.Fatalf("insertSprint: %v", err)
+			}
+			appendFn := func(context.Context, *event.Event) (int64, error) {
+				t.Fatal("Append must not be called when the hierarchy is not active")
+				return 0, nil
+			}
+			reply := handleSpawn(opCtx(db, mustJSON(t, map[string]string{"sprint": "s1"}), appendFn))
+			if reply.OK || reply.Error == "" {
+				t.Fatalf("reply = %+v, want ok=false for a non-active hierarchy", reply)
+			}
+		})
+	}
 }

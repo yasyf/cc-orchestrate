@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"syscall"
 
 	"github.com/yasyf/cc-interact/cmd"
@@ -37,17 +38,21 @@ const (
 	EventInbound = "orchestrate.inbound" // an inbound user turn observed on the transcript (audit; the child ignores it)
 )
 
-// LifecycleStatus is the lifecycle state stored on a project or agent row. It is a
+// LifecycleStatus is the lifecycle state stored on a repo or agent row. It is a
 // named type so a status field can never be assigned an arbitrary string.
 type LifecycleStatus string
 
 const (
 	StatusActive LifecycleStatus = "active" // running; matches daemon.Config.ActiveStatuses
 	StatusExited LifecycleStatus = "exited" // terminal: the agent's process is gone
-	StatusKilled LifecycleStatus = "killed" // terminal: the project and its workspace were torn down
+	StatusKilled LifecycleStatus = "killed" // terminal: the repo and its workspace were torn down
 )
 
 func appPaths() paths.Paths { return paths.Paths{App: appDir} }
+
+// worktreesBase is the root under which non-primary workstream worktrees live,
+// one subdirectory per repo: ~/.cc-orchestrate/worktrees/<repo-id>/<name>.
+func worktreesBase() string { return filepath.Join(appPaths().StateDir(), "worktrees") }
 
 func newClient() *daemon.Client { return daemon.NewClient(appPaths().SocketPath()) }
 

@@ -17,18 +17,25 @@ import (
 // core ops (health, shutdown, resolve, session-record, guard-edit, channel-ack,
 // status).
 const (
-	opSpawn           daemon.Op = "agent-spawn"
-	opSendMessage     daemon.Op = "agent-send-message"
-	opReport          daemon.Op = "agent-report"
-	opStatus          daemon.Op = "agent-status"
-	opList            daemon.Op = "agent-list"
-	opAgentKill       daemon.Op = "agent-kill"
-	opProjectCreate   daemon.Op = "project-create"
-	opProjectList     daemon.Op = "project-list"
-	opProjectActivate daemon.Op = "project-activate"
-	opProjectKill     daemon.Op = "project-kill"
-	opConfigGet       daemon.Op = "config-get"
-	opConfigSet       daemon.Op = "config-set"
+	opSpawn              daemon.Op = "agent-spawn"
+	opSendMessage        daemon.Op = "agent-send-message"
+	opReport             daemon.Op = "agent-report"
+	opStatus             daemon.Op = "agent-status"
+	opList               daemon.Op = "agent-list"
+	opAgentKill          daemon.Op = "agent-kill"
+	opRepoCreate         daemon.Op = "repo-create"
+	opRepoList           daemon.Op = "repo-list"
+	opRepoActivate       daemon.Op = "repo-activate"
+	opRepoKill           daemon.Op = "repo-kill"
+	opWorkstreamCreate   daemon.Op = "workstream-create"
+	opWorkstreamList     daemon.Op = "workstream-list"
+	opWorkstreamActivate daemon.Op = "workstream-activate"
+	opWorkstreamKill     daemon.Op = "workstream-kill"
+	opSprintCreate       daemon.Op = "sprint-create"
+	opSprintList         daemon.Op = "sprint-list"
+	opSprintActivate     daemon.Op = "sprint-activate"
+	opConfigGet          daemon.Op = "config-get"
+	opConfigSet          daemon.Op = "config-set"
 )
 
 // tailers is the daemon-lifetime transcript-tailer manager, bound to the serve
@@ -61,7 +68,7 @@ func serve(ctx context.Context) error {
 				return err
 			}
 			db := s.DB()
-			if err := reconcileProjects(ctx, db, s.Append); err != nil {
+			if err := reconcileWorkstreams(ctx, db, s.Append); err != nil {
 				return err
 			}
 			if err := reconcileAgents(ctx, db, s.Append); err != nil {
@@ -86,10 +93,17 @@ func serve(ctx context.Context) error {
 	s.Register(opStatus, handleStatus)
 	s.Register(opList, handleList)
 	s.Register(opAgentKill, handleAgentKill)
-	s.Register(opProjectCreate, handleProjectCreate)
-	s.Register(opProjectList, handleProjectList)
-	s.Register(opProjectActivate, handleProjectActivate)
-	s.Register(opProjectKill, handleProjectKill)
+	s.Register(opRepoCreate, handleRepoCreate)
+	s.Register(opRepoList, handleRepoList)
+	s.Register(opRepoActivate, handleRepoActivate)
+	s.Register(opRepoKill, handleRepoKill)
+	s.Register(opWorkstreamCreate, handleWorkstreamCreate)
+	s.Register(opWorkstreamList, handleWorkstreamList)
+	s.Register(opWorkstreamActivate, handleWorkstreamActivate)
+	s.Register(opWorkstreamKill, handleWorkstreamKill)
+	s.Register(opSprintCreate, handleSprintCreate)
+	s.Register(opSprintList, handleSprintList)
+	s.Register(opSprintActivate, handleSprintActivate)
 	s.Register(opConfigGet, handleConfigGet)
 	s.Register(opConfigSet, handleConfigSet)
 	return s.Serve(ctx)

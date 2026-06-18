@@ -12,34 +12,77 @@ import (
 	"github.com/yasyf/cc-orchestrate/backend"
 )
 
-// projectColumns is the canonical projects read list; nullable columns are
+// repoColumns is the canonical repos read list; nullable columns are
 // coalesced to "" so every scan target is a plain string.
-const projectColumns = `id, name, backend, COALESCE(backend_workspace_handle, ''), cwd, status, created_at`
+const repoColumns = `id, name, backend, cwd, status, created_at`
 
-// agentColumns is the canonical agents read list; nullable columns are coalesced
+// workstreamColumns is the canonical workstreams read list; nullable columns are
+// coalesced to "" so every scan target is a plain string.
+const workstreamColumns = `id, repo_id, name, backend, COALESCE(backend_workspace_handle, ''), ` +
+	`branch, worktree, is_primary, COALESCE(ccnotes_project, ''), status, created_at`
+
+// sprintColumns is the canonical sprints read list; nullable columns are coalesced
 // to "" so every scan target is a plain string.
-const agentColumns = `id, project_id, backend, COALESCE(backend_terminal_handle, ''), ` +
-	`COALESCE(session_id, ''), scope, COALESCE(name, ''), COALESCE(prompt, ''), ` +
-	`COALESCE(subject_id, ''), status, state, COALESCE(activity, ''), tokens, ` +
-	`COALESCE(updated_at, ''), created_at`
+const sprintColumns = `id, workstream_id, name, COALESCE(ccnotes_sprint, ''), status, created_at`
 
-// projectRow is one row of the projects table: an orchestration project bound to
-// a backend workspace.
-type projectRow struct {
+// agentColumns is the canonical agents read list, every column qualified with the
+// agents table so the list stays unambiguous when joined against sprints and
+// workstreams; nullable columns are coalesced to "" so every scan target is a plain
+// string.
+const agentColumns = `agents.id, agents.sprint_id, agents.backend, COALESCE(agents.backend_terminal_handle, ''), ` +
+	`COALESCE(agents.session_id, ''), agents.scope, COALESCE(agents.name, ''), COALESCE(agents.prompt, ''), ` +
+	`COALESCE(agents.subject_id, ''), COALESCE(agents.ccnotes_task, ''), agents.status, agents.state, ` +
+	`COALESCE(agents.activity, ''), agents.tokens, COALESCE(agents.updated_at, ''), agents.created_at`
+
+// repoRow is one row of the repos table: an orchestration repo, the container its
+// workstreams branch from. The backend workspace now lives on each workstream.
+type repoRow struct {
+	ID        string
+	Name      string
+	Backend   backend.BackendName
+	Cwd       string
+	Status    LifecycleStatus
+	CreatedAt string
+}
+
+// workstreamRow is one row of the workstreams table: a git worktree on its own
+// branch (1:1), bound to a backend workspace. The primary workstream (IsPrimary
+// true) is the repo's own checkout: for backends cc-orchestrate creates worktrees
+// for, Worktree is the repo root and is never a git worktree add; a ManagesWorktree
+// backend forks its own, so Worktree there is that fork. Worktree teardown is gated
+// on (!ManagesWorktree && !IsPrimary), so a primary checkout is never removed.
+type workstreamRow struct {
 	ID              string
+	RepoID          string
 	Name            string
 	Backend         backend.BackendName
 	WorkspaceHandle string
-	Cwd             string
+	Branch          string
+	Worktree        string
+	IsPrimary       bool
+	CCNotesProject  string
 	Status          LifecycleStatus
 	CreatedAt       string
 }
 
+// sprintRow is one row of the sprints table: a planning sub-group of a workstream,
+// bound to a cc-notes sprint. A sprint shares its workstream's worktree — it has no
+// worktree of its own — so its teardown never touches git.
+type sprintRow struct {
+	ID            string
+	WorkstreamID  string
+	Name          string
+	CCNotesSprint string
+	Status        LifecycleStatus
+	CreatedAt     string
+}
+
 // agentRow is one row of the agents table: a spawned child agent and its derived
-// transcript status.
+// transcript status. It attaches to a sprint; its workstream and repo are derived
+// through the sprint join.
 type agentRow struct {
 	ID             string
-	ProjectID      string
+	SprintID       string
 	Backend        backend.BackendName
 	TerminalHandle string
 	SessionID      string
@@ -47,6 +90,7 @@ type agentRow struct {
 	Name           string
 	Prompt         string
 	SubjectID      string
+	CCNotesTask    string
 	Status         LifecycleStatus
 	State          State
 	Activity       string
@@ -64,102 +108,298 @@ type rowScanner interface {
 // created_at/updated_at column.
 func nowStamp() string { return time.Now().UTC().Format(time.RFC3339) }
 
-func scanProject(s rowScanner) (projectRow, error) {
-	var p projectRow
-	err := s.Scan(&p.ID, &p.Name, &p.Backend, &p.WorkspaceHandle, &p.Cwd, &p.Status, &p.CreatedAt)
+func scanRepo(s rowScanner) (repoRow, error) {
+	var p repoRow
+	err := s.Scan(&p.ID, &p.Name, &p.Backend, &p.Cwd, &p.Status, &p.CreatedAt)
 	return p, err
+}
+
+func scanWorkstream(s rowScanner) (workstreamRow, error) {
+	var w workstreamRow
+	err := s.Scan(
+		&w.ID, &w.RepoID, &w.Name, &w.Backend, &w.WorkspaceHandle,
+		&w.Branch, &w.Worktree, &w.IsPrimary, &w.CCNotesProject, &w.Status, &w.CreatedAt,
+	)
+	return w, err
+}
+
+func scanSprint(s rowScanner) (sprintRow, error) {
+	var sp sprintRow
+	err := s.Scan(&sp.ID, &sp.WorkstreamID, &sp.Name, &sp.CCNotesSprint, &sp.Status, &sp.CreatedAt)
+	return sp, err
 }
 
 func scanAgent(s rowScanner) (agentRow, error) {
 	var a agentRow
 	err := s.Scan(
-		&a.ID, &a.ProjectID, &a.Backend, &a.TerminalHandle, &a.SessionID, &a.Scope,
-		&a.Name, &a.Prompt, &a.SubjectID, &a.Status, &a.State, &a.Activity, &a.Tokens,
+		&a.ID, &a.SprintID, &a.Backend, &a.TerminalHandle, &a.SessionID, &a.Scope,
+		&a.Name, &a.Prompt, &a.SubjectID, &a.CCNotesTask, &a.Status, &a.State, &a.Activity, &a.Tokens,
 		&a.UpdatedAt, &a.CreatedAt,
 	)
 	return a, err
 }
 
-func insertProject(ctx context.Context, db *sql.DB, p projectRow) error {
+func insertRepo(ctx context.Context, db *sql.DB, p repoRow) error {
 	_, err := db.ExecContext(ctx,
-		`INSERT INTO projects (id, name, backend, backend_workspace_handle, cwd, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		p.ID, p.Name, p.Backend, p.WorkspaceHandle, p.Cwd, p.Status, p.CreatedAt)
+		`INSERT INTO repos (id, name, backend, cwd, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		p.ID, p.Name, p.Backend, p.Cwd, p.Status, p.CreatedAt)
 	if err != nil {
-		return fmt.Errorf("insert project %q: %w", p.ID, err)
+		return fmt.Errorf("insert repo %q: %w", p.ID, err)
 	}
 	return nil
 }
 
-func listProjects(ctx context.Context, db *sql.DB) ([]projectRow, error) {
-	rows, err := db.QueryContext(ctx, `SELECT `+projectColumns+` FROM projects ORDER BY created_at`)
+func listRepos(ctx context.Context, db *sql.DB) ([]repoRow, error) {
+	rows, err := db.QueryContext(ctx, `SELECT `+repoColumns+` FROM repos ORDER BY created_at`)
 	if err != nil {
-		return nil, fmt.Errorf("list projects: %w", err)
+		return nil, fmt.Errorf("list repos: %w", err)
 	}
 	defer rows.Close()
-	out := []projectRow{}
+	out := []repoRow{}
 	for rows.Next() {
-		p, err := scanProject(rows)
+		p, err := scanRepo(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan project: %w", err)
+			return nil, fmt.Errorf("scan repo: %w", err)
 		}
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate projects: %w", err)
+		return nil, fmt.Errorf("iterate repos: %w", err)
 	}
 	return out, nil
 }
 
-// getProject resolves a project by canonical id first, then by name.
-func getProject(ctx context.Context, db *sql.DB, idOrName string) (projectRow, error) {
-	p, err := scanProject(db.QueryRowContext(ctx,
-		`SELECT `+projectColumns+` FROM projects WHERE id = ? OR name = ?
+// getRepo resolves a repo by canonical id first, then by name.
+func getRepo(ctx context.Context, db *sql.DB, idOrName string) (repoRow, error) {
+	p, err := scanRepo(db.QueryRowContext(ctx,
+		`SELECT `+repoColumns+` FROM repos WHERE id = ? OR name = ?
 		 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1`,
 		idOrName, idOrName, idOrName))
 	if errors.Is(err, sql.ErrNoRows) {
-		return projectRow{}, fmt.Errorf("project not found: %s", idOrName)
+		return repoRow{}, fmt.Errorf("repo not found: %s", idOrName)
 	}
 	if err != nil {
-		return projectRow{}, fmt.Errorf("get project %q: %w", idOrName, err)
+		return repoRow{}, fmt.Errorf("get repo %q: %w", idOrName, err)
 	}
 	return p, nil
 }
 
-func setProjectStatus(ctx context.Context, db *sql.DB, id string, status LifecycleStatus) error {
-	_, err := db.ExecContext(ctx, `UPDATE projects SET status = ? WHERE id = ?`, status, id)
+func setRepoStatus(ctx context.Context, db *sql.DB, id string, status LifecycleStatus) error {
+	_, err := db.ExecContext(ctx, `UPDATE repos SET status = ? WHERE id = ?`, status, id)
 	if err != nil {
-		return fmt.Errorf("set project %q status: %w", id, err)
+		return fmt.Errorf("set repo %q status: %w", id, err)
+	}
+	return nil
+}
+
+func insertWorkstream(ctx context.Context, db *sql.DB, w workstreamRow) error {
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO workstreams (id, repo_id, name, backend, backend_workspace_handle,
+			branch, worktree, is_primary, ccnotes_project, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		w.ID, w.RepoID, w.Name, w.Backend, w.WorkspaceHandle,
+		w.Branch, w.Worktree, w.IsPrimary, w.CCNotesProject, w.Status, w.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert workstream %q: %w", w.ID, err)
+	}
+	return nil
+}
+
+// listWorkstreams returns every workstream, or only those of repoFilter when it is
+// set, ordered by creation.
+func listWorkstreams(ctx context.Context, db *sql.DB, repoFilter string) ([]workstreamRow, error) {
+	query := `SELECT ` + workstreamColumns + ` FROM workstreams`
+	args := []any{}
+	if repoFilter != "" {
+		query += ` WHERE repo_id = ?`
+		args = append(args, repoFilter)
+	}
+	rows, err := db.QueryContext(ctx, query+` ORDER BY created_at`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list workstreams: %w", err)
+	}
+	defer rows.Close()
+	out := []workstreamRow{}
+	for rows.Next() {
+		w, err := scanWorkstream(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan workstream: %w", err)
+		}
+		out = append(out, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workstreams: %w", err)
+	}
+	return out, nil
+}
+
+// getWorkstream resolves a workstream by canonical id first, then by name. A name
+// match is restricted to repoID when it is set, so two repos may hold a workstream
+// of the same name without colliding; an empty repoID matches a name globally.
+func getWorkstream(ctx context.Context, db *sql.DB, ref, repoID string) (workstreamRow, error) {
+	w, err := scanWorkstream(db.QueryRowContext(ctx,
+		`SELECT `+workstreamColumns+` FROM workstreams
+		 WHERE id = ? OR (name = ? AND (? = '' OR repo_id = ?))
+		 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1`,
+		ref, ref, repoID, repoID, ref))
+	if errors.Is(err, sql.ErrNoRows) {
+		return workstreamRow{}, fmt.Errorf("workstream not found: %s", ref)
+	}
+	if err != nil {
+		return workstreamRow{}, fmt.Errorf("get workstream %q: %w", ref, err)
+	}
+	return w, nil
+}
+
+// getPrimaryWorkstream returns a repo's primary workstream: its own checkout, the
+// single-stream default an agent spawns into when no workstream is named.
+func getPrimaryWorkstream(ctx context.Context, db *sql.DB, repoID string) (workstreamRow, error) {
+	w, err := scanWorkstream(db.QueryRowContext(ctx,
+		`SELECT `+workstreamColumns+` FROM workstreams WHERE repo_id = ? AND is_primary = 1 LIMIT 1`, repoID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return workstreamRow{}, fmt.Errorf("no primary workstream for repo: %s", repoID)
+	}
+	if err != nil {
+		return workstreamRow{}, fmt.Errorf("get primary workstream for repo %q: %w", repoID, err)
+	}
+	return w, nil
+}
+
+func setWorkstreamStatus(ctx context.Context, db *sql.DB, id string, status LifecycleStatus) error {
+	_, err := db.ExecContext(ctx, `UPDATE workstreams SET status = ? WHERE id = ?`, status, id)
+	if err != nil {
+		return fmt.Errorf("set workstream %q status: %w", id, err)
+	}
+	return nil
+}
+
+func insertSprint(ctx context.Context, db *sql.DB, sp sprintRow) error {
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO sprints (id, workstream_id, name, ccnotes_sprint, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		sp.ID, sp.WorkstreamID, sp.Name, sp.CCNotesSprint, sp.Status, sp.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert sprint %q: %w", sp.ID, err)
+	}
+	return nil
+}
+
+// listSprints returns every sprint, or only those of workstreamFilter when it is
+// set, ordered by creation.
+func listSprints(ctx context.Context, db *sql.DB, workstreamFilter string) ([]sprintRow, error) {
+	query := `SELECT ` + sprintColumns + ` FROM sprints`
+	args := []any{}
+	if workstreamFilter != "" {
+		query += ` WHERE workstream_id = ?`
+		args = append(args, workstreamFilter)
+	}
+	rows, err := db.QueryContext(ctx, query+` ORDER BY created_at`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list sprints: %w", err)
+	}
+	defer rows.Close()
+	out := []sprintRow{}
+	for rows.Next() {
+		sp, err := scanSprint(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan sprint: %w", err)
+		}
+		out = append(out, sp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sprints: %w", err)
+	}
+	return out, nil
+}
+
+// getSprint resolves a sprint by canonical id first, then by name. A name match is
+// restricted to workstreamID when it is set, so two workstreams may hold a sprint of
+// the same name without colliding; an empty workstreamID matches a name globally.
+func getSprint(ctx context.Context, db *sql.DB, ref, workstreamID string) (sprintRow, error) {
+	sp, err := scanSprint(db.QueryRowContext(ctx,
+		`SELECT `+sprintColumns+` FROM sprints
+		 WHERE id = ? OR (name = ? AND (? = '' OR workstream_id = ?))
+		 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1`,
+		ref, ref, workstreamID, workstreamID, ref))
+	if errors.Is(err, sql.ErrNoRows) {
+		return sprintRow{}, fmt.Errorf("sprint not found: %s", ref)
+	}
+	if err != nil {
+		return sprintRow{}, fmt.Errorf("get sprint %q: %w", ref, err)
+	}
+	return sp, nil
+}
+
+// getDefaultSprint returns a workstream's default sprint: the one auto-created with
+// the workstream, the single-group default an agent spawns into when no sprint is
+// named. It is the workstream's first sprint — ordered by creation, then rowid to
+// break a same-second tie deterministically in favour of the earlier insert.
+func getDefaultSprint(ctx context.Context, db *sql.DB, workstreamID string) (sprintRow, error) {
+	sp, err := scanSprint(db.QueryRowContext(ctx,
+		`SELECT `+sprintColumns+` FROM sprints WHERE workstream_id = ? ORDER BY created_at, rowid LIMIT 1`, workstreamID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return sprintRow{}, fmt.Errorf("no default sprint for workstream: %s", workstreamID)
+	}
+	if err != nil {
+		return sprintRow{}, fmt.Errorf("get default sprint for workstream %q: %w", workstreamID, err)
+	}
+	return sp, nil
+}
+
+func setSprintStatus(ctx context.Context, db *sql.DB, id string, status LifecycleStatus) error {
+	_, err := db.ExecContext(ctx, `UPDATE sprints SET status = ? WHERE id = ?`, status, id)
+	if err != nil {
+		return fmt.Errorf("set sprint %q status: %w", id, err)
 	}
 	return nil
 }
 
 func insertAgent(ctx context.Context, db *sql.DB, a agentRow) error {
 	_, err := db.ExecContext(ctx,
-		`INSERT INTO agents (id, project_id, backend, backend_terminal_handle, session_id, scope,
-			name, prompt, subject_id, status, state, activity, tokens, updated_at, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.ID, a.ProjectID, a.Backend, a.TerminalHandle, a.SessionID, a.Scope,
-		a.Name, a.Prompt, a.SubjectID, a.Status, a.State, a.Activity, a.Tokens, a.UpdatedAt, a.CreatedAt)
+		`INSERT INTO agents (id, sprint_id, backend, backend_terminal_handle, session_id, scope,
+			name, prompt, subject_id, ccnotes_task, status, state, activity, tokens, updated_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.SprintID, a.Backend, a.TerminalHandle, a.SessionID, a.Scope,
+		a.Name, a.Prompt, a.SubjectID, a.CCNotesTask, a.Status, a.State, a.Activity, a.Tokens, a.UpdatedAt, a.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert agent %q: %w", a.ID, err)
 	}
 	return nil
 }
 
-// listAgents returns every agent, or only those in projectFilter when it is set.
-func listAgents(ctx context.Context, db *sql.DB, projectFilter string) ([]agentRow, error) {
+// listAgents returns every agent, or only those in sprintFilter when it is set.
+func listAgents(ctx context.Context, db *sql.DB, sprintFilter string) ([]agentRow, error) {
 	query := `SELECT ` + agentColumns + ` FROM agents`
 	args := []any{}
-	if projectFilter != "" {
-		query += ` WHERE project_id = ?`
-		args = append(args, projectFilter)
+	if sprintFilter != "" {
+		query += ` WHERE agents.sprint_id = ?`
+		args = append(args, sprintFilter)
 	}
-	return queryAgents(ctx, db, query+` ORDER BY created_at`, args...)
+	return queryAgents(ctx, db, query+` ORDER BY agents.created_at`, args...)
+}
+
+// listWorkstreamAgents returns every agent of a workstream, joining through its
+// sprints (an agent attaches to a sprint, the sprint to a workstream).
+func listWorkstreamAgents(ctx context.Context, db *sql.DB, workstreamID string) ([]agentRow, error) {
+	return queryAgents(ctx, db,
+		`SELECT `+agentColumns+` FROM agents
+		 JOIN sprints ON agents.sprint_id = sprints.id
+		 WHERE sprints.workstream_id = ? ORDER BY agents.created_at`, workstreamID)
+}
+
+// listRepoAgents returns every agent of a repo, joining through its sprints and
+// workstreams, for the repo-level views that aggregate across a repo's streams.
+func listRepoAgents(ctx context.Context, db *sql.DB, repoID string) ([]agentRow, error) {
+	return queryAgents(ctx, db,
+		`SELECT `+agentColumns+` FROM agents
+		 JOIN sprints ON agents.sprint_id = sprints.id
+		 JOIN workstreams ON sprints.workstream_id = workstreams.id
+		 WHERE workstreams.repo_id = ? ORDER BY agents.created_at`, repoID)
 }
 
 func listActiveAgents(ctx context.Context, db *sql.DB) ([]agentRow, error) {
-	return queryAgents(ctx, db, `SELECT `+agentColumns+` FROM agents WHERE status = ? ORDER BY created_at`, StatusActive)
+	return queryAgents(ctx, db, `SELECT `+agentColumns+` FROM agents WHERE agents.status = ? ORDER BY agents.created_at`, StatusActive)
 }
 
 func queryAgents(ctx context.Context, db *sql.DB, query string, args ...any) ([]agentRow, error) {
@@ -183,7 +423,7 @@ func queryAgents(ctx context.Context, db *sql.DB, query string, args ...any) ([]
 }
 
 func getAgent(ctx context.Context, db *sql.DB, id string) (agentRow, error) {
-	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM agents WHERE id = ?`, id))
+	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM agents WHERE agents.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return agentRow{}, fmt.Errorf("agent not found: %s", id)
 	}
@@ -246,6 +486,14 @@ func setConfig(ctx context.Context, db *sql.DB, key, value string) error {
 		key, value)
 	if err != nil {
 		return fmt.Errorf("set config %q: %w", key, err)
+	}
+	return nil
+}
+
+func clearConfig(ctx context.Context, db *sql.DB, key string) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM config WHERE key = ?`, key)
+	if err != nil {
+		return fmt.Errorf("clear config %q: %w", key, err)
 	}
 	return nil
 }

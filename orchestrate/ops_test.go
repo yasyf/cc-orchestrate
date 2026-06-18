@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yasyf/cc-interact/daemon"
@@ -14,35 +17,72 @@ import (
 	"github.com/yasyf/cc-interact/subject"
 
 	"github.com/yasyf/cc-orchestrate/backend"
+	"github.com/yasyf/cc-orchestrate/worktree"
 )
 
-// opBackend is a registered test backend that records the CreateProject and Kill
-// calls it receives, so the project/kill ops can be exercised without a live CLI.
+// gitInitAt creates dir (and any parents) and initializes a git repository there
+// on branch with one commit, so a handler that reads the repo's current branch
+// (handleRepoCreate via worktree.CurrentBranch) has a real repo to inspect. The
+// global/system git config is neutralized so a developer's global core.hooksPath
+// can never abort the helper's commit.
+func gitInitAt(t *testing.T, dir, branch string) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	run := func(args ...string) {
+		cmd := exec.CommandContext(context.Background(), "git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-b", branch)
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "cc-orchestrate test")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "README.md")
+	run("-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", "init")
+}
+
+// gitRepo returns a fresh temp git repository on branch.
+func gitRepo(t *testing.T, branch string) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitInitAt(t, dir, branch)
+	return dir
+}
+
+// opBackend is a registered test backend that records the CreateWorkstream and Kill
+// calls it receives, so the repo/kill ops can be exercised without a live CLI.
 // Its Name is outside backend.Precedence, so it never interferes with the default
 // availability/selection ordering; ops address it by passing its name explicitly.
 type opBackend struct {
-	createdSpec   *backend.ProjectSpec
-	killedAgent   *backend.AgentHandle
-	killedProject *backend.ProjectHandle
-	killErr       error
+	createdSpec      *backend.WorkstreamSpec
+	killedAgent      *backend.AgentHandle
+	killedWorkstream *backend.WorkstreamHandle
+	killErr          error
 }
 
 func (opBackend) Name() backend.BackendName         { return "optest" }
 func (opBackend) Available() bool                   { return true }
 func (opBackend) EnsureReady(context.Context) error { return nil }
-func (opBackend) ListProjects(context.Context) ([]backend.ProjectHandle, error) {
+func (opBackend) ListWorkstreams(context.Context) ([]backend.WorkstreamHandle, error) {
 	return nil, nil
 }
-func (b opBackend) CreateProject(_ context.Context, spec backend.ProjectSpec) (backend.ProjectHandle, error) {
+func (b opBackend) CreateWorkstream(_ context.Context, spec backend.WorkstreamSpec) (backend.WorkstreamHandle, error) {
 	if b.createdSpec != nil {
 		*b.createdSpec = spec
 	}
-	return backend.ProjectHandle{Backend: "optest", ID: "ws-" + spec.Name, Name: spec.Name, Cwd: spec.Cwd}, nil
+	return backend.WorkstreamHandle{Backend: "optest", ID: "ws-" + spec.Name, Name: spec.Name, Cwd: spec.Cwd}, nil
 }
 func (opBackend) Spawn(context.Context, backend.SpawnSpec) (backend.AgentHandle, error) {
 	return backend.AgentHandle{}, nil
 }
-func (opBackend) ListAgents(context.Context, backend.ProjectHandle) ([]backend.AgentHandle, error) {
+func (opBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
 	return nil, nil
 }
 func (b opBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
@@ -51,9 +91,9 @@ func (b opBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
 	}
 	return b.killErr
 }
-func (b opBackend) KillProject(_ context.Context, project backend.ProjectHandle) error {
-	if b.killedProject != nil {
-		*b.killedProject = project
+func (b opBackend) KillWorkstream(_ context.Context, project backend.WorkstreamHandle) error {
+	if b.killedWorkstream != nil {
+		*b.killedWorkstream = project
 	}
 	return b.killErr
 }
@@ -71,21 +111,21 @@ type sendBackend struct {
 func (sendBackend) Name() backend.BackendName         { return "sendtest" }
 func (sendBackend) Available() bool                   { return true }
 func (sendBackend) EnsureReady(context.Context) error { return nil }
-func (sendBackend) ListProjects(context.Context) ([]backend.ProjectHandle, error) {
+func (sendBackend) ListWorkstreams(context.Context) ([]backend.WorkstreamHandle, error) {
 	return nil, nil
 }
-func (sendBackend) CreateProject(context.Context, backend.ProjectSpec) (backend.ProjectHandle, error) {
-	return backend.ProjectHandle{}, nil
+func (sendBackend) CreateWorkstream(context.Context, backend.WorkstreamSpec) (backend.WorkstreamHandle, error) {
+	return backend.WorkstreamHandle{}, nil
 }
 func (sendBackend) Spawn(context.Context, backend.SpawnSpec) (backend.AgentHandle, error) {
 	return backend.AgentHandle{}, nil
 }
-func (sendBackend) ListAgents(context.Context, backend.ProjectHandle) ([]backend.AgentHandle, error) {
+func (sendBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
 	return nil, nil
 }
-func (sendBackend) Kill(context.Context, backend.AgentHandle) error          { return nil }
-func (sendBackend) KillProject(context.Context, backend.ProjectHandle) error { return nil }
-func (sendBackend) Caps() backend.Caps                                       { return backend.Capabilities(backend.CanSendText) }
+func (sendBackend) Kill(context.Context, backend.AgentHandle) error                { return nil }
+func (sendBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error { return nil }
+func (sendBackend) Caps() backend.Caps                                             { return backend.Capabilities(backend.CanSendText) }
 func (b sendBackend) SendText(_ context.Context, agent backend.AgentHandle, text string) error {
 	if b.sentTo != nil {
 		*b.sentTo = agent
@@ -163,7 +203,7 @@ func TestHandleSendMessage(t *testing.T) {
 	backend.Register(opBackend{}) // "optest": no Sender, no CanSendText → LCD
 	db := newTestDB(t)
 	mustInsertAgent(t, db, agentRow{
-		ID: "a1", ProjectID: "p1", Backend: "optest", Scope: "/s",
+		ID: "a1", SprintID: "s1", Backend: "optest", Scope: "/s",
 		SubjectID: "subj-1", Status: "active", State: StateUnknown, CreatedAt: "t0",
 	})
 
@@ -206,8 +246,8 @@ func TestHandleSendMessage(t *testing.T) {
 
 // TestHandleSendMessageNative covers the native path: a Sender advertising
 // CanSendText delivers by typing into the agent's terminal, writes no event-plane
-// frame, and reports transport=native. The handle carries the project's backend
-// WorkspaceHandle, not the orchestrate project id.
+// frame, and reports transport=native. The handle carries the workstream's backend
+// WorkspaceHandle, not the orchestrate workstream id.
 func TestHandleSendMessageNative(t *testing.T) {
 	ctx := context.Background()
 	var sentTo backend.AgentHandle
@@ -215,14 +255,19 @@ func TestHandleSendMessageNative(t *testing.T) {
 	backend.Register(sendBackend{sentTo: &sentTo, sentText: &sentText})
 
 	db := newTestDB(t)
-	if err := insertProject(ctx, db, projectRow{
-		ID: "p1", Name: "proj", Backend: "sendtest", WorkspaceHandle: "ws-1",
-		Cwd: "/s", Status: StatusActive, CreatedAt: "t0",
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "sendtest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/s", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
 	}); err != nil {
-		t.Fatalf("insertProject: %v", err)
+		t.Fatalf("insertWorkstream: %v", err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{
+		ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
 	}
 	mustInsertAgent(t, db, agentRow{
-		ID: "a1", ProjectID: "p1", Backend: "sendtest", TerminalHandle: "term-1",
+		ID: "a1", SprintID: "s1", Backend: "sendtest", TerminalHandle: "term-1",
 		SessionID: "sess-1", Scope: "/s", Name: "worker", SubjectID: "subj-1",
 		Status: StatusActive, State: StateUnknown, CreatedAt: "t0",
 	})
@@ -237,7 +282,7 @@ func TestHandleSendMessageNative(t *testing.T) {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
 
-	wantHandle := backend.AgentHandle{Backend: "sendtest", ID: "term-1", ProjectID: "ws-1", Name: "worker", SessionID: "sess-1"}
+	wantHandle := backend.AgentHandle{Backend: "sendtest", ID: "term-1", WorkstreamID: "ws-1", Name: "worker", SessionID: "sess-1"}
 	if sentTo != wantHandle {
 		t.Fatalf("SendText handle = %+v, want %+v", sentTo, wantHandle)
 	}
@@ -266,14 +311,14 @@ func TestHandleSendMessageMultilineUsesLCD(t *testing.T) {
 	backend.Register(sendBackend{sentText: &sentText})
 
 	db := newTestDB(t)
-	if err := insertProject(ctx, db, projectRow{
-		ID: "p1", Name: "proj", Backend: "sendtest", WorkspaceHandle: "ws-1",
-		Cwd: "/s", Status: StatusActive, CreatedAt: "t0",
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "sendtest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/s", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
 	}); err != nil {
-		t.Fatalf("insertProject: %v", err)
+		t.Fatalf("insertWorkstream: %v", err)
 	}
 	mustInsertAgent(t, db, agentRow{
-		ID: "a1", ProjectID: "p1", Backend: "sendtest", TerminalHandle: "term-1",
+		ID: "a1", SprintID: "s1", Backend: "sendtest", TerminalHandle: "term-1",
 		SessionID: "sess-1", Scope: "/s", SubjectID: "subj-1",
 		Status: StatusActive, State: StateUnknown, CreatedAt: "t0",
 	})
@@ -305,7 +350,7 @@ func TestHandleSendMessageMultilineUsesLCD(t *testing.T) {
 func TestHandleSendMessageErrors(t *testing.T) {
 	db := newTestDB(t)
 	mustInsertAgent(t, db, agentRow{
-		ID: "nosub", ProjectID: "p1", Backend: "tmux", Scope: "/s",
+		ID: "nosub", SprintID: "s1", Backend: "tmux", Scope: "/s",
 		Status: "active", State: StateUnknown, CreatedAt: "t0",
 	})
 	appendFn := func(context.Context, *event.Event) (int64, error) {
@@ -422,7 +467,7 @@ func TestHandleReportNoSubject(t *testing.T) {
 func TestHandleStatus(t *testing.T) {
 	db := newTestDB(t)
 	mustInsertAgent(t, db, agentRow{
-		ID: "a1", ProjectID: "p1", Backend: "tmux", Scope: "/s", SessionID: "sess-1",
+		ID: "a1", SprintID: "s1", Backend: "tmux", Scope: "/s", SessionID: "sess-1",
 		Name: "worker", SubjectID: "subj-1", Status: "active", State: StateWorking,
 		Activity: "Bash: ls", Tokens: 10, UpdatedAt: "2026-06-16T00:00:00Z", CreatedAt: "t0",
 	})
@@ -436,7 +481,7 @@ func TestHandleStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := agentView{
-		ID: "a1", Name: "worker", ProjectID: "p1", Backend: "tmux", Status: "active",
+		ID: "a1", Name: "worker", SprintID: "s1", Backend: "tmux", Status: "active",
 		State: string(StateWorking), Activity: "Bash: ls", Tokens: 10,
 		UpdatedAt: "2026-06-16T00:00:00Z", SessionID: "sess-1", Scope: "/s",
 	}
@@ -456,16 +501,32 @@ func TestHandleStatusMissing(t *testing.T) {
 func TestHandleList(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)
-	for _, p := range []projectRow{
-		{ID: "p1", Name: "alpha", Backend: "tmux", WorkspaceHandle: "ws-1", Cwd: "/tmp/a", Status: "active", CreatedAt: "t0"},
-		{ID: "p2", Name: "beta", Backend: "tmux", WorkspaceHandle: "ws-2", Cwd: "/tmp/b", Status: "active", CreatedAt: "t1"},
+	for _, p := range []repoRow{
+		{ID: "p1", Name: "alpha", Backend: "tmux", Cwd: "/tmp/a", Status: "active", CreatedAt: "t0"},
+		{ID: "p2", Name: "beta", Backend: "tmux", Cwd: "/tmp/b", Status: "active", CreatedAt: "t1"},
 	} {
-		if err := insertProject(ctx, db, p); err != nil {
-			t.Fatalf("insertProject %s: %v", p.ID, err)
+		if err := insertRepo(ctx, db, p); err != nil {
+			t.Fatalf("insertRepo %s: %v", p.ID, err)
 		}
 	}
-	mustInsertAgent(t, db, agentRow{ID: "a1", ProjectID: "p1", Backend: "tmux", Scope: "/s", Status: "active", State: StateWorking, CreatedAt: "t0"})
-	mustInsertAgent(t, db, agentRow{ID: "a2", ProjectID: "p2", Backend: "tmux", Scope: "/s", Status: "active", State: StateIdle, CreatedAt: "t1"})
+	for _, w := range []workstreamRow{
+		{ID: "w1", RepoID: "p1", Name: "main", Backend: "tmux", Branch: "main", Worktree: "/tmp/a", IsPrimary: true, Status: "active", CreatedAt: "t0"},
+		{ID: "w2", RepoID: "p2", Name: "main", Backend: "tmux", Branch: "main", Worktree: "/tmp/b", IsPrimary: true, Status: "active", CreatedAt: "t1"},
+	} {
+		if err := insertWorkstream(ctx, db, w); err != nil {
+			t.Fatalf("insertWorkstream %s: %v", w.ID, err)
+		}
+	}
+	for _, sp := range []sprintRow{
+		{ID: "s1", WorkstreamID: "w1", Name: "main", Status: "active", CreatedAt: "t0"},
+		{ID: "s2", WorkstreamID: "w2", Name: "main", Status: "active", CreatedAt: "t1"},
+	} {
+		if err := insertSprint(ctx, db, sp); err != nil {
+			t.Fatalf("insertSprint %s: %v", sp.ID, err)
+		}
+	}
+	mustInsertAgent(t, db, agentRow{ID: "a1", SprintID: "s1", Backend: "tmux", Scope: "/s", Status: "active", State: StateWorking, CreatedAt: "t0"})
+	mustInsertAgent(t, db, agentRow{ID: "a2", SprintID: "s2", Backend: "tmux", Scope: "/s", Status: "active", State: StateIdle, CreatedAt: "t1"})
 
 	t.Run("all with absent body", func(t *testing.T) {
 		reply := handleList(opCtx(db, nil, nil))
@@ -480,8 +541,8 @@ func TestHandleList(t *testing.T) {
 			t.Fatalf("len = %d, want 2", len(got))
 		}
 	})
-	t.Run("filtered by project id", func(t *testing.T) {
-		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"project": "p2"}), nil))
+	t.Run("filtered by repo id", func(t *testing.T) {
+		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"repo": "p2"}), nil))
 		var got []agentView
 		if err := json.Unmarshal(reply.Body, &got); err != nil {
 			t.Fatal(err)
@@ -490,8 +551,8 @@ func TestHandleList(t *testing.T) {
 			t.Fatalf("filtered = %+v, want [a2]", got)
 		}
 	})
-	t.Run("filtered by project name resolves to its id", func(t *testing.T) {
-		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"project": "beta"}), nil))
+	t.Run("filtered by repo name resolves to its id", func(t *testing.T) {
+		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"repo": "beta"}), nil))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -503,10 +564,10 @@ func TestHandleList(t *testing.T) {
 			t.Fatalf("name-filtered = %+v, want [a2]", got)
 		}
 	})
-	t.Run("unknown project is an error", func(t *testing.T) {
-		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"project": "ghost"}), nil))
+	t.Run("unknown repo is an error", func(t *testing.T) {
+		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"repo": "ghost"}), nil))
 		if reply.OK || reply.Error == "" {
-			t.Fatalf("reply = %+v, want ok=false for an unknown project", reply)
+			t.Fatalf("reply = %+v, want ok=false for an unknown repo", reply)
 		}
 	})
 }
@@ -540,105 +601,131 @@ func TestHandleConfigGetSet(t *testing.T) {
 	}
 }
 
-func TestHandleProjectCreate(t *testing.T) {
+func TestHandleRepoCreate(t *testing.T) {
 	db := newTestDB(t)
 
-	var gotSpec backend.ProjectSpec
+	var gotSpec backend.WorkstreamSpec
 	backend.Register(opBackend{createdSpec: &gotSpec})
 
-	body := mustJSON(t, map[string]string{"name": "demo", "backend": "optest", "cwd": "/tmp/ccodemo"})
-	reply := handleProjectCreate(opCtx(db, body, nil))
+	cwd := gitRepo(t, "feature/login")
+	body := mustJSON(t, map[string]string{"name": "demo", "backend": "optest", "cwd": cwd})
+	reply := handleRepoCreate(opCtx(db, body, nil))
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
 	var out struct {
-		ProjectID string `json:"project_id"`
+		RepoID    string `json:"repo_id"`
 		Workspace string `json:"workspace"`
 		Backend   string `json:"backend"`
 	}
 	if err := json.Unmarshal(reply.Body, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.ProjectID == "" || out.Workspace != "ws-demo" || out.Backend != "optest" {
-		t.Fatalf("reply = %+v, want non-empty id, workspace ws-demo, backend optest", out)
+	if out.RepoID == "" || out.Workspace != "ws-feature/login" || out.Backend != "optest" {
+		t.Fatalf("reply = %+v, want non-empty id, workspace ws-feature/login, backend optest", out)
 	}
 
-	// The backend received the project spec with the absolute cwd.
-	if gotSpec.Name != "demo" || gotSpec.Cwd != "/tmp/ccodemo" {
-		t.Fatalf("CreateProject spec = %+v, want {Name:demo Cwd:/tmp/ccodemo}", gotSpec)
+	// The backend received the primary workstream spec: the repo root as both cwd
+	// and the repo it derives from, on the repo's current branch (the workstream
+	// name is the branch, never a git worktree add).
+	if gotSpec.Name != "feature/login" || gotSpec.Cwd != cwd || gotSpec.RepoCwd != cwd || gotSpec.Branch != "feature/login" {
+		t.Fatalf("CreateWorkstream spec = %+v, want {Name:feature/login Cwd:%s RepoCwd:%s Branch:feature/login}", gotSpec, cwd, cwd)
 	}
 
-	// The project row persisted with the backend's workspace handle.
-	p, err := getProject(context.Background(), db, out.ProjectID)
+	// The repo row persisted with no backend workspace handle — that now lives on
+	// the workstream.
+	p, err := getRepo(context.Background(), db, out.RepoID)
 	if err != nil {
-		t.Fatalf("getProject: %v", err)
+		t.Fatalf("getRepo: %v", err)
 	}
-	want := projectRow{
-		ID: out.ProjectID, Name: "demo", Backend: "optest", WorkspaceHandle: "ws-demo",
-		Cwd: "/tmp/ccodemo", Status: "active", CreatedAt: p.CreatedAt,
+	wantRepo := repoRow{
+		ID: out.RepoID, Name: "demo", Backend: "optest",
+		Cwd: cwd, Status: "active", CreatedAt: p.CreatedAt,
 	}
-	if p != want {
-		t.Fatalf("project row = %+v, want %+v", p, want)
+	if p != wantRepo {
+		t.Fatalf("repo row = %+v, want %+v", p, wantRepo)
 	}
 	if p.CreatedAt == "" {
 		t.Error("created_at not stamped")
 	}
-}
 
-// TestHandleProjectCreateResolvesCwdAgainstScope proves an empty or relative cwd
-// resolves against the caller's scope (the CLI/MCP working directory carried on
-// the envelope), not the long-lived daemon's process cwd.
-func TestHandleProjectCreateResolvesCwdAgainstScope(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		cwd     string
-		scope   string
-		wantCwd string
-	}{
-		{"empty cwd uses caller scope", "", "/caller/here", "/caller/here"},
-		{"relative cwd joins caller scope", "sub/dir", "/caller/here", "/caller/here/sub/dir"},
-		{"absolute cwd is kept", "/abs/path", "/caller/here", "/abs/path"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			db := newTestDB(t)
-			var gotSpec backend.ProjectSpec
-			backend.Register(opBackend{createdSpec: &gotSpec})
-			body := mustJSON(t, map[string]string{"name": "demo", "backend": "optest", "cwd": tc.cwd})
-			hc := daemon.HandlerCtx{Ctx: context.Background(), Env: daemon.Envelope{Body: body}, Scope: tc.scope, DB: db}
-			reply := handleProjectCreate(hc)
-			if !reply.OK {
-				t.Fatalf("reply not ok: %s", reply.Error)
-			}
-			if gotSpec.Cwd != tc.wantCwd {
-				t.Fatalf("CreateProject cwd = %q, want %q", gotSpec.Cwd, tc.wantCwd)
-			}
-		})
+	// A primary workstream was auto-created: the repo's own checkout (worktree is
+	// the repo root, never a git worktree add) on the current branch, backed by the
+	// backend workspace handle.
+	ws, err := getPrimaryWorkstream(context.Background(), db, out.RepoID)
+	if err != nil {
+		t.Fatalf("getPrimaryWorkstream: %v", err)
+	}
+	if !ws.IsPrimary || ws.Worktree != cwd || ws.Branch != "feature/login" ||
+		ws.Name != "feature/login" || ws.WorkspaceHandle != "ws-feature/login" || ws.Backend != "optest" {
+		t.Fatalf("primary workstream = %+v, want is_primary, worktree=%s, branch/name=feature/login, workspace=ws-feature/login", ws, cwd)
 	}
 }
 
-func TestHandleProjectList(t *testing.T) {
+// TestHandleRepoCreateResolvesCwdAgainstScope proves an empty or relative cwd
+// resolves against the caller's scope (the CLI/MCP working directory carried on
+// the envelope), not the long-lived daemon's process cwd. The resolved cwd must be
+// a real repo because handleRepoCreate now reads its current branch.
+func TestHandleRepoCreateResolvesCwdAgainstScope(t *testing.T) {
+	runRepoCreate := func(t *testing.T, cwd, scope string) backend.WorkstreamSpec {
+		t.Helper()
+		db := newTestDB(t)
+		var gotSpec backend.WorkstreamSpec
+		backend.Register(opBackend{createdSpec: &gotSpec})
+		body := mustJSON(t, map[string]string{"name": "demo", "backend": "optest", "cwd": cwd})
+		hc := daemon.HandlerCtx{Ctx: context.Background(), Env: daemon.Envelope{Body: body}, Scope: scope, DB: db}
+		reply := handleRepoCreate(hc)
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		return gotSpec
+	}
+
+	t.Run("empty cwd uses caller scope", func(t *testing.T) {
+		scope := gitRepo(t, "main")
+		if got := runRepoCreate(t, "", scope).Cwd; got != scope {
+			t.Fatalf("CreateWorkstream cwd = %q, want %q", got, scope)
+		}
+	})
+	t.Run("relative cwd joins caller scope", func(t *testing.T) {
+		scope := t.TempDir()
+		want := filepath.Join(scope, "sub", "dir")
+		gitInitAt(t, want, "main")
+		if got := runRepoCreate(t, "sub/dir", scope).Cwd; got != want {
+			t.Fatalf("CreateWorkstream cwd = %q, want %q", got, want)
+		}
+	})
+	t.Run("absolute cwd is kept", func(t *testing.T) {
+		repo := gitRepo(t, "main")
+		if got := runRepoCreate(t, repo, "/caller/here").Cwd; got != repo {
+			t.Fatalf("CreateWorkstream cwd = %q, want %q", got, repo)
+		}
+	})
+}
+
+func TestHandleRepoList(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)
-	for _, p := range []projectRow{
-		{ID: "p1", Name: "alpha", Backend: "tmux", WorkspaceHandle: "ws-1", Cwd: "/tmp/a", Status: "active", CreatedAt: "t0"},
-		{ID: "p2", Name: "beta", Backend: "superset", WorkspaceHandle: "ws-2", Cwd: "/tmp/b", Status: "archived", CreatedAt: "t1"},
+	for _, p := range []repoRow{
+		{ID: "p1", Name: "alpha", Backend: "tmux", Cwd: "/tmp/a", Status: "active", CreatedAt: "t0"},
+		{ID: "p2", Name: "beta", Backend: "superset", Cwd: "/tmp/b", Status: "archived", CreatedAt: "t1"},
 	} {
-		if err := insertProject(ctx, db, p); err != nil {
-			t.Fatalf("insertProject %s: %v", p.ID, err)
+		if err := insertRepo(ctx, db, p); err != nil {
+			t.Fatalf("insertRepo %s: %v", p.ID, err)
 		}
 	}
 
-	reply := handleProjectList(opCtx(db, nil, nil))
+	reply := handleRepoList(opCtx(db, nil, nil))
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
-	var got []projectView
+	var got []repoView
 	if err := json.Unmarshal(reply.Body, &got); err != nil {
 		t.Fatal(err)
 	}
-	want := []projectView{
-		{ID: "p1", Name: "alpha", Backend: "tmux", Workspace: "ws-1", Cwd: "/tmp/a", Status: "active", CreatedAt: "t0"},
-		{ID: "p2", Name: "beta", Backend: "superset", Workspace: "ws-2", Cwd: "/tmp/b", Status: "archived", CreatedAt: "t1"},
+	want := []repoView{
+		{ID: "p1", Name: "alpha", Backend: "tmux", Cwd: "/tmp/a", Status: "active", CreatedAt: "t0"},
+		{ID: "p2", Name: "beta", Backend: "superset", Cwd: "/tmp/b", Status: "archived", CreatedAt: "t1"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("len = %d, want %d", len(got), len(want))
@@ -650,21 +737,21 @@ func TestHandleProjectList(t *testing.T) {
 	}
 }
 
-func TestHandleProjectActivate(t *testing.T) {
+func TestHandleRepoActivate(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)
-	if err := insertProject(ctx, db, projectRow{
+	if err := insertRepo(ctx, db, repoRow{
 		ID: "p1", Name: "alpha", Backend: "tmux", Cwd: "/tmp/a", Status: "archived", CreatedAt: "t0",
 	}); err != nil {
-		t.Fatalf("insertProject: %v", err)
+		t.Fatalf("insertRepo: %v", err)
 	}
 
 	t.Run("activates by id", func(t *testing.T) {
-		reply := handleProjectActivate(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), nil))
+		reply := handleRepoActivate(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), nil))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
-		p, err := getProject(ctx, db, "p1")
+		p, err := getRepo(ctx, db, "p1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -673,7 +760,7 @@ func TestHandleProjectActivate(t *testing.T) {
 		}
 	})
 	t.Run("missing is an error", func(t *testing.T) {
-		reply := handleProjectActivate(opCtx(db, mustJSON(t, map[string]string{"id": "ghost"}), nil))
+		reply := handleRepoActivate(opCtx(db, mustJSON(t, map[string]string{"id": "ghost"}), nil))
 		if reply.OK || reply.Error == "" {
 			t.Fatalf("reply = %+v, want ok=false with an error", reply)
 		}
@@ -686,14 +773,19 @@ func TestHandleAgentKill(t *testing.T) {
 	tailers = newTailerManager(ctx)
 
 	db := newTestDB(t)
-	if err := insertProject(ctx, db, projectRow{
-		ID: "p1", Name: "proj", Backend: "optest", WorkspaceHandle: "ws-1",
-		Cwd: "/s", Status: StatusActive, CreatedAt: "t0",
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "optest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/s", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
 	}); err != nil {
-		t.Fatalf("insertProject: %v", err)
+		t.Fatalf("insertWorkstream: %v", err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{
+		ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
 	}
 	mustInsertAgent(t, db, agentRow{
-		ID: "a1", ProjectID: "p1", Backend: "optest", TerminalHandle: "term-1",
+		ID: "a1", SprintID: "s1", Backend: "optest", TerminalHandle: "term-1",
 		SessionID: "sess-1", Scope: "/s", Name: "worker", SubjectID: "subj-1",
 		Status: "active", State: StateWorking, CreatedAt: "t0",
 	})
@@ -713,10 +805,10 @@ func TestHandleAgentKill(t *testing.T) {
 		}
 
 		// The backend received the agent handle assembled from the row, with
-		// ProjectID carrying the project's backend WorkspaceHandle (ws-1), not the
-		// orchestrate project id (p1).
+		// WorkstreamID carrying the workstream's backend WorkspaceHandle (ws-1), not
+		// the orchestrate workstream id (w1).
 		want := backend.AgentHandle{
-			Backend: "optest", ID: "term-1", ProjectID: "ws-1", Name: "worker", SessionID: "sess-1",
+			Backend: "optest", ID: "term-1", WorkstreamID: "ws-1", Name: "worker", SessionID: "sess-1",
 		}
 		if killed != want {
 			t.Fatalf("kill handle = %+v, want %+v", killed, want)
@@ -748,7 +840,7 @@ func TestHandleAgentKill(t *testing.T) {
 
 	t.Run("kill error is surfaced but the row is still exited", func(t *testing.T) {
 		mustInsertAgent(t, db, agentRow{
-			ID: "a2", ProjectID: "p1", Backend: "optest", TerminalHandle: "term-2",
+			ID: "a2", SprintID: "s1", Backend: "optest", TerminalHandle: "term-2",
 			SessionID: "sess-2", Scope: "/s", SubjectID: "subj-2",
 			Status: "active", State: StateWorking, CreatedAt: "t1",
 		})
@@ -770,7 +862,7 @@ func TestHandleAgentKill(t *testing.T) {
 
 	t.Run("already-exited agent is an idempotent no-op", func(t *testing.T) {
 		mustInsertAgent(t, db, agentRow{
-			ID: "a3", ProjectID: "p1", Backend: "optest", TerminalHandle: "term-3",
+			ID: "a3", SprintID: "s1", Backend: "optest", TerminalHandle: "term-3",
 			SessionID: "sess-3", Scope: "/s", SubjectID: "subj-3",
 			Status: StatusExited, State: StateIdle, CreatedAt: "t2",
 		})
@@ -790,26 +882,327 @@ func TestHandleAgentKill(t *testing.T) {
 	})
 }
 
-func TestHandleProjectKill(t *testing.T) {
+// TestHandleRepoKill proves repo-kill is a soft, logical cascade: it marks every
+// workstream killed and their agents exited, marks the repo killed, and never calls
+// the backend (real backend/worktree teardown is per-workstream).
+func TestHandleRepoKill(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	tailers = newTailerManager(ctx)
 
 	db := newTestDB(t)
-	if err := insertProject(ctx, db, projectRow{
-		ID: "p1", Name: "proj", Backend: "optest", WorkspaceHandle: "ws-1",
-		Cwd: "/s", Status: StatusActive, CreatedAt: "t0",
+	if err := insertRepo(ctx, db, repoRow{
+		ID: "p1", Name: "proj", Backend: "optest", Cwd: "/s", Status: StatusActive, CreatedAt: "t0",
 	}); err != nil {
-		t.Fatalf("insertProject: %v", err)
+		t.Fatalf("insertRepo: %v", err)
 	}
-	mustInsertAgent(t, db, agentRow{ID: "a1", ProjectID: "p1", Backend: "optest", SubjectID: "subj-1", Status: StatusActive, State: StateWorking, CreatedAt: "t0"})
-	mustInsertAgent(t, db, agentRow{ID: "a2", ProjectID: "p1", Backend: "optest", SubjectID: "subj-2", Status: StatusActive, State: StateIdle, CreatedAt: "t1"})
-	mustInsertAgent(t, db, agentRow{ID: "a3", ProjectID: "p1", Backend: "optest", SubjectID: "subj-3", Status: StatusExited, State: StateIdle, CreatedAt: "t2"})
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "optest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/s", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertWorkstream: %v", err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{
+		ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
+	}
+	mustInsertAgent(t, db, agentRow{ID: "a1", SprintID: "s1", Backend: "optest", SubjectID: "subj-1", Status: StatusActive, State: StateWorking, CreatedAt: "t0"})
+	mustInsertAgent(t, db, agentRow{ID: "a2", SprintID: "s1", Backend: "optest", SubjectID: "subj-2", Status: StatusActive, State: StateIdle, CreatedAt: "t1"})
+	mustInsertAgent(t, db, agentRow{ID: "a3", SprintID: "s1", Backend: "optest", SubjectID: "subj-3", Status: StatusExited, State: StateIdle, CreatedAt: "t2"})
 
-	t.Run("kills workspace and cascades active agents", func(t *testing.T) {
-		var killed backend.ProjectHandle
-		backend.Register(opBackend{killedProject: &killed})
+	var killed backend.WorkstreamHandle
+	backend.Register(opBackend{killedWorkstream: &killed})
 
+	var exited []string
+	appendFn := func(_ context.Context, e *event.Event) (int64, error) {
+		if e.Type == EventExited {
+			exited = append(exited, e.SubjectID)
+		}
+		return 1, nil
+	}
+	reply := handleRepoKill(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
+	if !reply.OK {
+		t.Fatalf("reply not ok: %s", reply.Error)
+	}
+
+	// A soft kill never calls the backend.
+	if (killed != backend.WorkstreamHandle{}) {
+		t.Fatalf("repo-kill called the backend: %+v", killed)
+	}
+
+	proj, err := getRepo(ctx, db, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proj.Status != StatusKilled {
+		t.Fatalf("repo status = %q, want killed", proj.Status)
+	}
+	if ws, err := getWorkstream(ctx, db, "w1", ""); err != nil {
+		t.Fatal(err)
+	} else if ws.Status != StatusKilled {
+		t.Fatalf("workstream status = %q, want killed", ws.Status)
+	}
+	if sp, err := getSprint(ctx, db, "s1", ""); err != nil {
+		t.Fatal(err)
+	} else if sp.Status != StatusKilled {
+		t.Fatalf("sprint status = %q, want killed", sp.Status)
+	}
+	for _, id := range []string{"a1", "a2"} {
+		ag, err := getAgent(ctx, db, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ag.Status != StatusExited {
+			t.Fatalf("agent %s status = %q, want exited", id, ag.Status)
+		}
+	}
+
+	// Exactly the two active agents got an EventExited; the pre-exited a3 did not.
+	got := map[string]bool{}
+	for _, s := range exited {
+		got[s] = true
+	}
+	if len(exited) != 2 || !got["subj-1"] || !got["subj-2"] || got["subj-3"] {
+		t.Fatalf("EventExited subjects = %v, want exactly subj-1 and subj-2", exited)
+	}
+}
+
+// workstreamBackend is a registered test backend whose ManagesWorktree capability
+// is toggleable, recording the CreateWorkstream spec and (when it manages its own
+// worktree) reporting a fixed forked path, so handleWorkstreamCreate's create- and
+// adopt-worktree branches can be exercised without a live CLI.
+type workstreamBackend struct {
+	createdSpec *backend.WorkstreamSpec
+	manages     bool
+	worktree    string
+}
+
+func (workstreamBackend) Name() backend.BackendName         { return "wstest" }
+func (workstreamBackend) Available() bool                   { return true }
+func (workstreamBackend) EnsureReady(context.Context) error { return nil }
+func (workstreamBackend) ListWorkstreams(context.Context) ([]backend.WorkstreamHandle, error) {
+	return nil, nil
+}
+func (b workstreamBackend) CreateWorkstream(_ context.Context, spec backend.WorkstreamSpec) (backend.WorkstreamHandle, error) {
+	if b.createdSpec != nil {
+		*b.createdSpec = spec
+	}
+	return backend.WorkstreamHandle{Backend: "wstest", ID: "ws-" + spec.Name, Name: spec.Name, Cwd: spec.Cwd, Worktree: b.worktree}, nil
+}
+func (workstreamBackend) Spawn(context.Context, backend.SpawnSpec) (backend.AgentHandle, error) {
+	return backend.AgentHandle{}, nil
+}
+func (workstreamBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
+	return nil, nil
+}
+func (workstreamBackend) Kill(context.Context, backend.AgentHandle) error                { return nil }
+func (workstreamBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error { return nil }
+func (b workstreamBackend) Caps() backend.Caps {
+	if b.manages {
+		return backend.Capabilities(backend.ManagesWorktree)
+	}
+	return backend.Caps{}
+}
+
+// gitWorktreeCount returns how many worktrees git reports for the repository at
+// repoRoot (one for the repo's own checkout, plus one per added worktree).
+func gitWorktreeCount(t *testing.T, repoRoot string) int {
+	t.Helper()
+	c := exec.CommandContext(context.Background(), "git", "-C", repoRoot, "worktree", "list", "--porcelain")
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git worktree list: %v\n%s", err, out)
+	}
+	n := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			n++
+		}
+	}
+	return n
+}
+
+// TestHandleWorkstreamCreate covers the two worktree-ownership paths against a real
+// ephemeral git repo and a stub backend.
+func TestHandleWorkstreamCreate(t *testing.T) {
+	t.Run("non-ManagesWorktree backend gets a git worktree we create", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir()) // worktreesBase resolves under the temp home
+		repo := gitRepo(t, "main")
+		db := newTestDB(t)
+		if err := insertRepo(context.Background(), db, repoRow{
+			ID: "p1", Name: "demo", Backend: "wstest", Cwd: repo, Status: StatusActive, CreatedAt: "t0",
+		}); err != nil {
+			t.Fatalf("insertRepo: %v", err)
+		}
+
+		var gotSpec backend.WorkstreamSpec
+		backend.Register(workstreamBackend{createdSpec: &gotSpec, manages: false})
+
+		body := mustJSON(t, map[string]string{"repo": "p1", "name": "feat-x"})
+		reply := handleWorkstreamCreate(opCtx(db, body, nil))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		var out struct {
+			WorkstreamID string `json:"workstream_id"`
+			Worktree     string `json:"worktree"`
+			Workspace    string `json:"workspace"`
+			Branch       string `json:"branch"`
+		}
+		if err := json.Unmarshal(reply.Body, &out); err != nil {
+			t.Fatal(err)
+		}
+
+		// A real worktree dir was created under the worktrees base on the requested
+		// branch, off the repo's HEAD.
+		wantDest := filepath.Join(worktreesBase(), "p1", "feat-x")
+		if out.Worktree != wantDest {
+			t.Fatalf("worktree = %q, want %q", out.Worktree, wantDest)
+		}
+		if _, err := os.Stat(out.Worktree); err != nil {
+			t.Fatalf("worktree dir %s: %v", out.Worktree, err)
+		}
+		real, err := filepath.EvalSymlinks(out.Worktree)
+		if err != nil {
+			t.Fatalf("eval symlinks: %v", err)
+		}
+		listed := func() string {
+			c := exec.CommandContext(context.Background(), "git", "-C", repo, "worktree", "list", "--porcelain")
+			b, err := c.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git worktree list: %v\n%s", err, b)
+			}
+			return string(b)
+		}()
+		if !strings.Contains(listed, real) && !strings.Contains(listed, out.Worktree) {
+			t.Fatalf("worktree %s not listed:\n%s", out.Worktree, listed)
+		}
+		if !strings.Contains(listed, "refs/heads/feat-x") {
+			t.Fatalf("branch feat-x not listed:\n%s", listed)
+		}
+
+		// The backend was handed the worktree as its cwd, the repo root it derives
+		// from, and the branch.
+		if gotSpec.Name != "feat-x" || gotSpec.Cwd != out.Worktree || gotSpec.RepoCwd != repo || gotSpec.Branch != "feat-x" {
+			t.Fatalf("CreateWorkstream spec = %+v, want {Name:feat-x Cwd:%s RepoCwd:%s Branch:feat-x}", gotSpec, out.Worktree, repo)
+		}
+
+		// The worktree path and the backend workspace handle are recorded on a
+		// non-primary workstream row.
+		ws, err := getWorkstream(context.Background(), db, out.WorkstreamID, "")
+		if err != nil {
+			t.Fatalf("getWorkstream: %v", err)
+		}
+		if ws.Worktree != out.Worktree || ws.WorkspaceHandle != "ws-feat-x" || ws.Branch != "feat-x" || ws.IsPrimary {
+			t.Fatalf("workstream row = %+v, want worktree=%s workspace=ws-feat-x branch=feat-x non-primary", ws, out.Worktree)
+		}
+
+		// The new workstream auto-created its default sprint, active.
+		sp, err := getDefaultSprint(context.Background(), db, out.WorkstreamID)
+		if err != nil {
+			t.Fatalf("getDefaultSprint: %v", err)
+		}
+		if sp.Name != defaultSprintName || sp.Status != StatusActive {
+			t.Fatalf("default sprint = %+v, want name %q active", sp, defaultSprintName)
+		}
+	})
+
+	t.Run("ManagesWorktree backend forks its own; no git worktree add", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+		repo := gitRepo(t, "main")
+		db := newTestDB(t)
+		if err := insertRepo(context.Background(), db, repoRow{
+			ID: "p1", Name: "demo", Backend: "wstest", Cwd: repo, Status: StatusActive, CreatedAt: "t0",
+		}); err != nil {
+			t.Fatalf("insertRepo: %v", err)
+		}
+
+		forked := t.TempDir() // the path the backend forked and now owns
+		var gotSpec backend.WorkstreamSpec
+		backend.Register(workstreamBackend{createdSpec: &gotSpec, manages: true, worktree: forked})
+
+		if before := gitWorktreeCount(t, repo); before != 1 {
+			t.Fatalf("git worktree count before = %d, want 1 (just the repo checkout)", before)
+		}
+
+		body := mustJSON(t, map[string]string{"repo": "p1", "name": "feat-y"})
+		reply := handleWorkstreamCreate(opCtx(db, body, nil))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		var out struct {
+			WorkstreamID string `json:"workstream_id"`
+			Worktree     string `json:"worktree"`
+		}
+		if err := json.Unmarshal(reply.Body, &out); err != nil {
+			t.Fatal(err)
+		}
+
+		// No git worktree add ran: the backend forks its own, and cc-orchestrate
+		// adopts the path it returned.
+		if after := gitWorktreeCount(t, repo); after != 1 {
+			t.Fatalf("git worktree count after = %d, want 1 (backend manages its own worktree)", after)
+		}
+		if out.Worktree != forked {
+			t.Fatalf("adopted worktree = %q, want the backend's forked path %q", out.Worktree, forked)
+		}
+		// The backend was pointed at the repo root, not a path we created.
+		if gotSpec.Cwd != repo || gotSpec.RepoCwd != repo || gotSpec.Branch != "feat-y" {
+			t.Fatalf("CreateWorkstream spec = %+v, want Cwd=RepoCwd=%s Branch=feat-y", gotSpec, repo)
+		}
+		ws, err := getWorkstream(context.Background(), db, out.WorkstreamID, "")
+		if err != nil {
+			t.Fatalf("getWorkstream: %v", err)
+		}
+		if ws.Worktree != forked || ws.IsPrimary {
+			t.Fatalf("workstream row = %+v, want worktree=%s non-primary", ws, forked)
+		}
+
+		// The new workstream auto-created its default sprint, active.
+		sp, err := getDefaultSprint(context.Background(), db, out.WorkstreamID)
+		if err != nil {
+			t.Fatalf("getDefaultSprint: %v", err)
+		}
+		if sp.Name != defaultSprintName || sp.Status != StatusActive {
+			t.Fatalf("default sprint = %+v, want name %q active", sp, defaultSprintName)
+		}
+	})
+}
+
+// TestHandleWorkstreamKill proves the real teardown: a non-primary workstream's
+// backend workspace is torn down and its git worktree removed, while a primary
+// workstream's worktree (the repo root) is never removed; both cascade their agents
+// to exited.
+func TestHandleWorkstreamKill(t *testing.T) {
+	t.Run("non-primary tears down the backend and removes its worktree", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		tailers = newTailerManager(ctx)
+
+		repo := gitRepo(t, "main")
+		wtPath, err := worktree.Add(ctx, repo, filepath.Join(t.TempDir(), "feat"), "feat")
+		if err != nil {
+			t.Fatalf("worktree.Add: %v", err)
+		}
+
+		db := newTestDB(t)
+		if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "demo", Backend: "optest", Cwd: repo, Status: StatusActive, CreatedAt: "t0"}); err != nil {
+			t.Fatalf("insertRepo: %v", err)
+		}
+		if err := insertWorkstream(ctx, db, workstreamRow{
+			ID: "w1", RepoID: "p1", Name: "feat", Backend: "optest", WorkspaceHandle: "ws-1",
+			Branch: "feat", Worktree: wtPath, IsPrimary: false, Status: StatusActive, CreatedAt: "t0",
+		}); err != nil {
+			t.Fatalf("insertWorkstream: %v", err)
+		}
+		if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+			t.Fatalf("insertSprint: %v", err)
+		}
+		mustInsertAgent(t, db, agentRow{ID: "a1", SprintID: "s1", Backend: "optest", SubjectID: "subj-1", Status: StatusActive, State: StateWorking, CreatedAt: "t0"})
+
+		var killed backend.WorkstreamHandle
+		backend.Register(opBackend{killedWorkstream: &killed})
 		var exited []string
 		appendFn := func(_ context.Context, e *event.Event) (int64, error) {
 			if e.Type == EventExited {
@@ -817,72 +1210,245 @@ func TestHandleProjectKill(t *testing.T) {
 			}
 			return 1, nil
 		}
-		reply := handleProjectKill(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
+
+		reply := handleWorkstreamKill(opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), appendFn))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
 
-		// The backend tore down the project's workspace handle (ws-1), not its id.
-		want := backend.ProjectHandle{Backend: "optest", ID: "ws-1", Name: "proj", Cwd: "/s"}
+		// The backend tore down the workstream's workspace handle (ws-1).
+		want := backend.WorkstreamHandle{Backend: "optest", ID: "ws-1", Name: "feat", Cwd: wtPath, Worktree: wtPath}
 		if killed != want {
-			t.Fatalf("killed project = %+v, want %+v", killed, want)
+			t.Fatalf("killed workstream = %+v, want %+v", killed, want)
 		}
-
-		proj, err := getProject(ctx, db, "p1")
-		if err != nil {
+		// The git worktree was removed.
+		if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+			t.Fatalf("worktree dir present after kill: stat err = %v", err)
+		}
+		if got := gitWorktreeCount(t, repo); got != 1 {
+			t.Fatalf("git worktree count = %d after kill, want 1", got)
+		}
+		// The workstream is killed and its agent exited.
+		if ws, err := getWorkstream(ctx, db, "w1", ""); err != nil {
 			t.Fatal(err)
+		} else if ws.Status != StatusKilled {
+			t.Fatalf("workstream status = %q, want killed", ws.Status)
 		}
-		if proj.Status != StatusKilled {
-			t.Fatalf("project status = %q, want killed", proj.Status)
-		}
-		for _, id := range []string{"a1", "a2"} {
-			ag, err := getAgent(ctx, db, id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if ag.Status != StatusExited {
-				t.Fatalf("agent %s status = %q, want exited", id, ag.Status)
-			}
-		}
-
-		// Exactly the two active agents got an EventExited; the pre-exited a3 did not.
-		got := map[string]bool{}
-		for _, s := range exited {
-			got[s] = true
-		}
-		if len(exited) != 2 || !got["subj-1"] || !got["subj-2"] || got["subj-3"] {
-			t.Fatalf("EventExited subjects = %v, want exactly subj-1 and subj-2", exited)
+		assertSprintStatus(t, db, "s1", StatusKilled)
+		assertAgentStatus(t, db, "a1", StatusExited)
+		if len(exited) != 1 || exited[0] != "subj-1" {
+			t.Fatalf("EventExited subjects = %v, want [subj-1]", exited)
 		}
 	})
 
-	t.Run("kill error is surfaced but rows are still mutated", func(t *testing.T) {
-		if err := insertProject(ctx, db, projectRow{
-			ID: "p2", Name: "proj2", Backend: "optest", WorkspaceHandle: "ws-2",
-			Cwd: "/s", Status: StatusActive, CreatedAt: "t3",
-		}); err != nil {
-			t.Fatal(err)
+	t.Run("primary never removes its worktree (the repo root)", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		tailers = newTailerManager(ctx)
+
+		repo := gitRepo(t, "main")
+		db := newTestDB(t)
+		if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "demo", Backend: "optest", Cwd: repo, Status: StatusActive, CreatedAt: "t0"}); err != nil {
+			t.Fatalf("insertRepo: %v", err)
 		}
-		mustInsertAgent(t, db, agentRow{ID: "b1", ProjectID: "p2", Backend: "optest", SubjectID: "subj-b1", Status: StatusActive, State: StateWorking, CreatedAt: "t3"})
-		backend.Register(opBackend{killErr: errors.New("tmux: no such session")})
+		if err := insertWorkstream(ctx, db, workstreamRow{
+			ID: "w1", RepoID: "p1", Name: "main", Backend: "optest", WorkspaceHandle: "ws-1",
+			Branch: "main", Worktree: repo, IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+		}); err != nil {
+			t.Fatalf("insertWorkstream: %v", err)
+		}
+		if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+			t.Fatalf("insertSprint: %v", err)
+		}
+		mustInsertAgent(t, db, agentRow{ID: "a1", SprintID: "s1", Backend: "optest", SubjectID: "subj-1", Status: StatusActive, State: StateWorking, CreatedAt: "t0"})
+
+		var killed backend.WorkstreamHandle
+		backend.Register(opBackend{killedWorkstream: &killed})
 		appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
 
-		reply := handleProjectKill(opCtx(db, mustJSON(t, map[string]string{"id": "p2"}), appendFn))
-		if reply.OK || reply.Error == "" {
-			t.Fatalf("reply = %+v, want ok=false with the kill error", reply)
+		reply := handleWorkstreamKill(opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), appendFn))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
 		}
-		proj, err := getProject(ctx, db, "p2")
-		if err != nil {
+		// The backend was still torn down.
+		if killed.ID != "ws-1" {
+			t.Fatalf("killed workstream ID = %q, want ws-1", killed.ID)
+		}
+		// The repo root survived: never git worktree remove a primary.
+		if _, err := os.Stat(repo); err != nil {
+			t.Fatalf("repo root gone after primary kill: %v", err)
+		}
+		if got := gitWorktreeCount(t, repo); got != 1 {
+			t.Fatalf("git worktree count = %d, want 1 (repo intact)", got)
+		}
+		if ws, err := getWorkstream(ctx, db, "w1", ""); err != nil {
 			t.Fatal(err)
+		} else if ws.Status != StatusKilled {
+			t.Fatalf("workstream status = %q, want killed", ws.Status)
 		}
-		if proj.Status != StatusKilled {
-			t.Fatalf("project status = %q, want killed even after kill error", proj.Status)
-		}
-		ag, err := getAgent(ctx, db, "b1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if ag.Status != StatusExited {
-			t.Fatalf("agent status = %q, want exited even after kill error", ag.Status)
-		}
+		assertAgentStatus(t, db, "a1", StatusExited)
 	})
+}
+
+// assertConfig asserts a config key's value and presence.
+func assertConfig(t *testing.T, db *sql.DB, key, wantValue string, wantFound bool) {
+	t.Helper()
+	value, found, err := getConfig(context.Background(), db, key)
+	if err != nil {
+		t.Fatalf("getConfig %s: %v", key, err)
+	}
+	if found != wantFound || value != wantValue {
+		t.Fatalf("config %s = (%q, found=%t), want (%q, found=%t)", key, value, found, wantValue, wantFound)
+	}
+}
+
+// TestActivateResetsPrecedenceChain proves each activate resets the active-* config
+// chain so the most recent activation wins and a stale higher-precedence selection
+// can never silently misroute a bare spawn.
+func TestActivateResetsPrecedenceChain(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "tmux", Cwd: "/tmp/a", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatalf("insertRepo: %v", err)
+	}
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "tmux", Branch: "main",
+		Worktree: "/tmp/a", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertWorkstream: %v", err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
+	}
+
+	// Seed a stale full chain pointing at unrelated ids before every case.
+	seed := func() {
+		for _, kv := range [][2]string{{configActiveRepo, "stale-repo"}, {configActiveWorkstream, "stale-ws"}, {configActiveSprint, "stale-sprint"}} {
+			if err := setConfig(ctx, db, kv[0], kv[1]); err != nil {
+				t.Fatalf("setConfig %s: %v", kv[0], err)
+			}
+		}
+	}
+
+	t.Run("repo-activate sets active-repo and clears workstream+sprint", func(t *testing.T) {
+		seed()
+		reply := handleRepoActivate(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), nil))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		assertConfig(t, db, configActiveRepo, "p1", true)
+		assertConfig(t, db, configActiveWorkstream, "", false)
+		assertConfig(t, db, configActiveSprint, "", false)
+	})
+
+	t.Run("workstream-activate sets active-repo to its repo and clears the stale sprint", func(t *testing.T) {
+		seed()
+		reply := handleWorkstreamActivate(opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), nil))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		assertConfig(t, db, configActiveWorkstream, "w1", true)
+		assertConfig(t, db, configActiveRepo, "p1", true)
+		assertConfig(t, db, configActiveSprint, "", false)
+	})
+
+	t.Run("sprint-activate sets its workstream and repo", func(t *testing.T) {
+		seed()
+		reply := handleSprintActivate(opCtx(db, mustJSON(t, map[string]string{"id": "s1"}), nil))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		assertConfig(t, db, configActiveSprint, "s1", true)
+		assertConfig(t, db, configActiveWorkstream, "w1", true)
+		assertConfig(t, db, configActiveRepo, "p1", true)
+	})
+}
+
+// TestKillClearsActiveSelection proves a kill cascade drops any active-* config key
+// pointing at the killed entity (mirroring the terminal-state guard in
+// handleAgentKill), while a selection pointing elsewhere survives.
+func TestKillClearsActiveSelection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTailerManager(ctx)
+
+	setup := func(t *testing.T) *sql.DB {
+		t.Helper()
+		db := newTestDB(t)
+		if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "optest", Cwd: "/s", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+			t.Fatalf("insertRepo: %v", err)
+		}
+		if err := insertWorkstream(ctx, db, workstreamRow{
+			ID: "w1", RepoID: "p1", Name: "main", Backend: "optest", WorkspaceHandle: "ws-1",
+			Branch: "main", Worktree: "/s", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+		}); err != nil {
+			t.Fatalf("insertWorkstream: %v", err)
+		}
+		if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+			t.Fatalf("insertSprint: %v", err)
+		}
+		return db
+	}
+	appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+
+	t.Run("repo-kill clears the matching chain", func(t *testing.T) {
+		db := setup(t)
+		for _, kv := range [][2]string{{configActiveRepo, "p1"}, {configActiveWorkstream, "w1"}, {configActiveSprint, "s1"}} {
+			if err := setConfig(ctx, db, kv[0], kv[1]); err != nil {
+				t.Fatalf("setConfig: %v", err)
+			}
+		}
+		reply := handleRepoKill(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		assertConfig(t, db, configActiveRepo, "", false)
+		assertConfig(t, db, configActiveWorkstream, "", false)
+		assertConfig(t, db, configActiveSprint, "", false)
+	})
+
+	t.Run("repo-kill preserves selections pointing elsewhere", func(t *testing.T) {
+		db := setup(t)
+		for _, kv := range [][2]string{{configActiveRepo, "other-repo"}, {configActiveWorkstream, "other-ws"}, {configActiveSprint, "other-sprint"}} {
+			if err := setConfig(ctx, db, kv[0], kv[1]); err != nil {
+				t.Fatalf("setConfig: %v", err)
+			}
+		}
+		reply := handleRepoKill(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		assertConfig(t, db, configActiveRepo, "other-repo", true)
+		assertConfig(t, db, configActiveWorkstream, "other-ws", true)
+		assertConfig(t, db, configActiveSprint, "other-sprint", true)
+	})
+}
+
+// TestHandleRepoCreateManagesWorktreeAdoptsFork proves that for a ManagesWorktree
+// backend (superset) the primary workstream adopts the backend's forked worktree
+// rather than the repo root, keeping the workspace handle and worktree co-located.
+func TestHandleRepoCreateManagesWorktreeAdoptsFork(t *testing.T) {
+	db := newTestDB(t)
+	repo := gitRepo(t, "main")
+	forked := t.TempDir() // the path the backend forked and now owns
+	backend.Register(workstreamBackend{manages: true, worktree: forked})
+
+	body := mustJSON(t, map[string]string{"name": "demo", "backend": "wstest", "cwd": repo})
+	reply := handleRepoCreate(opCtx(db, body, nil))
+	if !reply.OK {
+		t.Fatalf("reply not ok: %s", reply.Error)
+	}
+	var out struct {
+		RepoID string `json:"repo_id"`
+	}
+	if err := json.Unmarshal(reply.Body, &out); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := getPrimaryWorkstream(context.Background(), db, out.RepoID)
+	if err != nil {
+		t.Fatalf("getPrimaryWorkstream: %v", err)
+	}
+	if !ws.IsPrimary || ws.Worktree != forked || ws.WorkspaceHandle != "ws-main" {
+		t.Fatalf("primary workstream = %+v, want is_primary, worktree=%s (the fork), workspace=ws-main", ws, forked)
+	}
 }

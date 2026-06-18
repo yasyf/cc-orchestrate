@@ -61,7 +61,9 @@ func TestMCPServer(t *testing.T) {
 	}
 	want := []string{
 		"backends_list", "backend_select", "config_get",
-		"project_create", "project_list", "project_activate", "project_kill",
+		"repo_create", "repo_list", "repo_activate", "repo_kill",
+		"workstream_create", "workstream_list", "workstream_activate", "workstream_kill",
+		"sprint_create", "sprint_list", "sprint_activate",
 		"agent_spawn", "agent_list", "agent_send_message", "agent_status", "agent_kill",
 	}
 	if len(listReply.Result.Tools) != len(want) {

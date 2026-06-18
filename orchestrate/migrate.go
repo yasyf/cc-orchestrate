@@ -10,18 +10,38 @@ import (
 // idempotent (CREATE TABLE IF NOT EXISTS) so every daemon boot can run it safely.
 func migrate(ctx context.Context, db *sql.DB) error {
 	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS projects (
+		`CREATE TABLE IF NOT EXISTS repos (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL,
+			backend    TEXT NOT NULL,
+			cwd        TEXT NOT NULL,
+			status     TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS workstreams (
 			id                       TEXT PRIMARY KEY,
+			repo_id                  TEXT NOT NULL,
 			name                     TEXT NOT NULL,
 			backend                  TEXT NOT NULL,
 			backend_workspace_handle TEXT,
-			cwd                      TEXT NOT NULL,
+			branch                   TEXT NOT NULL,
+			worktree                 TEXT NOT NULL,
+			is_primary               INTEGER NOT NULL DEFAULT 0,
+			ccnotes_project          TEXT,
 			status                   TEXT NOT NULL,
 			created_at               TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS sprints (
+			id             TEXT PRIMARY KEY,
+			workstream_id  TEXT NOT NULL,
+			name           TEXT NOT NULL,
+			ccnotes_sprint TEXT,
+			status         TEXT NOT NULL,
+			created_at     TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS agents (
 			id                      TEXT PRIMARY KEY,
-			project_id              TEXT NOT NULL,
+			sprint_id               TEXT NOT NULL,
 			backend                 TEXT NOT NULL,
 			backend_terminal_handle TEXT,
 			session_id              TEXT,
@@ -29,6 +49,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			name                    TEXT,
 			prompt                  TEXT,
 			subject_id              TEXT,
+			ccnotes_task            TEXT,
 			status                  TEXT NOT NULL,
 			state                   TEXT NOT NULL DEFAULT 'unknown',
 			activity                TEXT,

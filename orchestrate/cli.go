@@ -53,7 +53,9 @@ func Root() *cobra.Command {
 		withSessionDefault(cmd.ChannelCmd(d)),
 		backendsCmd(),
 		configCmd(),
-		projectsCmd(),
+		repoCmd(),
+		workstreamCmd(),
+		sprintCmd(),
 		agentCmd(),
 		mcpCmd(),
 	)
@@ -285,23 +287,23 @@ func defaultMarker(isDefault bool) string {
 	return ""
 }
 
-// projectsCmd is the `projects` group: manage backend workspaces.
-func projectsCmd() *cobra.Command {
+// repoCmd is the `repo` group: manage backend workspaces.
+func repoCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   "projects",
-		Short: "Manage orchestration projects (backend workspaces)",
+		Use:   "repo",
+		Short: "Manage orchestration repos (backend workspaces)",
 	}
 
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List projects",
+		Short: "List repos",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, opProjectList, nil)
+			reply, err := runOp(c, opRepoList, nil)
 			if err != nil {
 				return err
 			}
-			var views []projectView
+			var views []repoView
 			if err := json.Unmarshal(reply.Body, &views); err != nil {
 				return err
 			}
@@ -317,17 +319,17 @@ func projectsCmd() *cobra.Command {
 	var createBackend, createCwd string
 	create := &cobra.Command{
 		Use:   "create <name>",
-		Short: "Create a project and its backend workspace",
+		Short: "Create a repo and its backend workspace",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opProjectCreate, map[string]string{
+			reply, err := runOp(c, opRepoCreate, map[string]string{
 				"name": args[0], "backend": createBackend, "cwd": createCwd,
 			})
 			if err != nil {
 				return err
 			}
 			var out struct {
-				ProjectID string `json:"project_id"`
+				RepoID    string `json:"repo_id"`
 				Workspace string `json:"workspace"`
 				Backend   string `json:"backend"`
 			}
@@ -335,49 +337,250 @@ func projectsCmd() *cobra.Command {
 				return err
 			}
 			w := c.OutOrStdout()
-			fmt.Fprintf(w, "project:   %s\n", out.ProjectID)
+			fmt.Fprintf(w, "repo:      %s\n", out.RepoID)
 			fmt.Fprintf(w, "backend:   %s\n", out.Backend)
 			fmt.Fprintf(w, "workspace: %s\n", out.Workspace)
 			return nil
 		},
 	}
-	create.Flags().StringVar(&createBackend, "backend", "", "backend to place the project on (defaults to the selected/first available)")
-	create.Flags().StringVar(&createCwd, "cwd", "", "working directory for the project (defaults to the current directory)")
+	create.Flags().StringVar(&createBackend, "backend", "", "backend to place the repo on (defaults to the selected/first available)")
+	create.Flags().StringVar(&createCwd, "cwd", "", "working directory for the repo (defaults to the current directory)")
 
 	activate := &cobra.Command{
 		Use:   "activate <id>",
-		Short: "Mark a project active",
+		Short: "Mark a repo active",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opProjectActivate, map[string]string{"id": args[0]})
+			reply, err := runOp(c, opRepoActivate, map[string]string{"id": args[0]})
 			if err != nil {
 				return err
 			}
 			var out struct {
-				ProjectID string `json:"project_id"`
+				RepoID string `json:"repo_id"`
 			}
 			if err := json.Unmarshal(reply.Body, &out); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "activated project: %s\n", out.ProjectID)
+			fmt.Fprintf(c.OutOrStdout(), "activated repo: %s\n", out.RepoID)
 			return nil
 		},
 	}
 
 	kill := &cobra.Command{
 		Use:   "kill <id>",
-		Short: "Kill a project, its backend workspace, and all its agents",
+		Short: "Kill a repo, its backend workspace, and all its agents",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			if _, err := runOp(c, opProjectKill, map[string]string{"id": args[0]}); err != nil {
+			if _, err := runOp(c, opRepoKill, map[string]string{"id": args[0]}); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "killed project: %s\n", args[0])
+			fmt.Fprintf(c.OutOrStdout(), "killed repo: %s\n", args[0])
 			return nil
 		},
 	}
 
 	c.AddCommand(list, create, activate, kill)
+	return c
+}
+
+// workstreamCmd is the `workstream` group (alias `ws`): manage a repo's branches
+// and the backend workspaces that back them.
+func workstreamCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:     "workstream",
+		Aliases: []string{"ws"},
+		Short:   "Manage workstreams (a repo's branches and their backend workspaces)",
+	}
+
+	var listRepo string
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List workstreams",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			reply, err := runOp(c, opWorkstreamList, map[string]string{"repo": listRepo})
+			if err != nil {
+				return err
+			}
+			var views []workstreamView
+			if err := json.Unmarshal(reply.Body, &views); err != nil {
+				return err
+			}
+			rows := make([][]string, len(views))
+			for i, w := range views {
+				primary := ""
+				if w.IsPrimary {
+					primary = "yes"
+				}
+				rows[i] = []string{w.ID, w.Name, w.RepoID, w.Branch, w.Worktree, primary, w.Status}
+			}
+			fmt.Fprint(c.OutOrStdout(), renderTable(
+				[]string{"ID", "NAME", "REPO", "BRANCH", "WORKTREE", "PRIMARY", "STATUS"}, rows))
+			return nil
+		},
+	}
+	list.Flags().StringVar(&listRepo, "repo", "", "filter by repo id or name")
+
+	var createRepo, createBranch string
+	create := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a workstream and its backend workspace",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			reply, err := runOp(c, opWorkstreamCreate, map[string]string{
+				"repo": createRepo, "name": args[0], "branch": createBranch,
+			})
+			if err != nil {
+				return err
+			}
+			var out struct {
+				WorkstreamID string `json:"workstream_id"`
+				RepoID       string `json:"repo_id"`
+				Workspace    string `json:"workspace"`
+				Branch       string `json:"branch"`
+				Worktree     string `json:"worktree"`
+			}
+			if err := json.Unmarshal(reply.Body, &out); err != nil {
+				return err
+			}
+			w := c.OutOrStdout()
+			fmt.Fprintf(w, "workstream: %s\n", out.WorkstreamID)
+			fmt.Fprintf(w, "repo:       %s\n", out.RepoID)
+			fmt.Fprintf(w, "branch:     %s\n", out.Branch)
+			fmt.Fprintf(w, "worktree:   %s\n", out.Worktree)
+			fmt.Fprintf(w, "workspace:  %s\n", out.Workspace)
+			return nil
+		},
+	}
+	create.Flags().StringVar(&createRepo, "repo", "", "repo id or name to create the workstream in")
+	create.Flags().StringVar(&createBranch, "branch", "", "git branch for the worktree (defaults to the name)")
+
+	var activateRepo string
+	activate := &cobra.Command{
+		Use:   "activate <id|name>",
+		Short: "Mark a workstream active and the spawn default",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			reply, err := runOp(c, opWorkstreamActivate, map[string]string{"id": args[0], "repo": activateRepo})
+			if err != nil {
+				return err
+			}
+			var out struct {
+				WorkstreamID string `json:"workstream_id"`
+			}
+			if err := json.Unmarshal(reply.Body, &out); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "activated workstream: %s\n", out.WorkstreamID)
+			return nil
+		},
+	}
+	activate.Flags().StringVar(&activateRepo, "repo", "", "repo id or name to disambiguate the workstream name")
+
+	var killRepo string
+	kill := &cobra.Command{
+		Use:   "kill <id|name>",
+		Short: "Kill a workstream, its backend workspace, worktree, and agents",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			if _, err := runOp(c, opWorkstreamKill, map[string]string{"id": args[0], "repo": killRepo}); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "killed workstream: %s\n", args[0])
+			return nil
+		},
+	}
+	kill.Flags().StringVar(&killRepo, "repo", "", "repo id or name to disambiguate the workstream name")
+
+	c.AddCommand(list, create, activate, kill)
+	return c
+}
+
+// sprintCmd is the `sprint` group: manage a workstream's planning groups — the unit
+// an agent spawns into. A sprint shares its workstream's worktree.
+func sprintCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "sprint",
+		Short: "Manage sprints (a workstream's planning groups that agents spawn into)",
+	}
+
+	var listWorkstream string
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List sprints",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			reply, err := runOp(c, opSprintList, map[string]string{"workstream": listWorkstream})
+			if err != nil {
+				return err
+			}
+			var views []sprintView
+			if err := json.Unmarshal(reply.Body, &views); err != nil {
+				return err
+			}
+			rows := make([][]string, len(views))
+			for i, s := range views {
+				rows[i] = []string{s.ID, s.Name, s.WorkstreamID, s.Status}
+			}
+			fmt.Fprint(c.OutOrStdout(), renderTable(
+				[]string{"ID", "NAME", "WORKSTREAM", "STATUS"}, rows))
+			return nil
+		},
+	}
+	list.Flags().StringVar(&listWorkstream, "workstream", "", "filter by workstream id or name")
+
+	var createWorkstream string
+	create := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a sprint in a workstream",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			reply, err := runOp(c, opSprintCreate, map[string]string{
+				"workstream": createWorkstream, "name": args[0],
+			})
+			if err != nil {
+				return err
+			}
+			var out struct {
+				SprintID     string `json:"sprint_id"`
+				WorkstreamID string `json:"workstream_id"`
+				Name         string `json:"name"`
+			}
+			if err := json.Unmarshal(reply.Body, &out); err != nil {
+				return err
+			}
+			w := c.OutOrStdout()
+			fmt.Fprintf(w, "sprint:     %s\n", out.SprintID)
+			fmt.Fprintf(w, "workstream: %s\n", out.WorkstreamID)
+			fmt.Fprintf(w, "name:       %s\n", out.Name)
+			return nil
+		},
+	}
+	create.Flags().StringVar(&createWorkstream, "workstream", "", "workstream id or name to create the sprint in")
+
+	var activateWorkstream string
+	activate := &cobra.Command{
+		Use:   "activate <id|name>",
+		Short: "Mark a sprint active and the spawn default",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			reply, err := runOp(c, opSprintActivate, map[string]string{"id": args[0], "workstream": activateWorkstream})
+			if err != nil {
+				return err
+			}
+			var out struct {
+				SprintID string `json:"sprint_id"`
+			}
+			if err := json.Unmarshal(reply.Body, &out); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "activated sprint: %s\n", out.SprintID)
+			return nil
+		},
+	}
+	activate.Flags().StringVar(&activateWorkstream, "workstream", "", "workstream id or name to disambiguate the sprint name")
+
+	c.AddCommand(list, create, activate)
 	return c
 }
 
@@ -388,15 +591,15 @@ func agentCmd() *cobra.Command {
 		Short: "Spawn and control child Claude Code agents",
 	}
 
-	var spawnProject, spawnName, spawnCwd, spawnPrompt string
+	var spawnRepo, spawnWorkstream, spawnSprint, spawnName, spawnCwd, spawnPrompt string
 	spawn := &cobra.Command{
 		Use:   "spawn",
-		Short: "Spawn a child agent into a project",
+		Short: "Spawn a child agent into a sprint",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			reply, err := runOp(c, opSpawn, map[string]string{
-				"project": spawnProject, "name": spawnName,
-				"cwd": spawnCwd, "prompt": spawnPrompt,
+				"repo": spawnRepo, "workstream": spawnWorkstream, "sprint": spawnSprint,
+				"name": spawnName, "cwd": spawnCwd, "prompt": spawnPrompt,
 			})
 			if err != nil {
 				return err
@@ -416,18 +619,20 @@ func agentCmd() *cobra.Command {
 			return nil
 		},
 	}
-	spawn.Flags().StringVar(&spawnProject, "project", "", "project id or name to spawn into")
+	spawn.Flags().StringVar(&spawnRepo, "repo", "", "repo id or name to spawn into (uses its primary workstream's default sprint)")
+	spawn.Flags().StringVar(&spawnWorkstream, "workstream", "", "workstream id or name to spawn into (uses its default sprint)")
+	spawn.Flags().StringVar(&spawnSprint, "sprint", "", "sprint id or name to spawn into")
 	spawn.Flags().StringVar(&spawnName, "name", "", "human-readable agent name")
-	spawn.Flags().StringVar(&spawnCwd, "cwd", "", "working directory / scope (defaults to the project cwd)")
+	spawn.Flags().StringVar(&spawnCwd, "cwd", "", "working directory / scope (defaults to the workstream worktree)")
 	spawn.Flags().StringVar(&spawnPrompt, "prompt", "", "initial prompt for the child agent")
 
-	var listProject string
+	var listRepo string
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List agents",
+		Short: "List agents and their sprint and status",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, opList, map[string]string{"project": listProject})
+			reply, err := runOp(c, opList, map[string]string{"repo": listRepo})
 			if err != nil {
 				return err
 			}
@@ -437,14 +642,14 @@ func agentCmd() *cobra.Command {
 			}
 			rows := make([][]string, len(views))
 			for i, a := range views {
-				rows[i] = []string{a.ID, a.Name, a.ProjectID, a.Backend, a.State, a.Status, strconv.Itoa(a.Tokens), a.Activity}
+				rows[i] = []string{a.ID, a.Name, a.SprintID, a.Backend, a.State, a.Status, strconv.Itoa(a.Tokens), a.Activity}
 			}
 			fmt.Fprint(c.OutOrStdout(), renderTable(
-				[]string{"ID", "NAME", "PROJECT", "BACKEND", "STATE", "STATUS", "TOKENS", "ACTIVITY"}, rows))
+				[]string{"ID", "NAME", "SPRINT", "BACKEND", "STATE", "STATUS", "TOKENS", "ACTIVITY"}, rows))
 			return nil
 		},
 	}
-	list.Flags().StringVar(&listProject, "project", "", "filter by project id or name")
+	list.Flags().StringVar(&listRepo, "repo", "", "filter by repo id or name")
 
 	sendMessage := &cobra.Command{
 		Use:   "send-message <id> <text>",
@@ -562,7 +767,7 @@ func runAgentWatch(c *cobra.Command, id string, all bool) error {
 // mutex-guarded writer so concurrent streams never interleave a line. The first
 // real stream error cancels the rest; a clean terminal/ctx end returns nil.
 func watchAllAgents(c *cobra.Command, d cmd.Deps) error {
-	reply, err := runOp(c, opList, map[string]string{"project": ""})
+	reply, err := runOp(c, opList, map[string]string{"repo": ""})
 	if err != nil {
 		return err
 	}
