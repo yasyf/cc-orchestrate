@@ -60,6 +60,10 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+// nowStamp is the canonical RFC3339 UTC timestamp every row write stamps into a
+// created_at/updated_at column.
+func nowStamp() string { return time.Now().UTC().Format(time.RFC3339) }
+
 func scanProject(s rowScanner) (projectRow, error) {
 	var p projectRow
 	err := s.Scan(&p.ID, &p.Name, &p.Backend, &p.WorkspaceHandle, &p.Cwd, &p.Status, &p.CreatedAt)
@@ -190,7 +194,7 @@ func getAgent(ctx context.Context, db *sql.DB, id string) (agentRow, error) {
 }
 
 func setAgentLifecycle(ctx context.Context, db *sql.DB, id string, status LifecycleStatus) error {
-	_, err := db.ExecContext(ctx, `UPDATE agents SET status = ? WHERE id = ?`, status, id)
+	_, err := db.ExecContext(ctx, `UPDATE agents SET status = ?, updated_at = ? WHERE id = ?`, status, nowStamp(), id)
 	if err != nil {
 		return fmt.Errorf("set agent %q lifecycle: %w", id, err)
 	}
@@ -202,7 +206,7 @@ func setAgentLifecycle(ctx context.Context, db *sql.DB, id string, status Lifecy
 func applyStatus(ctx context.Context, db *sql.DB, id string, st Status) error {
 	_, err := db.ExecContext(ctx,
 		`UPDATE agents SET state = ?, activity = ?, tokens = ?, updated_at = ? WHERE id = ?`,
-		st.State, statusActivity(st), st.Tokens, time.Now().UTC().Format(time.RFC3339), id)
+		st.State, statusActivity(st), st.Tokens, nowStamp(), id)
 	if err != nil {
 		return fmt.Errorf("apply status to agent %q: %w", id, err)
 	}

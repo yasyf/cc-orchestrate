@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -351,7 +350,7 @@ func handleProjectCreate(hc daemon.HandlerCtx) daemon.Reply {
 	}
 	p := projectRow{
 		ID: projectSlug(b.Name), Name: b.Name, Backend: bname, WorkspaceHandle: handle.ID,
-		Cwd: cwd, Status: StatusActive, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Cwd: cwd, Status: StatusActive, CreatedAt: nowStamp(),
 	}
 	if err := insertProject(hc.Ctx, hc.DB, p); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
@@ -445,14 +444,8 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	tailers.stop(ag.ID)
 	killErr := bk.Kill(hc.Ctx, handle)
-	if err := setAgentLifecycle(hc.Ctx, hc.DB, ag.ID, StatusExited); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
-	}
-	if _, err := hc.Append(hc.Ctx, &event.Event{
-		SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventExited, Payload: exitedPayload(),
-	}); err != nil {
+	if err := softExitAgent(hc.Ctx, hc.DB, hc.Append, ag); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
 	if killErr != nil {

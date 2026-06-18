@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -162,7 +161,7 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 		ID: sid, ProjectID: proj.ID, Backend: bname, TerminalHandle: handle.ID,
 		SessionID: sid, Scope: scope, Name: body.Name, Prompt: body.Prompt,
 		SubjectID: sub.ID, Status: StatusActive, State: StateUnknown,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		CreatedAt: nowStamp(),
 	}
 	if err := insertAgent(hc.Ctx, hc.DB, ag); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
