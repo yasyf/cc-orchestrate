@@ -1,145 +1,93 @@
 package ccnotes
 
 import (
-	"context"
-	"errors"
+	"os"
 	"os/exec"
-	"slices"
+	"strings"
 	"testing"
 )
 
-type recordedCall struct {
-	dir  string
-	name string
-	args []string
-}
-
-// recordingRunner returns a runner that records the single call it receives and
-// replies with out, so a create helper's argv can be asserted without cc-notes.
-func recordingRunner(out string, rec *recordedCall) runner {
-	return func(_ context.Context, dir, name string, args ...string) ([]byte, error) {
-		rec.dir, rec.name, rec.args = dir, name, args
-		return []byte(out), nil
-	}
-}
-
-// swapSeams installs stub run/lookPath and restores the originals when the test
-// ends, so the package globals never leak across tests.
-func swapSeams(t *testing.T, r runner, lp func(string) (string, error)) {
+func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	origRun, origLook := run, lookPath
-	run, lookPath = r, lp
-	t.Cleanup(func() { run, lookPath = origRun, origLook })
-}
-
-func TestCreateArgv(t *testing.T) {
-	// One compact JSON line, the shape every cc-notes add command emits under --json.
-	const out = `{"id":"c0b3932915b8486d9f5d90a88444392a4ba4fb1b","status":"active"}`
-
-	for _, tc := range []struct {
-		name     string
-		invoke   func(ctx context.Context) (string, error)
-		wantArgs []string
-	}{
-		{
-			name: "CreateProject",
-			invoke: func(ctx context.Context) (string, error) {
-				return CreateProject(ctx, "/repo", "Build the thing")
-			},
-			wantArgs: []string{"project", "add", "Build the thing", "--json"},
-		},
-		{
-			name: "CreateSprint",
-			invoke: func(ctx context.Context) (string, error) {
-				return CreateSprint(ctx, "/repo", "proj-id", "Sprint 1")
-			},
-			wantArgs: []string{"sprint", "add", "Sprint 1", "--project", "proj-id", "--json"},
-		},
-		{
-			name: "CreateTask",
-			invoke: func(ctx context.Context) (string, error) {
-				return CreateTask(ctx, "/repo", "Do the work", "feature/x", "sprint-id", "proj-id")
-			},
-			wantArgs: []string{
-				"task", "add", "Do the work",
-				"--branch", "feature/x",
-				"--sprint", "sprint-id",
-				"--project", "proj-id",
-				"--no-validation-criteria",
-				"--json",
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var rec recordedCall
-			swapSeams(t, recordingRunner(out, &rec), exec.LookPath)
-			id, err := tc.invoke(context.Background())
-			if err != nil {
-				t.Fatalf("invoke: %v", err)
-			}
-			if id != "c0b3932915b8486d9f5d90a88444392a4ba4fb1b" {
-				t.Errorf("id = %q, want the full hex id from --json", id)
-			}
-			if rec.dir != "/repo" {
-				t.Errorf("dir = %q, want /repo (cc-notes is scoped by cwd)", rec.dir)
-			}
-			if rec.name != bin {
-				t.Errorf("binary = %q, want %q", rec.name, bin)
-			}
-			if !slices.Equal(rec.args, tc.wantArgs) {
-				t.Errorf("argv = %v, want %v", rec.args, tc.wantArgs)
-			}
-		})
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}
 }
 
-// TestParseIDRejectsMissingID proves a create surfaces a clear error when cc-notes
-// emits a DTO with no id, rather than silently returning an empty binding.
-func TestParseIDRejectsMissingID(t *testing.T) {
-	swapSeams(t, recordingRunner(`{"status":"active"}`, &recordedCall{}), exec.LookPath)
-	if _, err := CreateProject(context.Background(), "/repo", "x"); err == nil {
-		t.Fatal("CreateProject err = nil, want a no-id error")
+// gitInit creates a hermetic git repo at dir on branch main with an identity,
+// pinning global/system config to /dev/null and setting CC_NOTES_ACTOR so the
+// in-process store resolves an author without leaning on host git config.
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	t.Setenv("CC_NOTES_ACTOR", "cc-orchestrate test <test@example.com>")
+	mustGit(t, dir, "init", "-q", "-b", "main")
+	mustGit(t, dir, "config", "user.name", "Test User")
+	mustGit(t, dir, "config", "user.email", "test@example.com")
+}
+
+// isHexID reports whether id looks like a cc-notes entity id: 40 or 64
+// lowercase hex characters.
+func isHexID(id string) bool {
+	if len(id) != 40 && len(id) != 64 {
+		return false
+	}
+	for _, r := range id {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// TestAdapterRoundTrip drives the real cc-notes library through the adapter
+// against a fresh git repo: Enabled flips from false to true once entities
+// exist, and project, sprint, and task each come back as a distinct full-hex
+// entity id — no stubbed binary, real refs on disk.
+func TestAdapterRoundTrip(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	gitInit(t, dir)
+
+	if Enabled(ctx, dir) {
+		t.Fatal("Enabled on a fresh repo = true, want false (no cc-notes refs yet)")
+	}
+
+	project, err := CreateProject(ctx, dir, "Build the thing")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	if !isHexID(project) {
+		t.Errorf("project id = %q, want a full hex entity id", project)
+	}
+
+	if !Enabled(ctx, dir) {
+		t.Fatal("Enabled after first create = false, want true (a ref now exists)")
+	}
+
+	sprint, err := CreateSprint(ctx, dir, project, "Sprint 1")
+	if err != nil {
+		t.Fatalf("CreateSprint: %v", err)
+	}
+	if !isHexID(sprint) || sprint == project {
+		t.Errorf("sprint id = %q, want a distinct hex id", sprint)
+	}
+
+	task, err := CreateTask(ctx, dir, "Do the work", "feature/x", sprint, project)
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if !isHexID(task) || task == sprint || task == project {
+		t.Errorf("task id = %q, want a distinct hex id", task)
 	}
 }
 
-func TestEnabled(t *testing.T) {
-	present := func(string) (string, error) { return "/usr/local/bin/cc-notes", nil }
-	absent := func(string) (string, error) { return "", errors.New("not found") }
-
-	for _, tc := range []struct {
-		name    string
-		look    func(string) (string, error)
-		gitOut  string
-		gitErr  error
-		want    bool
-		wantRun bool // whether the git ref probe must have run
-	}{
-		{name: "binary absent short-circuits", look: absent, want: false, wantRun: false},
-		{name: "installed with refs", look: present, gitOut: "refs/cc-notes/projects/abc\n", want: true, wantRun: true},
-		{name: "installed without refs", look: present, gitOut: "", want: false, wantRun: true},
-		{name: "installed but git fails", look: present, gitErr: errors.New("not a git repo"), want: false, wantRun: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var rec recordedCall
-			ran := false
-			swapSeams(t, func(_ context.Context, dir, name string, args ...string) ([]byte, error) {
-				ran = true
-				rec.dir, rec.name, rec.args = dir, name, args
-				return []byte(tc.gitOut), tc.gitErr
-			}, tc.look)
-
-			if got := Enabled(context.Background(), "/repo"); got != tc.want {
-				t.Errorf("Enabled = %v, want %v", got, tc.want)
-			}
-			if ran != tc.wantRun {
-				t.Fatalf("git ref probe ran = %v, want %v", ran, tc.wantRun)
-			}
-			if tc.wantRun {
-				wantArgs := []string{"for-each-ref", "--count=1", "refs/cc-notes/"}
-				if rec.name != "git" || !slices.Equal(rec.args, wantArgs) || rec.dir != "/repo" {
-					t.Errorf("probe = %s %v in %q, want git %v in /repo", rec.name, rec.args, rec.dir, wantArgs)
-				}
-			}
-		})
+// TestEnabledNonRepo confirms the gate is closed — and never panics — for a
+// path that is not a git repository.
+func TestEnabledNonRepo(t *testing.T) {
+	if Enabled(t.Context(), t.TempDir()) {
+		t.Error("Enabled on a non-git dir = true, want false")
 	}
 }

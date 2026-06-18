@@ -3,7 +3,6 @@ package orchestrate
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -162,22 +161,9 @@ func TestCCNotesDisabledSpawnLeavesTaskEmpty(t *testing.T) {
 	}
 }
 
-// stubFailingBin prepends a temp dir to PATH holding an executable named bin that
-// always exits non-zero, so a CLI shell-out to it fails deterministically without
-// the real binary installed.
-func stubFailingBin(t *testing.T, bin string) {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, bin), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-		t.Fatalf("write stub %s: %v", bin, err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
 // TestCCNotesSpawnFailureLeavesNoSubjectOrAgent proves cc-notes task creation runs
 // before any subject or terminal exists: when cc-notes fails, the spawn fails loud and
-// leaves no subject, no agent row, and never reaches the backend — only a residual
-// git-ref task, the same tradeoff provisionCCNotes already accepts.
+// leaves no subject, no agent row, and never reaches the backend.
 func TestCCNotesSpawnFailureLeavesNoSubjectOrAgent(t *testing.T) {
 	old := pollInterval
 	pollInterval = 5 * time.Millisecond
@@ -192,10 +178,12 @@ func TestCCNotesSpawnFailureLeavesNoSubjectOrAgent(t *testing.T) {
 	if out, err := exec.CommandContext(ctx, "git", "-C", repo, "update-ref", "refs/cc-notes/test", "HEAD").CombinedOutput(); err != nil {
 		t.Fatalf("git update-ref: %v\n%s", err, out)
 	}
-	// A fake cc-notes on PATH that always fails, so CreateTask errors deterministically.
-	stubFailingBin(t, "cc-notes")
+	// A malformed CC_NOTES_ACTOR makes the in-process task create fail
+	// deterministically at identity resolution (a set value is never a fallback),
+	// without touching Enabled, which only probes refs.
+	t.Setenv("CC_NOTES_ACTOR", "not-a-valid-identity")
 	if !ccnotes.Enabled(ctx, repo) {
-		t.Fatal("precondition: repo must report cc-notes enabled (binary on PATH + a refs/cc-notes/ ref)")
+		t.Fatal("precondition: repo must report cc-notes enabled (a refs/cc-notes/ ref exists)")
 	}
 
 	var gotSpec backend.SpawnSpec
