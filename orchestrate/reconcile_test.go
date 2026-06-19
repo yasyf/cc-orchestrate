@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/yasyf/cc-interact/event"
 
@@ -12,7 +13,10 @@ import (
 
 // reconcileBackend is a registered test backend returning controlled ListWorkstreams
 // / ListAgents sets, with a toggleable CanEnumerate, so reconcile can be exercised
-// without a live CLI. Its name is outside backend.Precedence.
+// without a live CLI. It advertises CanCapture so respawnAgent's wrapForCapture
+// short-circuits and the test needs no real claude on PATH. Spawn hands back a fresh
+// terminal id so a re-spawned agent's new backend_terminal_handle is observable. Its
+// name is outside backend.Precedence.
 type reconcileBackend struct {
 	projects  []backend.WorkstreamHandle
 	agents    []backend.AgentHandle
@@ -28,19 +32,20 @@ func (b reconcileBackend) ListWorkstreams(context.Context) ([]backend.Workstream
 func (reconcileBackend) CreateWorkstream(context.Context, backend.WorkstreamSpec) (backend.WorkstreamHandle, error) {
 	return backend.WorkstreamHandle{}, nil
 }
-func (reconcileBackend) Spawn(context.Context, backend.SpawnSpec) (backend.AgentHandle, error) {
-	return backend.AgentHandle{}, nil
+func (reconcileBackend) Spawn(_ context.Context, spec backend.SpawnSpec) (backend.AgentHandle, error) {
+	return backend.AgentHandle{Backend: "recontest", ID: "term-respawned", SessionID: spec.SessionID}, nil
 }
 func (b reconcileBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
 	return b.agents, nil
 }
 func (reconcileBackend) Kill(context.Context, backend.AgentHandle) error                { return nil }
 func (reconcileBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error { return nil }
+func (reconcileBackend) Capture(context.Context, backend.AgentHandle) (string, error)   { return "", nil }
 func (b reconcileBackend) Caps() backend.Caps {
 	if b.enumerate {
-		return backend.Capabilities(backend.CanEnumerate)
+		return backend.Capabilities(backend.CanEnumerate, backend.CanCapture)
 	}
-	return backend.Caps{}
+	return backend.Capabilities(backend.CanCapture)
 }
 
 // seedWorkstream inserts a workstream and its default sprint (id workstreamID+"-s"),
@@ -105,6 +110,11 @@ func assertAgentStatus(t *testing.T, db *sql.DB, id string, want LifecycleStatus
 }
 
 func TestReconcile(t *testing.T) {
+	old := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	t.Setenv("HOME", t.TempDir())
+
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	noopAppend := func(context.Context, *event.Event) (int64, error) { return 1, nil }
@@ -145,7 +155,11 @@ func TestReconcile(t *testing.T) {
 		assertAgentStatus(t, db, "a1", StatusExited)
 	})
 
-	t.Run("vanished agent with CanEnumerate is exited", func(t *testing.T) {
+	// A vanished active agent under the restart budget is RESTARTED (resumed into a
+	// fresh terminal), not pruned to exited — boot reconcile and the keep-alive
+	// supervisor share the reconcileVanished decision, so a vanished agent is never
+	// both pruned and restarted.
+	t.Run("vanished agent under budget is restarted", func(t *testing.T) {
 		tailers = newTailerManager(ctx)
 		db := newTestDB(t)
 		backend.Register(reconcileBackend{
@@ -155,6 +169,35 @@ func TestReconcile(t *testing.T) {
 		})
 		seedWorkstream(t, db, "w1", "p1", "recontest", "ws-1")
 		seedAgent(t, db, "a1", "w1", "recontest", "term-1")
+
+		if err := reconcileWorkstreams(ctx, db, noopAppend); err != nil {
+			t.Fatal(err)
+		}
+		if err := reconcileAgents(ctx, db, noopAppend); err != nil {
+			t.Fatal(err)
+		}
+		assertWorkstreamStatus(t, db, "w1", StatusActive)
+		assertAgentStatus(t, db, "a1", StatusActive)
+		assertRestartCount(t, db, "a1", 1)
+		assertTerminalHandle(t, db, "a1", "term-respawned")
+	})
+
+	// A vanished active agent at the restart budget is abandoned and terminally
+	// exited — the only path reconcileVanished still soft-exits.
+	t.Run("vanished agent at budget is abandoned and exited", func(t *testing.T) {
+		tailers = newTailerManager(ctx)
+		db := newTestDB(t)
+		backend.Register(reconcileBackend{
+			projects:  []backend.WorkstreamHandle{{ID: "ws-1"}},
+			agents:    nil,
+			enumerate: true,
+		})
+		seedWorkstream(t, db, "w1", "p1", "recontest", "ws-1")
+		mustInsertAgent(t, db, agentRow{
+			ID: "a1", SprintID: "w1-s", Backend: "recontest", TerminalHandle: "term-1",
+			SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
+			RestartCount: restartBudget, CreatedAt: "t0",
+		})
 
 		if err := reconcileWorkstreams(ctx, db, noopAppend); err != nil {
 			t.Fatal(err)

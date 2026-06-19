@@ -2,6 +2,8 @@ package orchestrate
 
 import (
 	"cmp"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -83,6 +85,23 @@ func claudeCommand(self, sid, scope, prompt string) []string {
 		argv = append(argv, prompt)
 	}
 	return argv
+}
+
+// resumeCommand is the argv a backend runs to bring a vanished terminal back: it
+// resumes the same Claude session (same sid → same transcript), so no work is
+// lost and the re-appended spawnBrief re-arms the watch Monitor. Unlike
+// claudeCommand it passes --resume sid instead of --session-id sid, never
+// --fork-session, and carries no trailing positional prompt — the resumed
+// session already holds its history.
+func resumeCommand(self, sid, scope string) []string {
+	return []string{
+		"claude",
+		"--resume", sid,
+		"--mcp-config", childMCPConfig(self, sid, scope),
+		"--strict-mcp-config",
+		"--settings", childSettings(self),
+		"--append-system-prompt", spawnBrief(self, sid, scope),
+	}
 }
 
 // spawnBrief is the orchestration brief appended to a child agent's system prompt.
@@ -283,4 +302,56 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 		"agent_id": sid, "subject_id": sub.ID, "terminal": handle.ID, "backend": string(bname),
 	})
 	return daemon.Reply{OK: true, Body: out}
+}
+
+// respawnAgent brings a vanished agent's terminal back: it resumes the agent's
+// existing Claude session (same sid → same transcript, no work lost) into a fresh
+// backend terminal, persists the new terminal handle, and restarts the transcript
+// tailer with a snapshot carrying that handle. It reuses every spawn-tail mechanic
+// handleSpawn runs — EnsureReady, wrapForCapture, Spawn, tailers.start — but with
+// resumeCommand rather than claudeCommand, and it updates the agent's existing row
+// instead of inserting a new one. It mints no new subject and writes no lifecycle
+// event: the caller (the supervisor) owns markRestartAttempt and the EventRestarted
+// it appends, and holds agentLock(ag.ID) across the whole sequence.
+func respawnAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow) (backend.AgentHandle, error) {
+	b, ok := backend.Get(ag.Backend)
+	if !ok {
+		return backend.AgentHandle{}, fmt.Errorf("unknown backend: %s", ag.Backend)
+	}
+	if err := b.EnsureReady(ctx); err != nil {
+		return backend.AgentHandle{}, fmt.Errorf("ensure backend %s ready: %w", ag.Backend, err)
+	}
+	sprint, err := getSprint(ctx, db, ag.SprintID, "")
+	if err != nil {
+		return backend.AgentHandle{}, err
+	}
+	ws, err := getWorkstream(ctx, db, sprint.WorkstreamID, "")
+	if err != nil {
+		return backend.AgentHandle{}, err
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return backend.AgentHandle{}, fmt.Errorf("resolve self: %w", err)
+	}
+	command, err := wrapForCapture(self, ag.SessionID, resumeCommand(self, ag.SessionID, ag.Scope), b.Caps())
+	if err != nil {
+		return backend.AgentHandle{}, err
+	}
+	handle, err := b.Spawn(ctx, backend.SpawnSpec{
+		Workstream: backend.WorkstreamHandle{Backend: ws.Backend, ID: ws.WorkspaceHandle, Name: ws.Name, Cwd: ws.Worktree},
+		Name:       ag.Name,
+		Cwd:        ag.Scope,
+		Command:    command,
+		SessionID:  ag.SessionID,
+	})
+	if err != nil {
+		return backend.AgentHandle{}, fmt.Errorf("respawn agent %q: %w", ag.ID, err)
+	}
+	if err := setAgentTerminalHandle(ctx, db, ag.ID, handle.ID); err != nil {
+		return backend.AgentHandle{}, err
+	}
+	fresh := ag
+	fresh.TerminalHandle = handle.ID
+	tailers.start(db, appendFn, fresh)
+	return handle, nil
 }

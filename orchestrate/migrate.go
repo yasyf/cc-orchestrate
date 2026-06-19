@@ -55,7 +55,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			activity                TEXT,
 			tokens                  INTEGER NOT NULL DEFAULT 0,
 			updated_at              TEXT,
-			created_at              TEXT NOT NULL
+			created_at              TEXT NOT NULL,
+			restart_count           INTEGER NOT NULL DEFAULT 0,
+			last_restart_at         TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS config (
 			key   TEXT PRIMARY KEY,

@@ -107,7 +107,7 @@ func TestAgentCRUD(t *testing.T) {
 		ID: "a1", SprintID: "s1", Backend: "tmux", TerminalHandle: "term-1",
 		SessionID: "sess-1", Scope: "/tmp/a1", Name: "worker", Prompt: "do the thing",
 		SubjectID: "subj-1", Status: "active", State: StateUnknown,
-		CreatedAt: "2026-06-16T00:00:00Z",
+		CreatedAt: "2026-06-16T00:00:00Z", RestartCount: 2, LastRestartAt: "2026-06-16T02:00:00Z",
 	}
 	idle := agentRow{
 		ID: "a2", SprintID: "s2", Backend: "tmux", Scope: "/tmp/a2",
@@ -451,6 +451,72 @@ func TestApplyStatus(t *testing.T) {
 	if got.UpdatedAt == "" {
 		t.Error("updated_at not stamped")
 	}
+}
+
+// TestRestartHelpers proves the three restart-state writers each touch only their own
+// columns: markRestartAttempt the (count, at) pair, setAgentTerminalHandle the handle,
+// and resetRestart the (count, at) pair back to (0, ""), each leaving the rest intact.
+func TestRestartHelpers(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	seed := agentRow{
+		ID: "a1", SprintID: "s1", Backend: "tmux", TerminalHandle: "term-1",
+		SessionID: "sess-1", Scope: "/tmp/a1", Name: "worker", Prompt: "do the thing",
+		SubjectID: "subj-1", Status: StatusActive, State: StateWorking, Activity: "Bash: go test",
+		Tokens: 7, UpdatedAt: "2026-06-16T00:00:00Z", CreatedAt: "2026-06-16T00:00:00Z",
+	}
+	if err := insertAgent(ctx, db, seed); err != nil {
+		t.Fatalf("insertAgent: %v", err)
+	}
+
+	t.Run("markRestartAttempt sets only count and last_restart_at", func(t *testing.T) {
+		if err := markRestartAttempt(ctx, db, "a1", 3, "2026-06-16T03:00:00Z"); err != nil {
+			t.Fatalf("markRestartAttempt: %v", err)
+		}
+		got, err := getAgent(ctx, db, "a1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := seed
+		want.RestartCount = 3
+		want.LastRestartAt = "2026-06-16T03:00:00Z"
+		if got != want {
+			t.Fatalf("markRestartAttempt mutated more than (count, at):\n got %+v\nwant %+v", got, want)
+		}
+	})
+
+	t.Run("setAgentTerminalHandle sets only the handle", func(t *testing.T) {
+		if err := setAgentTerminalHandle(ctx, db, "a1", "term-2"); err != nil {
+			t.Fatalf("setAgentTerminalHandle: %v", err)
+		}
+		got, err := getAgent(ctx, db, "a1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := seed
+		want.RestartCount = 3
+		want.LastRestartAt = "2026-06-16T03:00:00Z"
+		want.TerminalHandle = "term-2"
+		if got != want {
+			t.Fatalf("setAgentTerminalHandle mutated more than the handle:\n got %+v\nwant %+v", got, want)
+		}
+	})
+
+	t.Run("resetRestart clears only count and last_restart_at", func(t *testing.T) {
+		if err := resetRestart(ctx, db, "a1"); err != nil {
+			t.Fatalf("resetRestart: %v", err)
+		}
+		got, err := getAgent(ctx, db, "a1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := seed
+		want.TerminalHandle = "term-2"
+		if got != want {
+			t.Fatalf("resetRestart mutated more than (count, at):\n got %+v\nwant %+v", got, want)
+		}
+	})
 }
 
 func TestStatusActivity(t *testing.T) {

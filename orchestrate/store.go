@@ -32,7 +32,8 @@ const sprintColumns = `id, workstream_id, name, COALESCE(ccnotes_sprint, ''), st
 const agentColumns = `agents.id, agents.sprint_id, agents.backend, COALESCE(agents.backend_terminal_handle, ''), ` +
 	`COALESCE(agents.session_id, ''), agents.scope, COALESCE(agents.name, ''), COALESCE(agents.prompt, ''), ` +
 	`COALESCE(agents.subject_id, ''), COALESCE(agents.ccnotes_task, ''), agents.status, agents.state, ` +
-	`COALESCE(agents.activity, ''), agents.tokens, COALESCE(agents.updated_at, ''), agents.created_at`
+	`COALESCE(agents.activity, ''), agents.tokens, COALESCE(agents.updated_at, ''), agents.created_at, ` +
+	`agents.restart_count, COALESCE(agents.last_restart_at, '')`
 
 // repoRow is one row of the repos table: an orchestration repo, the container its
 // workstreams branch from. The backend workspace now lives on each workstream.
@@ -97,6 +98,8 @@ type agentRow struct {
 	Tokens         int
 	UpdatedAt      string
 	CreatedAt      string
+	RestartCount   int
+	LastRestartAt  string
 }
 
 // rowScanner is the Scan surface shared by *sql.Row and *sql.Rows.
@@ -134,7 +137,7 @@ func scanAgent(s rowScanner) (agentRow, error) {
 	err := s.Scan(
 		&a.ID, &a.SprintID, &a.Backend, &a.TerminalHandle, &a.SessionID, &a.Scope,
 		&a.Name, &a.Prompt, &a.SubjectID, &a.CCNotesTask, &a.Status, &a.State, &a.Activity, &a.Tokens,
-		&a.UpdatedAt, &a.CreatedAt,
+		&a.UpdatedAt, &a.CreatedAt, &a.RestartCount, &a.LastRestartAt,
 	)
 	return a, err
 }
@@ -358,10 +361,12 @@ func setSprintStatus(ctx context.Context, db *sql.DB, id string, status Lifecycl
 func insertAgent(ctx context.Context, db *sql.DB, a agentRow) error {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO agents (id, sprint_id, backend, backend_terminal_handle, session_id, scope,
-			name, prompt, subject_id, ccnotes_task, status, state, activity, tokens, updated_at, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			name, prompt, subject_id, ccnotes_task, status, state, activity, tokens, updated_at, created_at,
+			restart_count, last_restart_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.SprintID, a.Backend, a.TerminalHandle, a.SessionID, a.Scope,
-		a.Name, a.Prompt, a.SubjectID, a.CCNotesTask, a.Status, a.State, a.Activity, a.Tokens, a.UpdatedAt, a.CreatedAt)
+		a.Name, a.Prompt, a.SubjectID, a.CCNotesTask, a.Status, a.State, a.Activity, a.Tokens, a.UpdatedAt, a.CreatedAt,
+		a.RestartCount, a.LastRestartAt)
 	if err != nil {
 		return fmt.Errorf("insert agent %q: %w", a.ID, err)
 	}
@@ -433,10 +438,57 @@ func getAgent(ctx context.Context, db *sql.DB, id string) (agentRow, error) {
 	return a, nil
 }
 
+// agentExists reports whether an agent row is present, the absent-vs-present branch
+// restore needs: an absent agent is re-inserted from its bundle, a present one only
+// has its terminal recreated.
+func agentExists(ctx context.Context, db *sql.DB, id string) (bool, error) {
+	return rowExists(ctx, db, "agents", id)
+}
+
+// rowExists reports whether a row with the given primary-key id is present in table.
+// table is always a trusted internal constant (never user input), so interpolating it
+// is safe. It is the absent-vs-present branch restore takes to recreate a wiped
+// hierarchy without rewriting rows a live DB still holds.
+func rowExists(ctx context.Context, db *sql.DB, table, id string) (bool, error) {
+	var one int
+	err := db.QueryRowContext(ctx, `SELECT 1 FROM `+table+` WHERE id = ? LIMIT 1`, id).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check %s %q exists: %w", table, id, err)
+	}
+	return true, nil
+}
+
 func setAgentLifecycle(ctx context.Context, db *sql.DB, id string, status LifecycleStatus) error {
 	_, err := db.ExecContext(ctx, `UPDATE agents SET status = ?, updated_at = ? WHERE id = ?`, status, nowStamp(), id)
 	if err != nil {
 		return fmt.Errorf("set agent %q lifecycle: %w", id, err)
+	}
+	return nil
+}
+
+func markRestartAttempt(ctx context.Context, db *sql.DB, id string, count int, at string) error {
+	_, err := db.ExecContext(ctx, `UPDATE agents SET restart_count = ?, last_restart_at = ? WHERE id = ?`, count, at, id)
+	if err != nil {
+		return fmt.Errorf("mark agent %q restart attempt: %w", id, err)
+	}
+	return nil
+}
+
+func setAgentTerminalHandle(ctx context.Context, db *sql.DB, id, handle string) error {
+	_, err := db.ExecContext(ctx, `UPDATE agents SET backend_terminal_handle = ? WHERE id = ?`, handle, id)
+	if err != nil {
+		return fmt.Errorf("set agent %q terminal handle: %w", id, err)
+	}
+	return nil
+}
+
+func resetRestart(ctx context.Context, db *sql.DB, id string) error {
+	_, err := db.ExecContext(ctx, `UPDATE agents SET restart_count = 0, last_restart_at = '' WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("reset agent %q restart state: %w", id, err)
 	}
 	return nil
 }

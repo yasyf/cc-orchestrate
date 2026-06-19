@@ -78,8 +78,10 @@ func findTranscript(sessionID string) (string, bool, error) {
 // The transcript is replayed from the start on every (re)start to rebuild status,
 // so onInbound fires only for turns seen after the first read catches up to the
 // end — replayed historical turns are not re-emitted, which would otherwise
-// duplicate audit frames on every daemon restart.
-func runTailer(ctx context.Context, sessionID, scope string, interval time.Duration, onStatus func(Status) error, onInbound func(string) error) error {
+// duplicate audit frames on every daemon restart. onStatus carries that same live
+// flag: false while replaying history, true once the first read has caught up, so a
+// consumer can tell a genuinely-new status from a replayed one.
+func runTailer(ctx context.Context, sessionID, scope string, interval time.Duration, onStatus func(Status, bool) error, onInbound func(string) error) error {
 	path, ok, err := waitForTranscript(ctx, sessionID, interval)
 	if err != nil {
 		return err
@@ -116,7 +118,7 @@ func runTailer(ctx context.Context, sessionID, scope string, interval time.Durat
 			}
 		}
 		if cur := acc.status(); cur != last {
-			if err := onStatus(cur); err != nil {
+			if err := onStatus(cur, live); err != nil {
 				return err
 			}
 			last = cur

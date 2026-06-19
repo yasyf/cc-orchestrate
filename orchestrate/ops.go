@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -37,27 +38,49 @@ const (
 // workstream — the planning group an agent spawns into when no sprint is named.
 const defaultSprintName = "main"
 
+// agentLocksMu guards the lazily-grown map of per-agent-id mutexes agentLock hands out.
+var (
+	agentLocksMu sync.Mutex
+	agentLocks   = map[string]*sync.Mutex{}
+)
+
+// agentLock returns the mutex serializing all mutating lifecycle work for one
+// agent id — kill, restart, and the kill cascades. It mirrors cc-interact's
+// daemon repoLock per-key serialization so a kill handler and a future supervisor
+// goroutine can never race over the same agent's row and backend terminal.
+func agentLock(id string) *sync.Mutex {
+	agentLocksMu.Lock()
+	defer agentLocksMu.Unlock()
+	mu, ok := agentLocks[id]
+	if !ok {
+		mu = &sync.Mutex{}
+		agentLocks[id] = mu
+	}
+	return mu
+}
+
 // agentView is the JSON shape every agent-facing op returns: the persisted agent
 // fields a parent inspects, flattened from agentRow.
 type agentView struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	SprintID  string `json:"sprint_id"`
-	Backend   string `json:"backend"`
-	Status    string `json:"status"`
-	State     string `json:"state"`
-	Activity  string `json:"activity"`
-	Tokens    int    `json:"tokens"`
-	UpdatedAt string `json:"updated_at"`
-	SessionID string `json:"session_id"`
-	Scope     string `json:"scope"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	SprintID     string `json:"sprint_id"`
+	Backend      string `json:"backend"`
+	Status       string `json:"status"`
+	State        string `json:"state"`
+	Activity     string `json:"activity"`
+	Tokens       int    `json:"tokens"`
+	UpdatedAt    string `json:"updated_at"`
+	SessionID    string `json:"session_id"`
+	Scope        string `json:"scope"`
+	RestartCount int    `json:"restart_count"`
 }
 
 func newAgentView(a agentRow) agentView {
 	return agentView{
 		ID: a.ID, Name: a.Name, SprintID: a.SprintID, Backend: string(a.Backend),
 		Status: string(a.Status), State: string(a.State), Activity: a.Activity, Tokens: a.Tokens,
-		UpdatedAt: a.UpdatedAt, SessionID: a.SessionID, Scope: a.Scope,
+		UpdatedAt: a.UpdatedAt, SessionID: a.SessionID, Scope: a.Scope, RestartCount: a.RestartCount,
 	}
 }
 
@@ -126,6 +149,37 @@ func spawnedPayload(ag agentRow) json.RawMessage {
 	b, _ := json.Marshal(spawnedEvent{
 		Type: EventSpawned, AgentID: ag.ID, Backend: string(ag.Backend), Terminal: ag.TerminalHandle,
 	})
+	return b
+}
+
+// restartedEvent is the EventRestarted body appended when the supervisor re-spawns
+// a vanished agent: the new terminal handle and the attempt count it reached. Type
+// discriminates the frame.
+type restartedEvent struct {
+	Type     string `json:"type"`
+	AgentID  string `json:"agent_id"`
+	Backend  string `json:"backend"`
+	Terminal string `json:"terminal"`
+	Attempt  int    `json:"attempt"`
+}
+
+func restartedPayload(ag agentRow, terminal string, attempt int) json.RawMessage {
+	b, _ := json.Marshal(restartedEvent{
+		Type: EventRestarted, AgentID: ag.ID, Backend: string(ag.Backend), Terminal: terminal, Attempt: attempt,
+	})
+	return b
+}
+
+// abandonedEvent is the EventAbandoned body appended when an agent's restart budget
+// is exhausted, just before the terminal EventExited. Type discriminates the frame.
+type abandonedEvent struct {
+	Type     string `json:"type"`
+	AgentID  string `json:"agent_id"`
+	Attempts int    `json:"attempts"`
+}
+
+func abandonedPayload(ag agentRow) json.RawMessage {
+	b, _ := json.Marshal(abandonedEvent{Type: EventAbandoned, AgentID: ag.ID, Attempts: ag.RestartCount})
 	return b
 }
 
@@ -642,6 +696,12 @@ func backendAgentHandle(ctx context.Context, db *sql.DB, ag agentRow) (backend.A
 // terminates the backend terminal, marks the row exited, and appends a terminal
 // EventExited. A backend kill failure is surfaced after the row is already marked
 // exited, so a half-dead agent never lingers as active.
+//
+// It re-reads the row under agentLock before deciding anything — mirroring
+// reconcileVanished — so a supervisor respawn that lands between the request and the
+// lock is observed: the kill targets the agent's current terminal (a freshly respawned
+// one), never the stale handle the request raced against, and a concurrent kill that
+// already exited the row is an idempotent no-op rather than a second EventExited.
 func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 	var b struct {
 		AgentID string `json:"agent_id"`
@@ -649,33 +709,50 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
 		return daemon.Reply{OK: false, Error: "bad agent-kill body: " + err.Error()}
 	}
+	mu := agentLock(b.AgentID)
+	mu.Lock()
+	defer mu.Unlock()
 	ag, err := getAgent(hc.Ctx, hc.DB, b.AgentID)
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
 	if ag.Status != StatusActive {
-		// Already terminal (e.g. its repo was killed while a caller held the id):
-		// idempotent no-op, never a second EventExited or a re-kill of a dead terminal.
+		// Already terminal (its repo was killed, or a concurrent kill won the lock
+		// first): idempotent no-op, never a second EventExited or a re-kill of a dead
+		// terminal.
 		out, _ := json.Marshal(map[string]string{"agent_id": ag.ID, "status": string(ag.Status)})
 		return daemon.Reply{OK: true, Body: out}
 	}
-	bk, ok := backend.Get(ag.Backend)
-	if !ok {
-		return daemon.Reply{OK: false, Error: "unknown backend: " + string(ag.Backend)}
-	}
-	handle, err := backendAgentHandle(hc.Ctx, hc.DB, ag)
-	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
-	}
-	killErr := bk.Kill(hc.Ctx, handle)
+	// Mark the row exited and append the terminal EventExited before the backend
+	// kill, so a failed kill still ends the row — a half-dead agent never lingers
+	// active.
 	if err := softExitAgent(hc.Ctx, hc.DB, hc.Append, ag); err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
-	if killErr != nil {
-		return daemon.Reply{OK: false, Error: fmt.Errorf("kill agent %q: %w", ag.ID, killErr).Error()}
+	if err := killAgentTerminal(hc.Ctx, hc.DB, ag); err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
 	}
 	out, _ := json.Marshal(map[string]string{"agent_id": ag.ID, "status": string(StatusExited)})
 	return daemon.Reply{OK: true, Body: out}
+}
+
+// killAgentTerminal terminates an agent's backend terminal, resolving the backend and
+// the kill target from the row's current terminal handle. It is the terminal-teardown
+// half handleAgentKill and restore share; callers hold agentLock so the handle it
+// reads cannot be swapped mid-kill by a concurrent respawn.
+func killAgentTerminal(ctx context.Context, db *sql.DB, ag agentRow) error {
+	bk, ok := backend.Get(ag.Backend)
+	if !ok {
+		return fmt.Errorf("unknown backend: %s", ag.Backend)
+	}
+	handle, err := backendAgentHandle(ctx, db, ag)
+	if err != nil {
+		return err
+	}
+	if err := bk.Kill(ctx, handle); err != nil {
+		return fmt.Errorf("kill agent %q: %w", ag.ID, err)
+	}
+	return nil
 }
 
 // softExitAgent stops an agent's transcript tailer, marks its row exited, and
@@ -720,7 +797,12 @@ func markSprintKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFun
 		if ag.Status != StatusActive {
 			continue
 		}
-		if err := softExitAgent(ctx, db, appendFn, ag); err != nil {
+		if err := func() error {
+			mu := agentLock(ag.ID)
+			mu.Lock()
+			defer mu.Unlock()
+			return softExitAgent(ctx, db, appendFn, ag)
+		}(); err != nil {
 			return err
 		}
 	}

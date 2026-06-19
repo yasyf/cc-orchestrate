@@ -65,7 +65,7 @@ var tuiPrompts = []tuiPrompt{
 		// config). The option label is the stable phrase to match.
 		match:  regexp.MustCompile(`(?i)allow external imports`),
 		keys:   []string{"Enter"}, // "Yes, allow external imports" is the default; Enter confirms
-		policy: policyTrust,        // importing the orchestrator's own config; same trust class
+		policy: policyTrust,       // importing the orchestrator's own config; same trust class
 	},
 	{
 		name:   "bypass-permissions",

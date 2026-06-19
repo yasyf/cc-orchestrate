@@ -20,6 +20,20 @@ const (
 	StateStuck    State = "stuck"          // an unrecognized screen or a prompt that would not clear after retries; needs a human
 )
 
+// healthyState reports whether a derived State proves the agent's claude process is
+// alive and producing transcript activity — the three live states. It is the
+// restart-budget reset signal: StateUnknown (initial), StateBlocked (transient,
+// prober-driven), and StateStuck (degraded) are excluded, so a budget reset fires
+// only on real recovery, never on a transient or initial state.
+func healthyState(s State) bool {
+	switch s {
+	case StateWorking, StateIdle, StateAwaiting:
+		return true
+	default:
+		return false
+	}
+}
+
 // Status is the transcript-derived snapshot of an agent: its coarse state, the
 // last tool it invoked with that tool's primary target, the last assistant text
 // block, and the cumulative token count across the session.

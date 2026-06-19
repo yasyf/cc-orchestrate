@@ -64,7 +64,7 @@ func TestRunTailerStreamsStatuses(t *testing.T) {
 	got := make(chan Status, 16)
 	done := make(chan error, 1)
 	go func() {
-		done <- runTailer(ctx, session, "scope", interval, func(s Status) error {
+		done <- runTailer(ctx, session, "scope", interval, func(s Status, _ bool) error {
 			got <- s
 			return nil
 		}, func(string) error { return nil })
@@ -136,7 +136,7 @@ func TestRunTailerEmitsInboundLiveOnly(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- runTailer(ctx, session, "scope", interval,
-			func(s Status) error { status <- s; return nil },
+			func(s Status, _ bool) error { status <- s; return nil },
 			func(text string) error { inbound <- text; return nil })
 	}()
 

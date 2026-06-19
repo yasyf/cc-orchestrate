@@ -36,11 +36,18 @@ const (
 	opSprintActivate     daemon.Op = "sprint-activate"
 	opConfigGet          daemon.Op = "config-get"
 	opConfigSet          daemon.Op = "config-set"
+	opSerialize          daemon.Op = "serialize"
+	opRestore            daemon.Op = "restore"
 )
 
 // tailers is the daemon-lifetime transcript-tailer manager, bound to the serve
 // context so a tailer outlives the per-request handler context that spawned it.
 var tailers *tailerManager
+
+// supervisorRunner is the daemon-lifetime keep-alive supervisor, started once after
+// boot reconcile settles and bound to the serve context so its goroutine tears down
+// on daemon shutdown.
+var supervisorRunner *supervisor
 
 // serve runs the long-lived daemon: it builds the cc-interact daemon with the
 // orchestrate schema and the channel presence lifecycle, registers the domain
@@ -81,6 +88,10 @@ func serve(ctx context.Context) error {
 			for _, ag := range agents {
 				tailers.start(db, s.Append, ag)
 			}
+			// Start the keep-alive supervisor only after the boot prune+resume has
+			// settled, on the daemon-lifetime ctx so it tears down on shutdown.
+			supervisorRunner = newSupervisor()
+			go supervisorRunner.run(ctx, db, s.Append)
 			return nil
 		},
 	})
@@ -106,6 +117,8 @@ func serve(ctx context.Context) error {
 	s.Register(opSprintActivate, handleSprintActivate)
 	s.Register(opConfigGet, handleConfigGet)
 	s.Register(opConfigSet, handleConfigSet)
+	s.Register(opSerialize, handleSerialize)
+	s.Register(opRestore, handleRestore)
 	return s.Serve(ctx)
 }
 
@@ -149,6 +162,9 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 	m.mu.Unlock()
 	go func() {
 		defer m.finish(ag.ID, tc)
+		// emit persists a derived Status to the row and mirrors it onto the subject
+		// log. Both the prober and the tailer's replay reach it; only the live tailer
+		// path (onStatus) layers the restart-budget reset on top.
 		emit := func(st Status) error {
 			if err := applyStatus(cctx, db, ag.ID, st); err != nil {
 				return err
@@ -158,13 +174,27 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 			})
 			return err
 		}
+		// onStatus is the tailer's status sink. It resets the restart budget only on a
+		// genuinely-new healthy state (live) — never on the pre-crash state the tailer
+		// replays from history on every (re)start — so a crash-looping agent whose last
+		// transcript line was healthy still accrues its budget to abandonment instead of
+		// resetting to zero each respawn. Gated on the start snapshot's RestartCount > 0
+		// so a never-restarted agent takes no spurious write.
+		onStatus := func(st Status, live bool) error {
+			if live && ag.RestartCount > 0 && healthyState(st.State) {
+				if err := resetRestart(cctx, db, ag.ID); err != nil {
+					return err
+				}
+			}
+			return emit(st)
+		}
 		// Grace-period interactive-prompt driver: before any transcript exists, probe
 		// the agent's screen and drive a known blocking prompt (e.g. the trust dialog)
 		// to completion, so a blocked agent is never silently invisible. It runs to
 		// completion before the tailer, then the tailer's first real status overwrites
 		// the transient blocked state.
 		runProber(cctx, db, ag, emit, m.interval, m.grace)
-		err := runTailer(cctx, ag.SessionID, ag.Scope, m.interval, emit,
+		err := runTailer(cctx, ag.SessionID, ag.Scope, m.interval, onStatus,
 			func(text string) error {
 				if text == ag.Prompt {
 					return nil // the spawn prompt is already recorded by EventSpawned

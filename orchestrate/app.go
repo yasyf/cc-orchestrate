@@ -36,6 +36,11 @@ const (
 	EventMessage = "orchestrate.message" // orchestrator → agent message
 	EventReport  = "orchestrate.report"  // agent → orchestrator report
 	EventInbound = "orchestrate.inbound" // an inbound user turn observed on the transcript (audit; the child ignores it)
+
+	EventRestarted  = "orchestrate.restarted"  // supervisor/manual re-spawn of a vanished terminal (non-terminal)
+	EventAbandoned  = "orchestrate.abandoned"  // restart budget exhausted; precedes the terminal EventExited (non-terminal)
+	EventSerialized = "orchestrate.serialized" // a snapshot bundle was written (non-terminal)
+	EventRestored   = "orchestrate.restored"   // an agent was restored from a bundle (non-terminal)
 )
 
 // LifecycleStatus is the lifecycle state stored on a repo or agent row. It is a

@@ -58,9 +58,64 @@ func Root() *cobra.Command {
 		workstreamCmd(),
 		sprintCmd(),
 		agentCmd(),
+		serializeCmd(),
+		restoreCmd(),
 		mcpCmd(),
 	)
 	return r
+}
+
+// serializeCmd snapshots every active agent into a restorable bundle: each agent's
+// identity plus its captured terminal screen.
+func serializeCmd() *cobra.Command {
+	var out string
+	c := &cobra.Command{
+		Use:   "serialize",
+		Short: "Snapshot every active agent into a restorable bundle",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			reply, err := runOp(c, opSerialize, map[string]string{"out": out})
+			if err != nil {
+				return err
+			}
+			var res struct {
+				Path  string `json:"path"`
+				Count int    `json:"count"`
+			}
+			if err := json.Unmarshal(reply.Body, &res); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "serialized %d agent(s) to %s\n", res.Count, res.Path)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&out, "out", "", "write the bundle to this path instead of the default serialize dir")
+	return c
+}
+
+// restoreCmd recreates the agents in a bundle: it re-inserts any missing rows and
+// resumes each agent's session into a fresh backend terminal.
+func restoreCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "restore <bundle>",
+		Short: "Restore agents from a serialized bundle",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			reply, err := runOp(c, opRestore, map[string]string{"path": args[0]})
+			if err != nil {
+				return err
+			}
+			var res struct {
+				Count int `json:"count"`
+			}
+			if err := json.Unmarshal(reply.Body, &res); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "restored %d agent(s) from %s\n", res.Count, args[0])
+			return nil
+		},
+	}
+	return c
 }
 
 // configCmd is the `config` group: read the persisted key-value config (the
@@ -643,10 +698,10 @@ func agentCmd() *cobra.Command {
 			}
 			rows := make([][]string, len(views))
 			for i, a := range views {
-				rows[i] = []string{a.ID, a.Name, a.SprintID, a.Backend, a.State, a.Status, strconv.Itoa(a.Tokens), a.Activity}
+				rows[i] = []string{a.ID, a.Name, a.SprintID, a.Backend, a.State, a.Status, strconv.Itoa(a.Tokens), strconv.Itoa(a.RestartCount), a.Activity}
 			}
 			fmt.Fprint(c.OutOrStdout(), renderTable(
-				[]string{"ID", "NAME", "SPRINT", "BACKEND", "STATE", "STATUS", "TOKENS", "ACTIVITY"}, rows))
+				[]string{"ID", "NAME", "SPRINT", "BACKEND", "STATE", "STATUS", "TOKENS", "RESTARTS", "ACTIVITY"}, rows))
 			return nil
 		},
 	}
@@ -697,6 +752,7 @@ func agentCmd() *cobra.Command {
 			fmt.Fprintf(w, "state:    %s\n", a.State)
 			fmt.Fprintf(w, "activity: %s\n", a.Activity)
 			fmt.Fprintf(w, "tokens:   %d\n", a.Tokens)
+			fmt.Fprintf(w, "restart:  %d\n", a.RestartCount)
 			fmt.Fprintf(w, "updated:  %s\n", a.UpdatedAt)
 			return nil
 		},

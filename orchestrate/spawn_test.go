@@ -128,6 +128,38 @@ func TestClaudeCommand(t *testing.T) {
 	})
 }
 
+func TestResumeCommand(t *testing.T) {
+	argv := resumeCommand("/opt/cc-orchestrate", "sid-1", "/work")
+	if argv[0] != "claude" {
+		t.Fatalf("argv[0] = %q, want claude", argv[0])
+	}
+	if got := flagValue(argv, "--resume"); got != "sid-1" {
+		t.Errorf("--resume = %q, want sid-1", got)
+	}
+	if contains(argv, "--session-id") {
+		t.Errorf("resume argv carries --session-id: %v", argv)
+	}
+	if contains(argv, "--fork-session") {
+		t.Errorf("resume argv carries --fork-session: %v", argv)
+	}
+	if !contains(argv, "--strict-mcp-config") {
+		t.Errorf("argv missing --strict-mcp-config: %v", argv)
+	}
+	if got := flagValue(argv, "--mcp-config"); got != childMCPConfig("/opt/cc-orchestrate", "sid-1", "/work") {
+		t.Errorf("--mcp-config = %q, want the shared child config", got)
+	}
+	if got := flagValue(argv, "--settings"); got != childSettings("/opt/cc-orchestrate") {
+		t.Errorf("--settings = %q, want the shared child settings", got)
+	}
+	if got := flagValue(argv, "--append-system-prompt"); got != spawnBrief("/opt/cc-orchestrate", "sid-1", "/work") {
+		t.Errorf("--append-system-prompt = %q, want the re-arming brief", got)
+	}
+	// The brief is the last token: a resume carries no trailing positional prompt.
+	if last := argv[len(argv)-1]; last != spawnBrief("/opt/cc-orchestrate", "sid-1", "/work") {
+		t.Errorf("trailing arg = %q, want the brief (no positional prompt)", last)
+	}
+}
+
 func TestSpawnBrief(t *testing.T) {
 	brief := spawnBrief("/opt/cc-orchestrate", "sid-1", "/work")
 	if want := "/opt/cc-orchestrate watch --session sid-1 --cwd /work"; !strings.Contains(brief, want) {
@@ -215,7 +247,7 @@ func (spawnBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) er
 // case spawned without the pty-host wrapper; the wrapped path is covered by
 // TestWrapForCapture.
 func (spawnBackend) Capture(context.Context, backend.AgentHandle) (string, error) { return "", nil }
-func (spawnBackend) Caps() backend.Caps { return backend.Capabilities(backend.CanCapture) }
+func (spawnBackend) Caps() backend.Caps                                           { return backend.Capabilities(backend.CanCapture) }
 
 func TestHandleSpawn(t *testing.T) {
 	old := pollInterval
