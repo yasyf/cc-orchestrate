@@ -23,3 +23,7 @@ coverage.html
 
 # goreleaser output
 /dist/
+
+# go-libghostty local build artifacts (libghostty-vt.a etc.)
+.libghostty/
+dist/

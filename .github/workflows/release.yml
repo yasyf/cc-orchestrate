@@ -12,7 +12,14 @@ env:
 
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    # macOS host: native clang builds both darwin arches (Go's darwin net/crypto need
+    # the macOS SDK frameworks, which only the host clang has), and `zig cc` cross-
+    # builds the fully-static linux binaries. So one runner covers all four targets.
+    runs-on: macos-14
+    env:
+      # Absolute path to the per-target libghostty-vt pkgconfig dirs; .goreleaser.yaml
+      # needs it absolute because cgo runs pkg-config from the libghostty module dir.
+      LIBGHOSTTY_ROOT: ${{ github.workspace }}/.libghostty
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,6 +29,16 @@ jobs:
         with:
           go-version: "1.26.2"
           cache: true
+
+      # The release binaries default to the go-libghostty (cgo) grid. Zig 0.15 builds
+      # libghostty-vt for every target; the Homebrew formula is patched for the Xcode
+      # 26 SDK (ziglang/zig#31658) that the upstream tarball trips on. Installed
+      # directly here (mise is the local-dev toolchain only); cmake fetches the pinned
+      # ghostty source.
+      - name: Install Zig 0.15 + cmake
+        run: |
+          brew install zig@0.15 cmake
+          echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
 
       - uses: goreleaser/goreleaser-action@v6
         with:

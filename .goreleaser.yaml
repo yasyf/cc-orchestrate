@@ -2,22 +2,39 @@ version: 2
 
 project_name: cc-orchestrate
 
+# Release binaries default to the go-libghostty (cgo) terminal grid; the pure-Go
+# x/vt grid is the CGO_ENABLED=0 fallback. Runs on a macOS host: `before` builds the
+# static libghostty-vt for every target with Zig (it only needs libc, so it
+# cross-compiles cleanly), then each binary builds with the right C compiler — native
+# clang for darwin (Go's darwin net/crypto need the macOS SDK frameworks, which only
+# the host clang has), and `zig cc -target *-linux-musl` for fully-static linux.
+# LIBGHOSTTY_ROOT is the absolute repo .libghostty dir (set by the release workflow,
+# or `LIBGHOSTTY_ROOT=$PWD/.libghostty` locally) — cgo runs pkg-config from the
+# libghostty module dir, so PKG_CONFIG_PATH must be absolute.
 before:
   hooks:
     - go mod download
+    - scripts/build-libghostty.sh macos-arm64 aarch64-macos
+    - scripts/build-libghostty.sh macos-amd64 x86_64-macos
+    - scripts/build-libghostty.sh linux-arm64 aarch64-linux-musl
+    - scripts/build-libghostty.sh linux-amd64 x86_64-linux-musl
 
 builds:
   - id: cc-orchestrate
     main: .
     binary: cc-orchestrate
-    env:
-      - CGO_ENABLED=0
     goos:
       - darwin
       - linux
     goarch:
       - amd64
       - arm64
+    env:
+      - CGO_ENABLED=1
+      - 'CGO_LDFLAGS_ALLOW=.*\.a$'
+      - 'PKG_CONFIG_PATH={{ .Env.LIBGHOSTTY_ROOT }}/ghostty-{{ if eq .Os "darwin" }}macos{{ else }}linux{{ end }}-{{ .Arch }}/share/pkgconfig'
+      - 'CC={{ if eq .Os "darwin" }}clang -arch {{ if eq .Arch "arm64" }}arm64{{ else }}x86_64{{ end }}{{ else }}zig cc -target {{ if eq .Arch "arm64" }}aarch64{{ else }}x86_64{{ end }}-linux-musl{{ end }}'
+      - 'CXX={{ if eq .Os "darwin" }}clang++ -arch {{ if eq .Arch "arm64" }}arm64{{ else }}x86_64{{ end }}{{ else }}zig c++ -target {{ if eq .Arch "arm64" }}aarch64{{ else }}x86_64{{ end }}-linux-musl{{ end }}'
     ldflags:
       - -s -w -X github.com/yasyf/cc-orchestrate/orchestrate.Version={{ .Version }}
 

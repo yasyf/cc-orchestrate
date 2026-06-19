@@ -16,8 +16,12 @@ env:
   GOTOOLCHAIN: auto
 
 jobs:
+  # Pure-Go path (CGO_ENABLED=0 → the charmbracelet/x/vt grid). Fast, no toolchain;
+  # covers all logic plus the x/vt grid. The cgo/go-libghostty grid has its own job.
   build:
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +41,8 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -50,3 +56,31 @@ jobs:
 
       - name: go test (integration)
         run: go test -race -run Integration ./backend/
+
+  # cgo/go-libghostty path (the default for release binaries). Builds libghostty-vt
+  # natively and exercises the cgo grid so grid_cgo.go can't regress unnoticed.
+  cgo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.2"
+          cache: true
+
+      - name: Install cmake
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      - name: Install Zig 0.15.2
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build native libghostty-vt
+        run: echo "PKG_CONFIG_PATH=$(scripts/build-libghostty.sh linux-amd64 x86_64-linux-gnu)" >> "$GITHUB_ENV"
+
+      - name: go build + grid test (cgo)
+        env:
+          CGO_ENABLED: "1"
+        run: go build ./... && go test ./ptyhost/
