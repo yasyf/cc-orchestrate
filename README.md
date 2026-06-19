@@ -186,16 +186,13 @@ the cross-conflicts you hit when several `jj workspace`s share one backing repo.
 When a repo already uses [cc-notes](https://github.com/yasyf/cc-notes), cc-orchestrate
 mirrors its tree into cc-notes entities: a workstream becomes a cc-notes project, a
 sprint becomes a cc-notes sprint, and each spawned agent becomes a cc-notes task tagged
-with the workstream's branch. The binding is gated — it fires only when the `cc-notes`
-binary is on your `PATH` and the repo already has `refs/cc-notes/*` — so repos that
-don't use cc-notes spawn exactly as before.
+with the workstream's branch. cc-orchestrate links the cc-notes library and drives it
+in-process, so there's no `cc-notes` binary to install for the integration to run.
 
-cc-notes is an optional prerequisite, installed separately:
-
-```bash
-brew tap yasyf/cc-notes https://github.com/yasyf/cc-notes
-brew install cc-notes
-```
+The binding is gated on the repo already holding cc-notes entities (`refs/cc-notes/*`):
+repos that don't use cc-notes spawn exactly as before. Opt a repo in by creating
+cc-notes entities in it with the [cc-notes](https://github.com/yasyf/cc-notes) CLI;
+from then on cc-orchestrate keeps the two trees in sync.
 
 ## Drive a fleet from a parent agent over MCP
 
