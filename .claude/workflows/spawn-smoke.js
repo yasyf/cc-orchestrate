@@ -1,8 +1,9 @@
 // spawn-smoke — end-to-end spawn smoke against the tmux backend. One agent drives
 // the whole live loop: build the binary, select tmux, create a temp repo, create a
-// workstream (asserting its worktree dir), spawn an agent, assert status populates +
-// send-message delivers + kill cleans up, then tears everything down. Returns the
-// observed agent status.
+// workstream (asserting its worktree dir), spawn an agent, assert status populates
+// (the prober drives the first-run "trust this folder?" dialog so the transcript
+// appears) + send-message delivers + kill cleans up, then tears everything down.
+// Returns the observed agent status.
 //
 // Run with: /spawn-smoke
 
@@ -19,16 +20,18 @@ const REPO = '/Users/yasyf/Code/cc-orchestrate'
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['pass', 'built', 'tmuxAvailable', 'workstreamCreated', 'spawned', 'statusPopulated', 'messageDelivered', 'killedClean', 'status', 'notes'],
+  required: ['pass', 'built', 'tmuxAvailable', 'workstreamCreated', 'spawned', 'statusPopulated', 'promptDriven', 'stuck', 'messageDelivered', 'killedClean', 'status', 'notes'],
   properties: {
     pass: { type: 'boolean', description: 'true only when every asserted leg succeeded' },
     built: { type: 'boolean' },
     tmuxAvailable: { type: 'boolean' },
     workstreamCreated: { type: 'boolean', description: 'workstream create succeeded and its printed worktree dir exists on disk' },
     spawned: { type: 'boolean', description: 'spawn returned an agent id + tmux terminal' },
-    statusPopulated: { type: 'boolean', description: 'agent status returned a non-empty state within the timeout' },
-    messageDelivered: { type: 'boolean', description: 'send-message returned a seq with no error' },
-    killedClean: { type: 'boolean', description: 'after kill, the agent is gone from `agent list` and the tmux window is closed' },
+    statusPopulated: { type: 'boolean', description: 'agent status reached a real transcript-derived state (working/idle/awaiting-input) within the timeout — NOT unknown/blocked/stuck' },
+    promptDriven: { type: 'boolean', description: 'a poll observed state=blocked or activity containing "prompt:" that later resolved — i.e. the prober drove the trust dialog' },
+    stuck: { type: 'boolean', description: 'a poll observed state=stuck — the prober could not drive the screen (a failure)' },
+    messageDelivered: { type: 'boolean', description: 'send-message exited 0 and reported delivery — a seq on the LCD path, or "(native)" on the native-send path (tmux is a Sender, so native is expected)' },
+    killedClean: { type: 'boolean', description: 'after kill, the tmux window/pane is closed and the agent shows STATUS=exited in `agent list` (an intentional append-only tombstone), not active' },
     status: { type: 'string', description: 'the verbatim `agent status <id>` output observed (state/status/activity/tokens/updated)' },
     notes: { type: 'string', description: 'anything skipped or unverifiable, e.g. claude not installed so no transcript' },
   },
@@ -38,7 +41,9 @@ const PROMPT = `You run a live end-to-end spawn smoke test of cc-orchestrate (re
 
 0. PRECONDITION: run \`command -v tmux\`. If tmux is absent, set tmuxAvailable=false, pass=false, explain in notes, and stop — this smoke requires tmux.
 
-1. BUILD: \`cd ${REPO} && go build -o /tmp/cc-orchestrate-smoke .\`. Set built from the exit code. Use BIN=/tmp/cc-orchestrate-smoke for everything below.
+1. BUILD: \`cd ${REPO} && CGO_ENABLED=0 go build -o /tmp/cc-orchestrate-smoke .\` (pure-Go; the prober uses tmux's native capture so no libghostty/cgo toolchain is needed for this smoke). Set built from the exit code. Use BIN=/tmp/cc-orchestrate-smoke for everything below.
+
+1b. FRESH DAEMON: \`$BIN stop 2>/dev/null || true\`. The daemon carries a constant Version, so a previously-running daemon would keep serving OLD code; stopping it makes the next command relaunch a fresh daemon from the just-built binary. (Ignore any "not running" error.)
 
 2. SELECT tmux: \`$BIN backends select tmux\`. Then \`$BIN backends list\` and confirm tmux shows available + selected.
 
@@ -49,17 +54,22 @@ const PROMPT = `You run a live end-to-end spawn smoke test of cc-orchestrate (re
 
 5. SPAWN: \`$BIN agent spawn --workstream <workstream-id> --name smoke --prompt "say hello then wait"\`. Capture the agent id, backend, and terminal (a tmux pane id). Set spawned from whether all three are present. (cwd defaults to the workstream worktree.)
 
-6. STATUS: poll \`$BIN agent status <agent-id>\` every ~2s for up to ~30s. Record the LAST output verbatim into "status". Set statusPopulated=true once "state" is non-empty (e.g. running/active). NOTE: the derived status is tailed from ~/.claude (or \$CLAUDE_CONFIG_DIR)/projects/**/<session>.jsonl — it only fully populates if \`claude\` actually runs in the pane. If \`claude\` is not installed so no transcript ever appears, set statusPopulated=false and say so in notes; do NOT hang past the timeout.
+6. STATUS: poll \`$BIN agent status <agent-id>\` every ~2s for up to ~45s. Record the LAST output verbatim into "status". A first run of \`claude\` in a freshly-created dir hits the "Is this a project you created or one you trust?" dialog (options "1. Yes, I trust this folder" / "2. No, exit"); the prober now drives it (Enter confirms the default Yes), so the state should transition unknown → blocked → working/idle on its own. Interpret the polled \`state\`:
+   - \`blocked\` is TRANSIENT (the prober is answering the dialog) — keep polling. Set promptDriven=true the first time you see \`state: blocked\` OR an \`activity\` containing "prompt:".
+   - \`stuck\` is a FAILURE (the prober could not drive the screen) — set stuck=true, record the status, stop polling early.
+   - \`working\`, \`idle\`, or \`awaiting-input\` is a real transcript-derived state — set statusPopulated=true.
+   - \`unknown\` is not yet populated — keep polling.
+   With \`claude\` installed, a fresh-dir spawn should reach statusPopulated=true and typically promptDriven=true (the trust dialog fires on first run). The derived status is tailed from ~/.claude (or \$CLAUDE_CONFIG_DIR)/projects/**/<session>.jsonl. If \`claude\` is NOT installed (\`command -v claude\` fails), no transcript ever appears and no pane prompt is detected: set statusPopulated=false, promptDriven=false, explain in notes, and do NOT hang past the timeout.
 
-7. SEND-MESSAGE: \`$BIN agent send-message <agent-id> "ping"\`. Set messageDelivered=true if it prints a seq and exits 0.
+7. SEND-MESSAGE: \`$BIN agent send-message <agent-id> "ping"\`. Set messageDelivered=true if it exits 0 and reports delivery — a seq on the LCD path, or \`sent <id> (native)\` on the native-send path (tmux is a Sender, so native is expected here).
 
-8. KILL + CLEANUP: \`$BIN agent kill <agent-id>\`, then \`$BIN agent list --repo <repo-id>\` and confirm the agent is gone, and \`tmux list-panes -s -t <session>\` (or list-windows) confirms the agent's window/pane is closed. Set killedClean accordingly. Finally tear down: \`$BIN repo kill <repo-id>\` (cascades the workstream's worktree + backend workspace and any remaining agents), then \`tmux kill-session -t <session>\` and \`rm -rf "$PRJ" /tmp/cc-orchestrate-smoke\`. Confirm the worktree dir from step 4 is gone. Leave no smoke-* tmux sessions or temp dirs behind.
+8. KILL + CLEANUP: \`$BIN agent kill <agent-id>\`, then \`$BIN agent list --repo <repo-id>\` and confirm the agent now shows STATUS=exited (the event log keeps killed agents as tombstones — exited, not active, is correct; do NOT expect it to vanish), and \`tmux list-panes -s -t <session>\` (or list-windows) confirms the agent's window/pane is closed. Set killedClean=true when the pane is closed AND the agent is exited. Finally tear down: \`$BIN repo kill <repo-id>\` (cascades the workstream's worktree + backend workspace and any remaining agents), then \`tmux kill-session -t <session>\` and \`rm -rf "$PRJ" /tmp/cc-orchestrate-smoke\`. Confirm the worktree dir from step 4 is gone. Leave no smoke-* tmux sessions or temp dirs behind.
 
-Set pass=true only if built, workstreamCreated, spawned, messageDelivered, and killedClean are all true (statusPopulated may be false when claude is unavailable — record that in notes). Return the schema.`
+Set pass=true only if built, workstreamCreated, spawned, messageDelivered, and killedClean are all true AND stuck is false. Additionally, when \`claude\` IS installed (\`command -v claude\` succeeds), pass also requires statusPopulated=true — that is the regression check that the prober drove the first-run trust dialog so the transcript appeared. When \`claude\` is absent, statusPopulated/promptDriven may be false; record that in notes. Return the schema.`
 
 phase('Smoke')
 const result = await agent(PROMPT, { label: 'spawn-smoke', phase: 'Smoke', schema: SCHEMA, effort: 'high' })
 
-log(result ? `smoke pass=${result.pass} (built=${result.built} spawned=${result.spawned} status=${result.statusPopulated} msg=${result.messageDelivered} kill=${result.killedClean})` : 'smoke agent crashed')
+log(result ? `smoke pass=${result.pass} (built=${result.built} spawned=${result.spawned} status=${result.statusPopulated} promptDriven=${result.promptDriven} stuck=${result.stuck} msg=${result.messageDelivered} kill=${result.killedClean})` : 'smoke agent crashed')
 
 return result
