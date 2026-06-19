@@ -51,6 +51,7 @@ func Root() *cobra.Command {
 		cmd.GuardEditCmd(d),
 		withSessionDefault(cmd.ChannelAckCmd(d)),
 		withSessionDefault(cmd.ChannelCmd(d)),
+		ptyHostCmd(),
 		backendsCmd(),
 		configCmd(),
 		repoCmd(),

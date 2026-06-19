@@ -15,3 +15,16 @@ func TestCapsMatchSenderInterface(t *testing.T) {
 		}
 	}
 }
+
+// TestCapsMatchCapturerInterface enforces the same invariant for capture: a backend
+// advertises CanCapture exactly when it implements Capturer, so the prober's
+// `Has(CanCapture) && bk.(Capturer)` gate never promises a native screen read the
+// driver cannot perform (nor leaves a Capturer method nobody dispatches to).
+func TestCapsMatchCapturerInterface(t *testing.T) {
+	for name, b := range registry {
+		_, isCapturer := b.(Capturer)
+		if has := b.Caps().Has(CanCapture); has != isCapturer {
+			t.Errorf("%s: Caps().Has(CanCapture) = %v but implements Capturer = %v; they must agree", name, has, isCapturer)
+		}
+	}
+}

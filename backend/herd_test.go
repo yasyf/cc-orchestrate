@@ -20,6 +20,8 @@ const (
 
 	herdPaneCloseOut      = `{"id":"cli:pane:close","result":{"type":"ok"}}`
 	herdWorkspaceCloseOut = `{"id":"cli:workspace:close","result":{"type":"ok"}}`
+
+	herdPaneReadOut = `{"id":"cli:pane:read","result":{"type":"pane_read","pane_id":"w65466e4ca40bb5-2","workspace_id":"w65466e4ca40bb5","tab_id":"w65466e4ca40bb5:1","source":"visible","format":"text","text":"Do you trust the files in this folder?","lines":1,"truncated":false}}`
 )
 
 type herdRecordedCall struct {
@@ -123,6 +125,19 @@ func TestHerdMethods(t *testing.T) {
 			},
 		},
 		{
+			name:   "Capture reads result.text from pane read",
+			output: herdPaneReadOut,
+			invoke: func(ctx context.Context, b herd) (any, error) {
+				return b.Capture(ctx, AgentHandle{Backend: "herd", ID: "w65466e4ca40bb5-2"})
+			},
+			wantArgv: []string{"pane", "read", "w65466e4ca40bb5-2", "--source", "visible", "--format", "text"},
+			check: func(t *testing.T, got any) {
+				if s := got.(string); s != "Do you trust the files in this folder?" {
+					t.Errorf("screen = %q, want the trust prompt text", s)
+				}
+			},
+		},
+		{
 			name:   "Kill closes the agent pane",
 			output: herdPaneCloseOut,
 			invoke: func(ctx context.Context, b herd) (any, error) {
@@ -192,8 +207,8 @@ func TestHerdMetadata(t *testing.T) {
 	if b.Name() != "herd" {
 		t.Errorf("Name() = %q, want herd", b.Name())
 	}
-	if c := b.Caps(); !c.Has(CanSendText) || !c.Has(CanEnumerate) || c.Has(CanCapture) {
-		t.Errorf("Caps() = %+v, want CanSendText+CanEnumerate", c)
+	if c := b.Caps(); !c.Has(CanSendText) || !c.Has(CanCapture) || !c.Has(CanEnumerate) {
+		t.Errorf("Caps() = %+v, want CanSendText+CanCapture+CanEnumerate", c)
 	}
 }
 

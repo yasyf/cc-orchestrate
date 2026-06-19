@@ -17,6 +17,12 @@ import (
 // manager (or passes an interval straight to runTailer) without racing them.
 var pollInterval = 250 * time.Millisecond
 
+// probeGrace is how long the prober waits for an agent's transcript to appear before
+// it treats the agent as possibly blocked on an interactive prompt and probes its
+// screen. newTailerManager snapshots it once, like pollInterval, so a test can
+// shorten it race-free before constructing the manager.
+var probeGrace = 5 * time.Second
+
 // claudeProjectsDir resolves the directory holding Claude Code's per-project
 // transcript folders. claude honors $CLAUDE_CONFIG_DIR over ~/.claude, so the
 // tailer must too, or it never finds a child whose config dir is relocated. It

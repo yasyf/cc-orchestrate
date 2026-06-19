@@ -248,11 +248,15 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}
+	command, err := wrapForCapture(self, sid, claudeCommand(self, sid, scope, body.Prompt), b.Caps())
+	if err != nil {
+		return daemon.Reply{OK: false, Error: err.Error()}
+	}
 	handle, err := b.Spawn(hc.Ctx, backend.SpawnSpec{
 		Workstream: backend.WorkstreamHandle{Backend: ws.Backend, ID: ws.WorkspaceHandle, Name: ws.Name, Cwd: ws.Worktree},
 		Name:       body.Name,
 		Cwd:        scope,
-		Command:    claudeCommand(self, sid, scope, body.Prompt),
+		Command:    command,
 		SessionID:  sid,
 	})
 	if err != nil {

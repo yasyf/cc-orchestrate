@@ -228,7 +228,7 @@ func handleSendMessage(hc daemon.HandlerCtx) daemon.Reply {
 // it whole as a single EventMessage.
 func deliverMessage(hc daemon.HandlerCtx, bk backend.Backend, ag agentRow, text string) (native bool, seq int64, err error) {
 	if s, ok := bk.(backend.Sender); ok && bk.Caps().Has(backend.CanSendText) && !strings.ContainsAny(text, "\n\r") {
-		handle, err := backendAgentHandle(hc, ag)
+		handle, err := backendAgentHandle(hc.Ctx, hc.DB, ag)
 		if err != nil {
 			return true, 0, err
 		}
@@ -620,12 +620,12 @@ func handleRepoActivate(hc daemon.HandlerCtx) daemon.Reply {
 // handle's WorkstreamID is the backend WorkspaceHandle (what cmux's --workspace and
 // zellij's --session expect), not the orchestrate workstream id — those are
 // different values, and addressing the terminal needs the backend one.
-func backendAgentHandle(hc daemon.HandlerCtx, ag agentRow) (backend.AgentHandle, error) {
-	sprint, err := getSprint(hc.Ctx, hc.DB, ag.SprintID, "")
+func backendAgentHandle(ctx context.Context, db *sql.DB, ag agentRow) (backend.AgentHandle, error) {
+	sprint, err := getSprint(ctx, db, ag.SprintID, "")
 	if err != nil {
 		return backend.AgentHandle{}, err
 	}
-	ws, err := getWorkstream(hc.Ctx, hc.DB, sprint.WorkstreamID, "")
+	ws, err := getWorkstream(ctx, db, sprint.WorkstreamID, "")
 	if err != nil {
 		return backend.AgentHandle{}, err
 	}
@@ -663,7 +663,7 @@ func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
 	if !ok {
 		return daemon.Reply{OK: false, Error: "unknown backend: " + string(ag.Backend)}
 	}
-	handle, err := backendAgentHandle(hc, ag)
+	handle, err := backendAgentHandle(hc.Ctx, hc.DB, ag)
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
 	}

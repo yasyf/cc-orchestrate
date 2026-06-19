@@ -120,6 +120,15 @@ func TestCmux(t *testing.T) {
 			calls: []cmuxCall{{name: "cmux", args: []string{"list-panes", "--workspace", "workspace:7", "--json"}}},
 		},
 		{
+			name:    "Capture reads the surface screen as plain text",
+			outputs: [][]byte{[]byte("Do you trust the files in this folder?\n")},
+			invoke: func(b cmux) (any, error) {
+				return b.Capture(context.Background(), AgentHandle{Backend: "cmux", ID: "surface:10", WorkstreamID: "workspace:7"})
+			},
+			want:  "Do you trust the files in this folder?\n",
+			calls: []cmuxCall{{name: "cmux", args: []string{"read-screen", "--workspace", "workspace:7", "--surface", "surface:10"}}},
+		},
+		{
 			name:    "Kill closes the agent surface",
 			outputs: [][]byte{[]byte("OK surface:10 workspace:7\n")},
 			invoke: func(b cmux) (any, error) {
@@ -290,8 +299,8 @@ func TestCmuxStatics(t *testing.T) {
 	if b.Name() != "cmux" {
 		t.Errorf("Name() = %q, want cmux", b.Name())
 	}
-	if c := b.Caps(); !c.Has(CanSendText) || !c.Has(CanEnumerate) || c.Has(CanCapture) {
-		t.Errorf("Caps() = %#v, want CanSendText+CanEnumerate", c)
+	if c := b.Caps(); !c.Has(CanSendText) || !c.Has(CanCapture) || !c.Has(CanEnumerate) {
+		t.Errorf("Caps() = %#v, want CanSendText+CanCapture+CanEnumerate", c)
 	}
 	if err := b.EnsureReady(context.Background()); err != nil {
 		t.Errorf("EnsureReady() = %v, want nil", err)

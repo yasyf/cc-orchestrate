@@ -29,7 +29,7 @@ func (b tmux) Name() BackendName { return tmuxName }
 
 func (b tmux) Available() bool { return installed(tmuxBin) }
 
-func (b tmux) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }
+func (b tmux) Caps() Caps { return Capabilities(CanSendText, CanCapture, CanEnumerate) }
 
 func (b tmux) EnsureReady(ctx context.Context) error { return nil }
 
@@ -101,4 +101,15 @@ func (b tmux) SendText(ctx context.Context, agent AgentHandle, text string) erro
 	}
 	_, err := b.run(ctx, tmuxBin, "send-keys", "-t", agent.ID, "Enter")
 	return err
+}
+
+// Capture returns the agent pane's visible screen as plain text: -p writes it to
+// stdout and -J joins wrapped lines so a reflowed prompt reads intact. agent.ID is
+// the globally unique pane id, so it targets the pane without the session.
+func (b tmux) Capture(ctx context.Context, agent AgentHandle) (string, error) {
+	out, err := b.run(ctx, tmuxBin, "capture-pane", "-p", "-J", "-t", agent.ID)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }

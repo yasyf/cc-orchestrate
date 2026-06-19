@@ -210,7 +210,12 @@ func (spawnBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]bac
 }
 func (spawnBackend) Kill(context.Context, backend.AgentHandle) error                { return nil }
 func (spawnBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error { return nil }
-func (spawnBackend) Caps() backend.Caps                                             { return backend.Caps{} }
+
+// Capture + CanCapture make spawnBackend a capturing backend (like tmux), the common
+// case spawned without the pty-host wrapper; the wrapped path is covered by
+// TestWrapForCapture.
+func (spawnBackend) Capture(context.Context, backend.AgentHandle) (string, error) { return "", nil }
+func (spawnBackend) Caps() backend.Caps { return backend.Capabilities(backend.CanCapture) }
 
 func TestHandleSpawn(t *testing.T) {
 	old := pollInterval

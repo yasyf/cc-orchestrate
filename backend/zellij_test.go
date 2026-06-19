@@ -122,6 +122,15 @@ func TestZellijArgv(t *testing.T) {
 			want: []string{"zellij", "--session", "proj-1", "action", "close-pane", "--pane-id", "terminal_1"},
 		},
 		{
+			name: "Capture dumps the pane screen to stdout by pane id",
+			out:  "Do you trust the files in this folder?\n",
+			call: func(b zellij) error {
+				_, err := b.Capture(ctx, AgentHandle{Backend: "zellij", ID: "terminal_1", WorkstreamID: "proj-1"})
+				return err
+			},
+			want: []string{"zellij", "--session", "proj-1", "action", "dump-screen", "--pane-id", "terminal_1"},
+		},
+		{
 			name: "KillWorkstream",
 			call: func(b zellij) error { return b.KillWorkstream(ctx, project) },
 			want: []string{"zellij", "kill-session", "proj-1"},

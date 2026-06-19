@@ -16,6 +16,8 @@ const (
 	StateIdle     State = "idle"           // the last assistant turn ended with stop_reason end_turn
 	StateAwaiting State = "awaiting-input" // a pending AskUserQuestion is blocking on the user
 	StateUnknown  State = "unknown"        // no assistant activity observed yet
+	StateBlocked  State = "blocked"        // stopped on a known interactive TUI prompt before any transcript; the prober is driving it
+	StateStuck    State = "stuck"          // an unrecognized screen or a prompt that would not clear after retries; needs a human
 )
 
 // Status is the transcript-derived snapshot of an agent: its coarse state, the

@@ -73,6 +73,11 @@ var resolveClaude = func() (string, error) {
 	return "", fmt.Errorf("superset: no claude on PATH outside %s", wrapperDir)
 }
 
+// ResolveClaude returns the real claude binary, skipping the superset agent-wrapper
+// shim, so a pty-host launched for a non-capturing backend runs the real CLI rather
+// than recursing through a wrapper.
+func ResolveClaude() (string, error) { return resolveClaude() }
+
 // supersetWorktreeBase returns the directory under which the superset host
 // service places per-workspace git worktrees on this machine, laid out as
 // <base>/<projectID>/<branch>. The superset CLI exposes no filesystem path on the

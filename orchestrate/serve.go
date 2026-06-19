@@ -116,6 +116,7 @@ func serve(ctx context.Context) error {
 type tailerManager struct {
 	base     context.Context
 	interval time.Duration
+	grace    time.Duration
 	mu       sync.Mutex
 	cancels  map[string]*tailerCancel
 }
@@ -126,7 +127,7 @@ type tailerManager struct {
 type tailerCancel struct{ cancel context.CancelFunc }
 
 func newTailerManager(ctx context.Context) *tailerManager {
-	return &tailerManager{base: ctx, interval: pollInterval, cancels: map[string]*tailerCancel{}}
+	return &tailerManager{base: ctx, interval: pollInterval, grace: probeGrace, cancels: map[string]*tailerCancel{}}
 }
 
 // start launches a background transcript tailer for an agent, persisting each
@@ -148,16 +149,22 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 	m.mu.Unlock()
 	go func() {
 		defer m.finish(ag.ID, tc)
-		err := runTailer(cctx, ag.SessionID, ag.Scope, m.interval,
-			func(st Status) error {
-				if err := applyStatus(cctx, db, ag.ID, st); err != nil {
-					return err
-				}
-				_, err := appendFn(cctx, &event.Event{
-					SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventStatus, Payload: jsonStatus(st),
-				})
+		emit := func(st Status) error {
+			if err := applyStatus(cctx, db, ag.ID, st); err != nil {
 				return err
-			},
+			}
+			_, err := appendFn(cctx, &event.Event{
+				SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventStatus, Payload: jsonStatus(st),
+			})
+			return err
+		}
+		// Grace-period interactive-prompt driver: before any transcript exists, probe
+		// the agent's screen and drive a known blocking prompt (e.g. the trust dialog)
+		// to completion, so a blocked agent is never silently invisible. It runs to
+		// completion before the tailer, then the tailer's first real status overwrites
+		// the transient blocked state.
+		runProber(cctx, db, ag, emit, m.interval, m.grace)
+		err := runTailer(cctx, ag.SessionID, ag.Scope, m.interval, emit,
 			func(text string) error {
 				if text == ag.Prompt {
 					return nil // the spawn prompt is already recorded by EventSpawned

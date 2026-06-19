@@ -177,4 +177,15 @@ func (b cmux) SendText(ctx context.Context, agent AgentHandle, text string) erro
 	return err
 }
 
-func (b cmux) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }
+// Capture returns the agent surface's visible screen as plain text. read-screen
+// writes the viewport to stdout; agent.WorkstreamID is the workspace and agent.ID
+// the surface.
+func (b cmux) Capture(ctx context.Context, agent AgentHandle) (string, error) {
+	out, err := b.run(ctx, cmuxBin, "read-screen", "--workspace", agent.WorkstreamID, "--surface", agent.ID)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+func (b cmux) Caps() Caps { return Capabilities(CanSendText, CanCapture, CanEnumerate) }

@@ -49,6 +49,11 @@ type herdAgentListResult struct {
 	Agents []herdAgent `json:"agents"`
 }
 
+// herdPaneRead is the result of `herdr pane read`; text is the captured screen.
+type herdPaneRead struct {
+	Text string `json:"text"`
+}
+
 // decodeHerd unwraps the result field of a herdr JSON envelope into T.
 func decodeHerd[T any](b []byte) (T, error) {
 	var env struct {
@@ -153,4 +158,18 @@ func (b herd) SendText(ctx context.Context, agent AgentHandle, text string) erro
 	return err
 }
 
-func (b herd) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }
+// Capture returns the agent pane's visible screen as plain text, decoded from the
+// herdr pane read JSON envelope's result.text. agent.ID is the herd pane id.
+func (b herd) Capture(ctx context.Context, agent AgentHandle) (string, error) {
+	out, err := b.run(ctx, herdBin, "pane", "read", agent.ID, "--source", "visible", "--format", "text")
+	if err != nil {
+		return "", err
+	}
+	res, err := decodeHerd[herdPaneRead](out)
+	if err != nil {
+		return "", err
+	}
+	return res.Text, nil
+}
+
+func (b herd) Caps() Caps { return Capabilities(CanSendText, CanCapture, CanEnumerate) }

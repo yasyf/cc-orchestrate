@@ -142,6 +142,20 @@ func TestTmux(t *testing.T) {
 				{"tmux", "send-keys", "-t", "%3", "Enter"},
 			},
 		},
+		{
+			name: "Capture reads the pane screen as joined plain text",
+			out:  "Do you trust the files in this folder?\n",
+			do: func(t *testing.T, b tmux) {
+				got, err := b.Capture(ctx, AgentHandle{Backend: "tmux", ID: "%3"})
+				if err != nil {
+					t.Fatalf("Capture: %v", err)
+				}
+				if got != "Do you trust the files in this folder?\n" {
+					t.Fatalf("screen = %q", got)
+				}
+			},
+			wantCalls: [][]string{{"tmux", "capture-pane", "-p", "-J", "-t", "%3"}},
+		},
 	}
 
 	for _, tc := range cases {
@@ -158,7 +172,7 @@ func TestTmux(t *testing.T) {
 
 func TestTmuxCaps(t *testing.T) {
 	c := (tmux{}).Caps()
-	if !c.Has(CanSendText) || !c.Has(CanEnumerate) || c.Has(CanCapture) {
-		t.Fatalf("Caps = %+v, want CanSendText+CanEnumerate (no CanCapture)", c)
+	if !c.Has(CanSendText) || !c.Has(CanCapture) || !c.Has(CanEnumerate) {
+		t.Fatalf("Caps = %+v, want CanSendText+CanCapture+CanEnumerate", c)
 	}
 }

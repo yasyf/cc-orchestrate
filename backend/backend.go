@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sync"
 )
 
 // BackendName is a backend's registry identity. It is a named type so a backend
@@ -75,9 +76,9 @@ type Capability uint
 const (
 	// CanSendText delivers a message by typing it into the agent's terminal.
 	CanSendText Capability = 1 << iota
-	// CanCapture reads the agent terminal's screen/scrollback. Vocabulary only:
-	// no backend advertises it and no Capturer interface exists until a consumer
-	// does.
+	// CanCapture reads the agent terminal's screen/scrollback natively. A backend
+	// implements Capturer exactly when its Caps has CanCapture; the registry
+	// invariant test enforces that correspondence.
 	CanCapture
 	// CanEnumerate means ListAgents returns the live agent set, so boot reconcile
 	// may prune DB rows the backend no longer reports.
@@ -130,14 +131,34 @@ type Sender interface {
 	SendText(ctx context.Context, agent AgentHandle, text string) error
 }
 
-// registry holds the registered backends keyed by Name.
-var registry = map[BackendName]Backend{}
+// Capturer is a Backend that can read a running agent's rendered terminal screen
+// natively, instead of cc-orchestrate hosting the PTY itself. A backend implements
+// Capturer exactly when its Caps has CanCapture; the registry invariant test
+// enforces that correspondence, so the prober never asks a backend to capture down a
+// path its driver cannot take.
+type Capturer interface {
+	Capture(ctx context.Context, agent AgentHandle) (string, error)
+}
+
+// registry holds the registered backends keyed by Name. registryMu guards it: drivers
+// Register from init, but Get is read concurrently from many tailer/prober goroutines,
+// so the map needs synchronization like the stdlib's sql.Register / image registries.
+var (
+	registryMu sync.RWMutex
+	registry   = map[BackendName]Backend{}
+)
 
 // Register adds a backend to the registry. Drivers call it from an init function.
-func Register(b Backend) { registry[b.Name()] = b }
+func Register(b Backend) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+	registry[b.Name()] = b
+}
 
 // Get returns the registered backend with the given name.
 func Get(name BackendName) (Backend, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	b, ok := registry[name]
 	return b, ok
 }
@@ -156,6 +177,8 @@ func ValidateBackend(name BackendName) error {
 // Available returns the registered backends, in precedence order, whose runtime
 // is installed.
 func Available() []Backend {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	out := []Backend{}
 	for _, name := range Precedence {
 		if b, ok := registry[name]; ok && b.Available() {

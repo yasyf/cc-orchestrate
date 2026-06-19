@@ -32,7 +32,7 @@ func (b zellij) Name() BackendName { return zellijName }
 
 func (b zellij) Available() bool { return installed(zellijBin) }
 
-func (b zellij) Caps() Caps { return Capabilities(CanSendText, CanEnumerate) }
+func (b zellij) Caps() Caps { return Capabilities(CanSendText, CanCapture, CanEnumerate) }
 
 func (b zellij) EnsureReady(ctx context.Context) error { return nil }
 
@@ -116,6 +116,17 @@ func (b zellij) SendText(ctx context.Context, agent AgentHandle, text string) er
 	}
 	_, err := b.run(ctx, zellijBin, "--session", agent.WorkstreamID, "action", "write", "-p", agent.ID, "13")
 	return err
+}
+
+// Capture returns the agent pane's visible screen as plain text. dump-screen prints
+// to stdout when --path is omitted, and --pane-id targets the pane without focusing
+// it. agent.WorkstreamID is the zellij session.
+func (b zellij) Capture(ctx context.Context, agent AgentHandle) (string, error) {
+	out, err := b.run(ctx, zellijBin, "--session", agent.WorkstreamID, "action", "dump-screen", "--pane-id", agent.ID)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 func paneID(p pane) string {
