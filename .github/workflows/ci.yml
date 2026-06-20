@@ -80,6 +80,12 @@ jobs:
         with:
           version: 0.15.2
 
+      # build-libghostty.sh resolves the pinned ghostty source via
+      # `go list -m -f '{{.Dir}}'`, which is empty unless the module is extracted —
+      # download modules first so a cold setup-go cache can't break `cmake -S`.
+      - name: Download Go modules
+        run: go mod download
+
       - name: Build native libghostty-vt
         run: echo "PKG_CONFIG_PATH=$(scripts/build-libghostty.sh linux-amd64 x86_64-linux-gnu)" >> "$GITHUB_ENV"
 
