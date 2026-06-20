@@ -87,6 +87,11 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    # Lint the pure-Go path (CGO_ENABLED=0): the cgo grid (grid_cgo.go, //go:build
+    # cgo) needs a natively-built libghostty-vt that the cgo job provides; here it is
+    # excluded by build tag so the linter type-checks without the native dep.
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -100,6 +105,10 @@ jobs:
 
   vuln:
     runs-on: ubuntu-latest
+    # Scan the pure-Go path (CGO_ENABLED=0) so govulncheck need not link the native
+    # libghostty-vt the cgo grid imports; the build-tagged cgo file is excluded.
+    env:
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
