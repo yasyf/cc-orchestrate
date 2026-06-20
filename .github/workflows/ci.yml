@@ -37,12 +37,14 @@ jobs:
         run: go vet ./...
 
       - name: go test
-        run: go test -race ./...
+        run: go test ./...
 
+  # Real-tmux integration test. CGO_ENABLED=1 because -race requires cgo; ./backend
+  # imports no libghostty, so a plain C toolchain suffices (no native libghostty build).
   integration:
     runs-on: ubuntu-latest
     env:
-      CGO_ENABLED: "0"
+      CGO_ENABLED: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -58,7 +60,8 @@ jobs:
         run: go test -race -run Integration ./backend/
 
   # cgo/go-libghostty path (the default for release binaries). Builds libghostty-vt
-  # natively and exercises the cgo grid so grid_cgo.go can't regress unnoticed.
+  # natively and runs the full -race suite (race requires cgo; orchestrate links the
+  # libghostty-vt grid), so grid_cgo.go and data races can't regress unnoticed.
   cgo:
     runs-on: ubuntu-latest
     steps:
@@ -80,10 +83,10 @@ jobs:
       - name: Build native libghostty-vt
         run: echo "PKG_CONFIG_PATH=$(scripts/build-libghostty.sh linux-amd64 x86_64-linux-gnu)" >> "$GITHUB_ENV"
 
-      - name: go build + grid test (cgo)
+      - name: go build + test -race (cgo)
         env:
           CGO_ENABLED: "1"
-        run: go build ./... && go test ./ptyhost/
+        run: go build ./... && go test -race ./...
 
   lint:
     runs-on: ubuntu-latest
