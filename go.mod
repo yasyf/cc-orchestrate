@@ -1,12 +1,15 @@
 module github.com/yasyf/cc-orchestrate
 
-go 1.26.2
+go 1.26.4
 
 require (
+	github.com/charmbracelet/x/vt v0.0.0-20260615092313-b57e5e6d29bb
+	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/yasyf/cc-interact v0.1.3
 	github.com/yasyf/cc-notes v0.7.0
+	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6
 	modernc.org/sqlite v1.52.0
 )
 
@@ -20,12 +23,10 @@ require (
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
-	github.com/charmbracelet/x/vt v0.0.0-20260615092313-b57e5e6d29bb // indirect
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
-	github.com/creack/pty v1.1.24 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
@@ -50,7 +51,6 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
