@@ -25,13 +25,13 @@ type tmux struct{ run runner }
 
 func init() { Register(tmux{run: execRunner}) }
 
-func (b tmux) Name() BackendName { return tmuxName }
+func (b tmux) Name() Name { return tmuxName }
 
 func (b tmux) Available() bool { return installed(tmuxBin) }
 
 func (b tmux) Caps() Caps { return Capabilities(CanSendText, CanCapture, CanEnumerate) }
 
-func (b tmux) EnsureReady(ctx context.Context) error { return nil }
+func (b tmux) EnsureReady(_ context.Context) error { return nil }
 
 func (b tmux) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error) {
 	session := tmuxNameReplacer.Replace(spec.Name)

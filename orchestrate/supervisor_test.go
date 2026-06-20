@@ -30,24 +30,28 @@ type superviseBackend struct {
 	killed    *[]string // when set, records each Kill target's handle id
 }
 
-func (superviseBackend) Name() backend.BackendName         { return "supervisetest" }
+func (superviseBackend) Name() backend.Name                { return "supervisetest" }
 func (superviseBackend) Available() bool                   { return true }
 func (superviseBackend) EnsureReady(context.Context) error { return nil }
 func (superviseBackend) ListWorkstreams(context.Context) ([]backend.WorkstreamHandle, error) {
 	return nil, nil
 }
+
 func (superviseBackend) CreateWorkstream(context.Context, backend.WorkstreamSpec) (backend.WorkstreamHandle, error) {
 	return backend.WorkstreamHandle{}, nil
 }
+
 func (b superviseBackend) Spawn(_ context.Context, spec backend.SpawnSpec) (backend.AgentHandle, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	*b.spawns++
 	return backend.AgentHandle{Backend: "supervisetest", ID: *b.nextTerm, SessionID: spec.SessionID}, nil
 }
+
 func (b superviseBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
 	return b.agents, nil
 }
+
 func (b superviseBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
 	if b.killed != nil {
 		b.mu.Lock()
@@ -99,9 +103,9 @@ func (l *eventLog) count(t string) int {
 	return n
 }
 
-func assertRestartCount(t *testing.T, db *sql.DB, id string, want int) {
+func assertRestartCount(ctx context.Context, t *testing.T, db *sql.DB, id string, want int) {
 	t.Helper()
-	a, err := getAgent(context.Background(), db, id)
+	a, err := getAgent(ctx, db, id)
 	if err != nil {
 		t.Fatalf("getAgent %s: %v", id, err)
 	}
@@ -110,9 +114,9 @@ func assertRestartCount(t *testing.T, db *sql.DB, id string, want int) {
 	}
 }
 
-func assertTerminalHandle(t *testing.T, db *sql.DB, id, want string) {
+func assertTerminalHandle(ctx context.Context, t *testing.T, db *sql.DB, id, want string) {
 	t.Helper()
-	a, err := getAgent(context.Background(), db, id)
+	a, err := getAgent(ctx, db, id)
 	if err != nil {
 		t.Fatalf("getAgent %s: %v", id, err)
 	}
@@ -131,7 +135,7 @@ func TestSupervisorTick(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 		tailers = newTailerManager(ctx)
-		db := newTestDB(t)
+		db := newTestDB(ctx, t)
 
 		var mu sync.Mutex
 		spawns := 0
@@ -141,17 +145,17 @@ func TestSupervisorTick(t *testing.T) {
 			enumerate: true,
 			mu:        &mu, spawns: &spawns, nextTerm: &nextTerm,
 		})
-		seedWorkstream(t, db, "w1", "p1", "supervisetest", "ws-1")
-		seedAgent(t, db, "a1", "w1", "supervisetest", "term-1")
+		seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+		seedAgent(ctx, t, db, "a1", "w1", "supervisetest", "term-1")
 
 		log := &eventLog{}
 		if err := newSupervisor().tick(ctx, db, log.append); err != nil {
 			t.Fatal(err)
 		}
 
-		assertAgentStatus(t, db, "a1", StatusActive)
-		assertRestartCount(t, db, "a1", 1)
-		assertTerminalHandle(t, db, "a1", "term-2")
+		assertAgentStatus(ctx, t, db, "a1", StatusActive)
+		assertRestartCount(ctx, t, db, "a1", 1)
+		assertTerminalHandle(ctx, t, db, "a1", "term-2")
 		if log.count(EventRestarted) != 1 {
 			t.Fatalf("EventRestarted count = %d, want 1; events=%v", log.count(EventRestarted), log.types())
 		}
@@ -170,7 +174,7 @@ func TestSupervisorTick(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 		tailers = newTailerManager(ctx)
-		db := newTestDB(t)
+		db := newTestDB(ctx, t)
 
 		var mu sync.Mutex
 		spawns := 0
@@ -180,8 +184,8 @@ func TestSupervisorTick(t *testing.T) {
 			enumerate: true,
 			mu:        &mu, spawns: &spawns, nextTerm: &nextTerm,
 		})
-		seedWorkstream(t, db, "w1", "p1", "supervisetest", "ws-1")
-		mustInsertAgent(t, db, agentRow{
+		seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+		mustInsertAgent(ctx, t, db, agentRow{
 			ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
 			SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
 			RestartCount: restartBudget, CreatedAt: "t0",
@@ -192,7 +196,7 @@ func TestSupervisorTick(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		assertAgentStatus(t, db, "a1", StatusExited)
+		assertAgentStatus(ctx, t, db, "a1", StatusExited)
 		if log.count(EventAbandoned) != 1 || log.count(EventExited) != 1 {
 			t.Fatalf("at budget want one Abandoned then one Exited; events=%v", log.types())
 		}
@@ -225,7 +229,7 @@ func TestSupervisorTick(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 		tailers = newTailerManager(ctx)
-		db := newTestDB(t)
+		db := newTestDB(ctx, t)
 
 		var mu sync.Mutex
 		spawns := 0
@@ -235,17 +239,17 @@ func TestSupervisorTick(t *testing.T) {
 			enumerate: false,
 			mu:        &mu, spawns: &spawns, nextTerm: &nextTerm,
 		})
-		seedWorkstream(t, db, "w1", "p1", "supervisetest", "ws-1")
-		seedAgent(t, db, "a1", "w1", "supervisetest", "term-1")
+		seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+		seedAgent(ctx, t, db, "a1", "w1", "supervisetest", "term-1")
 
 		log := &eventLog{}
 		if err := newSupervisor().tick(ctx, db, log.append); err != nil {
 			t.Fatal(err)
 		}
 
-		assertAgentStatus(t, db, "a1", StatusActive)
-		assertRestartCount(t, db, "a1", 0)
-		assertTerminalHandle(t, db, "a1", "term-1")
+		assertAgentStatus(ctx, t, db, "a1", StatusActive)
+		assertRestartCount(ctx, t, db, "a1", 0)
+		assertTerminalHandle(ctx, t, db, "a1", "term-1")
 		if len(log.types()) != 0 {
 			t.Fatalf("non-enumerable backend must emit nothing; events=%v", log.types())
 		}
@@ -261,7 +265,7 @@ func TestSupervisorTick(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 		tailers = newTailerManager(ctx)
-		db := newTestDB(t)
+		db := newTestDB(ctx, t)
 
 		var mu sync.Mutex
 		spawns := 0
@@ -271,8 +275,8 @@ func TestSupervisorTick(t *testing.T) {
 			enumerate: true,
 			mu:        &mu, spawns: &spawns, nextTerm: &nextTerm,
 		})
-		seedWorkstream(t, db, "w1", "p1", "supervisetest", "ws-1")
-		seedAgent(t, db, "a1", "w1", "supervisetest", "term-1")
+		seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+		seedAgent(ctx, t, db, "a1", "w1", "supervisetest", "term-1")
 
 		// Take the agent lock the way handleAgentKill does, flip the row to exited
 		// under it, then release — modelling a kill that wins the race. reconcileVanished
@@ -294,8 +298,8 @@ func TestSupervisorTick(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		assertAgentStatus(t, db, "a1", StatusExited)
-		assertRestartCount(t, db, "a1", 0)
+		assertAgentStatus(ctx, t, db, "a1", StatusExited)
+		assertRestartCount(ctx, t, db, "a1", 0)
 		if log.count(EventRestarted) != 0 {
 			t.Fatalf("a killed agent must never be resurrected; events=%v", log.types())
 		}
@@ -311,7 +315,7 @@ func TestSupervisorTick(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 		tailers = newTailerManager(ctx)
-		db := newTestDB(t)
+		db := newTestDB(ctx, t)
 
 		var mu sync.Mutex
 		spawns := 0
@@ -322,8 +326,8 @@ func TestSupervisorTick(t *testing.T) {
 			enumerate: true,
 			mu:        &mu, spawns: &spawns, nextTerm: &nextTerm, killed: &killed,
 		})
-		seedWorkstream(t, db, "w1", "p1", "supervisetest", "ws-1")
-		seedAgent(t, db, "a1", "w1", "supervisetest", "term-1")
+		seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+		seedAgent(ctx, t, db, "a1", "w1", "supervisetest", "term-1")
 
 		// Hold the agent lock the way a supervisor respawn does, so agent-kill must
 		// block on it before it can read the row. A handler that re-reads under the
@@ -353,7 +357,7 @@ func TestSupervisorTick(t *testing.T) {
 		if !reply.OK {
 			t.Fatalf("agent-kill failed: %s", reply.Error)
 		}
-		assertAgentStatus(t, db, "a1", StatusExited)
+		assertAgentStatus(ctx, t, db, "a1", StatusExited)
 		mu.Lock()
 		gotKilled := append([]string(nil), killed...)
 		mu.Unlock()
@@ -391,23 +395,23 @@ func TestTailerResetsRestartBudgetOnLiveHealthOnly(t *testing.T) {
 			t.Setenv("HOME", home)
 			t.Setenv("CLAUDE_CONFIG_DIR", "")
 			dir := filepath.Join(home, ".claude", "projects", "p")
-			if err := os.MkdirAll(dir, 0o755); err != nil {
+			if err := os.MkdirAll(dir, 0o750); err != nil {
 				t.Fatal(err)
 			}
 			session := "sess-reset-" + tc.name
 			path := filepath.Join(dir, session+".jsonl")
 			// Replayed history: a healthy end_turn line the tailer rebuilds status from
 			// on start. It is stale pre-crash work and must NOT reset the budget.
-			if err := os.WriteFile(path, []byte(lineText+"\n"), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(lineText+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
 			tailers = newTailerManager(ctx)
-			db := newTestDB(t)
-			seedWorkstream(t, db, "w1", "p1", "supervisetest", "ws-1")
-			mustInsertAgent(t, db, agentRow{
+			db := newTestDB(ctx, t)
+			seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+			mustInsertAgent(ctx, t, db, agentRow{
 				ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
 				SessionID: session, Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateUnknown,
 				RestartCount: tc.startWith, LastRestartAt: "t1", CreatedAt: "t0",
@@ -467,21 +471,21 @@ func TestSupervisorFirstRestartResetsBudgetViaTailer(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	dir := filepath.Join(home, ".claude", "projects", "p")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	session := "sess-live-restart"
 	path := filepath.Join(dir, session+".jsonl")
 	// Pre-crash history ending healthy: the resumed agent's tailer replays this idle
 	// line on start, but replay alone must not reset the budget.
-	if err := os.WriteFile(path, []byte(lineText+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(lineText+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	tailers = newTailerManager(ctx)
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 
 	var mu sync.Mutex
 	spawns := 0
@@ -491,8 +495,8 @@ func TestSupervisorFirstRestartResetsBudgetViaTailer(t *testing.T) {
 		enumerate: true,
 		mu:        &mu, spawns: &spawns, nextTerm: &nextTerm,
 	})
-	seedWorkstream(t, db, "w1", "p1", "supervisetest", "ws-1")
-	mustInsertAgent(t, db, agentRow{
+	seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+	mustInsertAgent(ctx, t, db, agentRow{
 		ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
 		SessionID: session, Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
 		RestartCount: 0, CreatedAt: "t0",
@@ -504,7 +508,7 @@ func TestSupervisorFirstRestartResetsBudgetViaTailer(t *testing.T) {
 	}
 
 	// The tick re-spawned into a fresh terminal and counted the attempt.
-	assertTerminalHandle(t, db, "a1", "term-2")
+	assertTerminalHandle(ctx, t, db, "a1", "term-2")
 	if log.count(EventRestarted) != 1 {
 		t.Fatalf("EventRestarted count = %d, want 1; events=%v", log.count(EventRestarted), log.types())
 	}
@@ -512,7 +516,7 @@ func TestSupervisorFirstRestartResetsBudgetViaTailer(t *testing.T) {
 	// Replay caught up once the first status frame lands; the tailer is now live. The
 	// replayed pre-crash idle state must have left the just-counted attempt intact.
 	waitUntil(t, "replay status", func() bool { return log.count(EventStatus) > 0 })
-	assertRestartCount(t, db, "a1", 1)
+	assertRestartCount(ctx, t, db, "a1", 1)
 
 	// The resumed agent now does genuinely-new work reaching a healthy state: the live
 	// recovery signal that clears the budget.
@@ -529,7 +533,7 @@ func TestSupervisorFirstRestartResetsBudgetViaTailer(t *testing.T) {
 	if got.RestartCount != 0 || got.LastRestartAt != "" {
 		t.Fatalf("first restart reaching live healthy must reset budget to 0/'', got count=%d at=%q", got.RestartCount, got.LastRestartAt)
 	}
-	assertAgentStatus(t, db, "a1", StatusActive)
+	assertAgentStatus(ctx, t, db, "a1", StatusActive)
 }
 
 // TestSupervisorCrashLoopAbandonsAtBudget proves the headline guarantee: an agent that
@@ -548,20 +552,20 @@ func TestSupervisorCrashLoopAbandonsAtBudget(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	dir := filepath.Join(home, ".claude", "projects", "p")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	session := "sess-crashloop"
 	// Pre-crash history ending healthy: every respawn's tailer replays this same idle
 	// line, but the resumed process does no NEW work, so the budget must accrue.
-	if err := os.WriteFile(filepath.Join(dir, session+".jsonl"), []byte(lineText+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, session+".jsonl"), []byte(lineText+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	tailers = newTailerManager(ctx)
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 
 	var mu sync.Mutex
 	spawns := 0
@@ -571,8 +575,8 @@ func TestSupervisorCrashLoopAbandonsAtBudget(t *testing.T) {
 		enumerate: true,
 		mu:        &mu, spawns: &spawns, nextTerm: &nextTerm,
 	})
-	seedWorkstream(t, db, "w1", "p1", "supervisetest", "ws-1")
-	mustInsertAgent(t, db, agentRow{
+	seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+	mustInsertAgent(ctx, t, db, agentRow{
 		ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
 		SessionID: session, Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
 		RestartCount: 0, CreatedAt: "t0",
@@ -593,7 +597,7 @@ func TestSupervisorCrashLoopAbandonsAtBudget(t *testing.T) {
 		}
 	}
 
-	assertAgentStatus(t, db, "a1", StatusExited)
+	assertAgentStatus(ctx, t, db, "a1", StatusExited)
 	if log.count(EventRestarted) != restartBudget {
 		t.Fatalf("EventRestarted count = %d, want %d; events=%v", log.count(EventRestarted), restartBudget, log.types())
 	}

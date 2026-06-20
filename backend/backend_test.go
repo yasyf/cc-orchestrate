@@ -45,7 +45,7 @@ func TestSelectReturnsFirstAvailable(t *testing.T) {
 // Available() so the set of names that validate is exactly the set Available()
 // returns, regardless of which runtimes are installed on the test host.
 func TestValidateBackend(t *testing.T) {
-	available := map[BackendName]bool{}
+	available := map[Name]bool{}
 	for _, b := range Available() {
 		available[b.Name()] = true
 	}
@@ -65,8 +65,8 @@ func TestValidateBackend(t *testing.T) {
 	}
 }
 
-func names(bs []Backend) []BackendName {
-	out := make([]BackendName, len(bs))
+func names(bs []Backend) []Name {
+	out := make([]Name, len(bs))
 	for i, b := range bs {
 		out[i] = b.Name()
 	}

@@ -352,6 +352,7 @@ func respawnAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, a
 	}
 	fresh := ag
 	fresh.TerminalHandle = handle.ID
+	//nolint:contextcheck // tailer intentionally derives from the daemon-lifetime base ctx, not this caller's ctx (see tailerManager doc)
 	tailers.start(db, appendFn, fresh)
 	return handle, nil
 }

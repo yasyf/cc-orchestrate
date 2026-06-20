@@ -47,6 +47,8 @@ const (
 // named type so a status field can never be assigned an arbitrary string.
 type LifecycleStatus string
 
+// StatusActive and the terminal StatusExited/StatusKilled are the lifecycle states a
+// repo or agent row can hold.
 const (
 	StatusActive LifecycleStatus = "active" // running; matches daemon.Config.ActiveStatuses
 	StatusExited LifecycleStatus = "exited" // terminal: the agent's process is gone

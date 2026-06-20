@@ -25,7 +25,7 @@ import (
 func TestCCNotesDisabledLeavesBindingsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // worktreesBase resolves under the temp home
 	ctx := context.Background()
-	repo := gitRepo(t, "main")
+	repo := gitRepo(ctx, t, "main")
 
 	// Precondition: a fresh repo reports cc-notes disabled, so the not-enabled path
 	// is the one under test. (cc-notes may or may not be installed; either way a
@@ -34,7 +34,7 @@ func TestCCNotesDisabledLeavesBindingsEmpty(t *testing.T) {
 		t.Fatal("fresh repo reports cc-notes enabled; the not-enabled path can't be exercised")
 	}
 
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 	if err := insertRepo(ctx, db, repoRow{
 		ID: "p1", Name: "demo", Backend: "wstest", Cwd: repo, Status: StatusActive, CreatedAt: "t0",
 	}); err != nil {
@@ -102,7 +102,7 @@ func TestCCNotesDisabledSpawnLeavesTaskEmpty(t *testing.T) {
 	t.Cleanup(cancel)
 	tailers = newTailerManager(ctx)
 
-	repo := gitRepo(t, "main")
+	repo := gitRepo(ctx, t, "main")
 	if ccnotes.Enabled(ctx, repo) {
 		t.Fatal("fresh repo reports cc-notes enabled; the not-enabled path can't be exercised")
 	}
@@ -173,9 +173,9 @@ func TestCCNotesSpawnFailureLeavesNoSubjectOrAgent(t *testing.T) {
 	t.Cleanup(cancel)
 	tailers = newTailerManager(ctx)
 
-	repo := gitRepo(t, "main")
+	repo := gitRepo(ctx, t, "main")
 	// A ref under refs/cc-notes/ makes the repo look cc-notes-enabled.
-	if out, err := exec.CommandContext(ctx, "git", "-C", repo, "update-ref", "refs/cc-notes/test", "HEAD").CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, "git", "-C", repo, "update-ref", "refs/cc-notes/test", "HEAD").CombinedOutput(); err != nil { //nolint:gosec // G204: test runs git with a fixed subcommand in a temp repo
 		t.Fatalf("git update-ref: %v\n%s", err, out)
 	}
 	// A malformed CC_NOTES_ACTOR makes the in-process task create fail

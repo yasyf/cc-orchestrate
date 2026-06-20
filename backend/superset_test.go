@@ -63,7 +63,7 @@ type supersetRunner struct {
 	errs  []error
 }
 
-func (r *supersetRunner) run(ctx context.Context, name string, args ...string) ([]byte, error) {
+func (r *supersetRunner) run(_ context.Context, name string, args ...string) ([]byte, error) {
 	i := len(r.calls)
 	r.calls = append(r.calls, append([]string{name}, args...))
 	out := ""
@@ -172,9 +172,11 @@ func TestSupersetCreateWorkstreamExistingProject(t *testing.T) {
 	}
 	assertCalls(t, r.calls, [][]string{
 		{"superset", "projects", "list", "--local", "--json"},
-		{"superset", "workspaces", "create", "--local",
+		{
+			"superset", "workspaces", "create", "--local",
 			"--project", "48f92b66-fbd7-473f-a7ad-6b8e583e933a",
-			"--branch", "feature/login", "--name", "cc-orch-test", "--json"},
+			"--branch", "feature/login", "--name", "cc-orch-test", "--json",
+		},
 	})
 	want := WorkstreamHandle{
 		Backend: "superset", ID: "d1e2f3a4-0000-4aaa-bbbb-ccccddddeeee", Name: "cc-orch-test", Cwd: cwd,
@@ -203,8 +205,10 @@ func TestSupersetCreateWorkstreamImportsWhenMissing(t *testing.T) {
 		{"superset", "projects", "list", "--local", "--json"},
 		{"superset", "projects", "setup", "--import", cwd, "--local", "--json"},
 		{"superset", "projects", "list", "--local", "--json"},
-		{"superset", "workspaces", "create", "--local",
-			"--project", "new-proj-id", "--branch", "main", "--name", "brand-new", "--json"},
+		{
+			"superset", "workspaces", "create", "--local",
+			"--project", "new-proj-id", "--branch", "main", "--name", "brand-new", "--json",
+		},
 	})
 	if got.ID != "d1e2f3a4-0000-4aaa-bbbb-ccccddddeeee" {
 		t.Fatalf("workspace id = %q, want d1e2f3a4-...", got.ID)
@@ -444,7 +448,7 @@ func TestShellQuoteRoundTripThroughBash(t *testing.T) {
 	for i, tok := range cmd {
 		quoted[i] = ShellQuote(tok)
 	}
-	out, err := exec.CommandContext(context.Background(), bash, "-c", strings.Join(quoted, " ")).Output()
+	out, err := exec.CommandContext(context.Background(), bash, "-c", strings.Join(quoted, " ")).Output() //nolint:gosec // G204: test drives the shell with a fixed printf round-trip command
 	if err != nil {
 		t.Fatalf("bash: %v", err)
 	}
@@ -462,7 +466,7 @@ func TestWrapBashLoginRoundTripThroughFish(t *testing.T) {
 	}
 	args := []string{"a b", "it's", "x$Y", "semi;colon", "amp&", `quote"d`, `back\slash`}
 	cmd := append([]string{"printf", `%s\n`}, args...)
-	out, err := exec.CommandContext(context.Background(), fish, "--no-config", "-c", wrapBashLogin(cmd)).Output()
+	out, err := exec.CommandContext(context.Background(), fish, "--no-config", "-c", wrapBashLogin(cmd)).Output() //nolint:gosec // G204: test drives fish with a fixed printf round-trip command
 	if err != nil {
 		t.Fatalf("fish: %v", err)
 	}

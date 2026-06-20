@@ -11,7 +11,7 @@ import (
 
 // newTestDB opens a real ephemeral on-disk sqlite database with the orchestrate
 // schema applied, closed automatically when the test ends.
-func newTestDB(t *testing.T) *sql.DB {
+func newTestDB(ctx context.Context, t *testing.T) *sql.DB {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)")
@@ -19,7 +19,7 @@ func newTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := migrate(context.Background(), db); err != nil {
+	if err := migrate(ctx, db); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
@@ -27,7 +27,7 @@ func newTestDB(t *testing.T) *sql.DB {
 
 func TestRepoCRUD(t *testing.T) {
 	ctx := context.Background()
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 
 	p := repoRow{
 		ID: "p1", Name: "alpha", Backend: "tmux",
@@ -101,7 +101,7 @@ func TestRepoCRUD(t *testing.T) {
 
 func TestAgentCRUD(t *testing.T) {
 	ctx := context.Background()
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 
 	active := agentRow{
 		ID: "a1", SprintID: "s1", Backend: "tmux", TerminalHandle: "term-1",
@@ -176,7 +176,7 @@ func TestAgentCRUD(t *testing.T) {
 
 func TestWorkstreamCRUD(t *testing.T) {
 	ctx := context.Background()
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 
 	primary := workstreamRow{
 		ID: "w1", RepoID: "p1", Name: "main", Backend: "tmux", WorkspaceHandle: "ws-1",
@@ -269,7 +269,7 @@ func TestWorkstreamCRUD(t *testing.T) {
 // and status mutation.
 func TestSprintCRUD(t *testing.T) {
 	ctx := context.Background()
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 
 	main := sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "2026-06-16T00:00:00Z"}
 	feature := sprintRow{ID: "s2", WorkstreamID: "w1", Name: "feat", Status: StatusActive, CreatedAt: "2026-06-16T01:00:00Z"}
@@ -349,7 +349,7 @@ func TestSprintCRUD(t *testing.T) {
 // sprints and workstreams, returning every agent of a repo across its streams.
 func TestListRepoAgents(t *testing.T) {
 	ctx := context.Background()
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 	for _, w := range []workstreamRow{
 		{ID: "w1", RepoID: "p1", Name: "main", Backend: "tmux", Branch: "main", Worktree: "/r1", IsPrimary: true, Status: StatusActive, CreatedAt: "t0"},
 		{ID: "w2", RepoID: "p1", Name: "feat", Backend: "tmux", Branch: "feat", Worktree: "/r1/feat", Status: StatusActive, CreatedAt: "t1"},
@@ -391,7 +391,7 @@ func TestListRepoAgents(t *testing.T) {
 // workstream's agents are the union across all its sprints.
 func TestListWorkstreamAgents(t *testing.T) {
 	ctx := context.Background()
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 	for _, sp := range []sprintRow{
 		{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"},
 		{ID: "s2", WorkstreamID: "w1", Name: "feat", Status: StatusActive, CreatedAt: "t1"},
@@ -422,7 +422,7 @@ func TestListWorkstreamAgents(t *testing.T) {
 
 func TestApplyStatus(t *testing.T) {
 	ctx := context.Background()
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 	if err := insertAgent(ctx, db, agentRow{
 		ID: "a1", SprintID: "s1", Backend: "tmux", Scope: "/tmp/a1",
 		Status: "active", State: StateUnknown, CreatedAt: "2026-06-16T00:00:00Z",
@@ -458,7 +458,7 @@ func TestApplyStatus(t *testing.T) {
 // and resetRestart the (count, at) pair back to (0, ""), each leaving the rest intact.
 func TestRestartHelpers(t *testing.T) {
 	ctx := context.Background()
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 
 	seed := agentRow{
 		ID: "a1", SprintID: "s1", Backend: "tmux", TerminalHandle: "term-1",
@@ -541,7 +541,7 @@ func TestStatusActivity(t *testing.T) {
 
 func TestConfigGetSet(t *testing.T) {
 	ctx := context.Background()
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 
 	if _, found, err := getConfig(ctx, db, "backend"); err != nil || found {
 		t.Fatalf("getConfig(unset) = found %v, err %v; want false, nil", found, err)

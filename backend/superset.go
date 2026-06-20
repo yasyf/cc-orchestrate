@@ -94,7 +94,7 @@ var supersetWorktreeBase = func() (string, error) {
 	return filepath.Join(home, ".superset", "worktrees"), nil
 }
 
-func (b superset) Name() BackendName { return supersetBin }
+func (b superset) Name() Name { return supersetBin }
 
 func (b superset) Available() bool { return installed(supersetBin) }
 
@@ -269,7 +269,7 @@ func (b superset) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error
 
 // ListAgents always returns empty: superset has no running-agent CLI, so the
 // orchestrate agents table is the source of truth.
-func (b superset) ListAgents(ctx context.Context, workstream WorkstreamHandle) ([]AgentHandle, error) {
+func (b superset) ListAgents(_ context.Context, _ WorkstreamHandle) ([]AgentHandle, error) {
 	return []AgentHandle{}, nil
 }
 

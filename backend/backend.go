@@ -11,13 +11,13 @@ import (
 	"sync"
 )
 
-// BackendName is a backend's registry identity. It is a named type so a backend
+// Name is a backend's registry identity. It is a named type so a backend
 // name can never be silently mixed with an arbitrary string.
-type BackendName string
+type Name string
 
 // Precedence is the default backend resolution order: the first Available one
 // wins unless the user selects another.
-var Precedence = []BackendName{"herd", "superset", "cmux", "zellij", "tmux"}
+var Precedence = []Name{"herd", "superset", "cmux", "zellij", "tmux"}
 
 // WorkstreamSpec describes a workstream to create on a backend. A workstream is
 // the cwd-bearing unit of isolation: one git worktree on its own branch. Cwd is
@@ -49,7 +49,7 @@ type SpawnSpec struct {
 // cc-orchestrate handed it, or — for a backend that advertises ManagesWorktree —
 // the path the backend forked and now owns, which cc-orchestrate adopts.
 type WorkstreamHandle struct {
-	Backend  BackendName
+	Backend  Name
 	ID       string
 	Name     string
 	Cwd      string
@@ -60,7 +60,7 @@ type WorkstreamHandle struct {
 // child's claude --session-id so a backend that can't address its terminal (superset)
 // can still kill the process by identity.
 type AgentHandle struct {
-	Backend      BackendName
+	Backend      Name
 	ID           string
 	WorkstreamID string
 	Name         string
@@ -110,7 +110,7 @@ func (c Caps) Has(want Capability) bool { return c.set&want != 0 }
 
 // Backend is one agent placement+spawn runtime.
 type Backend interface {
-	Name() BackendName
+	Name() Name
 	Available() bool
 	EnsureReady(ctx context.Context) error
 	CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error)
@@ -145,7 +145,7 @@ type Capturer interface {
 // so the map needs synchronization like the stdlib's sql.Register / image registries.
 var (
 	registryMu sync.RWMutex
-	registry   = map[BackendName]Backend{}
+	registry   = map[Name]Backend{}
 )
 
 // Register adds a backend to the registry. Drivers call it from an init function.
@@ -156,7 +156,7 @@ func Register(b Backend) {
 }
 
 // Get returns the registered backend with the given name.
-func Get(name BackendName) (Backend, bool) {
+func Get(name Name) (Backend, bool) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 	b, ok := registry[name]
@@ -166,7 +166,7 @@ func Get(name BackendName) (Backend, bool) {
 // ValidateBackend returns an error unless name is a known backend (present in
 // Precedence and registered) whose runtime is installed. Callers add their own
 // surface-specific hint (e.g. how to list backends) by wrapping the result.
-func ValidateBackend(name BackendName) error {
+func ValidateBackend(name Name) error {
 	b, ok := Get(name)
 	if !slices.Contains(Precedence, name) || !ok || !b.Available() {
 		return fmt.Errorf("backend %q is not an available backend", name)

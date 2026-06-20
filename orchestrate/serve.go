@@ -86,6 +86,7 @@ func serve(ctx context.Context) error {
 				return err
 			}
 			for _, ag := range agents {
+				//nolint:contextcheck // tailer intentionally derives from the daemon-lifetime base ctx, not this RPC's ctx (see tailerManager doc)
 				tailers.start(db, s.Append, ag)
 			}
 			// Start the keep-alive supervisor only after the boot prune+resume has

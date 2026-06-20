@@ -21,30 +21,36 @@ type serializeTestBackend struct {
 	killed *[]string // when set, records each Kill target's handle id
 }
 
-func (serializeTestBackend) Name() backend.BackendName         { return "sertest" }
+func (serializeTestBackend) Name() backend.Name                { return "sertest" }
 func (serializeTestBackend) Available() bool                   { return true }
 func (serializeTestBackend) EnsureReady(context.Context) error { return nil }
 func (serializeTestBackend) ListWorkstreams(context.Context) ([]backend.WorkstreamHandle, error) {
 	return nil, nil
 }
+
 func (serializeTestBackend) CreateWorkstream(context.Context, backend.WorkstreamSpec) (backend.WorkstreamHandle, error) {
 	return backend.WorkstreamHandle{}, nil
 }
+
 func (serializeTestBackend) Spawn(_ context.Context, spec backend.SpawnSpec) (backend.AgentHandle, error) {
 	return backend.AgentHandle{Backend: "sertest", ID: "restored-" + spec.SessionID, SessionID: spec.SessionID}, nil
 }
+
 func (serializeTestBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
 	return nil, nil
 }
+
 func (b serializeTestBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
 	if b.killed != nil {
 		*b.killed = append(*b.killed, agent.ID)
 	}
 	return nil
 }
+
 func (serializeTestBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error {
 	return nil
 }
+
 func (serializeTestBackend) Capture(_ context.Context, agent backend.AgentHandle) (string, error) {
 	return "screen:" + agent.SessionID, nil
 }
@@ -76,13 +82,13 @@ func TestSerializeRestoreRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	tailers = newTailerManager(ctx)
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 	backend.Register(serializeTestBackend{})
-	seedWorkstream(t, db, "w1", "p1", "sertest", "ws-1")
+	seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
 
 	sids := map[string]string{"a1": "sess-1", "a2": "sess-2"}
 	for id, sid := range sids {
-		mustInsertAgent(t, db, agentRow{
+		mustInsertAgent(ctx, t, db, agentRow{
 			ID: id, SprintID: "w1-s", Backend: "sertest", TerminalHandle: "term-" + id,
 			SessionID: sid, Scope: "/s", Name: id, Prompt: "do " + id, SubjectID: "subj-" + id,
 			Status: StatusActive, State: StateWorking, CreatedAt: "t0",
@@ -189,15 +195,15 @@ func TestRestoreIntoWipedDB(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	tailers = newTailerManager(ctx)
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 	backend.Register(serializeTestBackend{})
 	if err := insertRepo(ctx, db, repoRow{
 		ID: "p1", Name: "alpha", Backend: "sertest", Cwd: "/tmp/p1", Status: StatusActive, CreatedAt: "t0",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	seedWorkstream(t, db, "w1", "p1", "sertest", "ws-1")
-	mustInsertAgent(t, db, agentRow{
+	seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
+	mustInsertAgent(ctx, t, db, agentRow{
 		ID: "a1", SprintID: "w1-s", Backend: "sertest", TerminalHandle: "term-1",
 		SessionID: "sess-1", Scope: "/s", Name: "a1", Prompt: "do a1", SubjectID: "subj-a1",
 		Status: StatusActive, State: StateWorking, CreatedAt: "t0",
@@ -210,7 +216,7 @@ func TestRestoreIntoWipedDB(t *testing.T) {
 
 	// A full wipe: drop every consumer table, the way a ~/.cc-orchestrate wipe would.
 	for _, table := range []string{"agents", "sprints", "workstreams", "repos", "config"} {
-		if _, err := db.ExecContext(ctx, `DELETE FROM `+table); err != nil {
+		if _, err := db.ExecContext(ctx, `DELETE FROM `+table); err != nil { //nolint:gosec // G202: table names are hardcoded test fixtures, not user input
 			t.Fatalf("wipe %s: %v", table, err)
 		}
 	}
@@ -255,10 +261,10 @@ func TestSerializeWriteFailureAppendsNoEvent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	tailers = newTailerManager(ctx)
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 	backend.Register(serializeTestBackend{})
-	seedWorkstream(t, db, "w1", "p1", "sertest", "ws-1")
-	mustInsertAgent(t, db, agentRow{
+	seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
+	mustInsertAgent(ctx, t, db, agentRow{
 		ID: "a1", SprintID: "w1-s", Backend: "sertest", TerminalHandle: "term-a1",
 		SessionID: "sess-1", Scope: "/s", Name: "a1", Prompt: "do a1", SubjectID: "subj-a1",
 		Status: StatusActive, State: StateWorking, CreatedAt: "t0",
@@ -305,9 +311,9 @@ func TestRestoreStrictParseFailsLoud(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
 			tailers = newTailerManager(ctx)
-			db := newTestDB(t)
+			db := newTestDB(ctx, t)
 			backend.Register(serializeTestBackend{})
-			seedWorkstream(t, db, "w1", "p1", "sertest", "ws-1")
+			seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
 
 			path := filepath.Join(t.TempDir(), "bundle.json")
 			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
@@ -338,11 +344,11 @@ func TestRestorePresentRowRewritesHandle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	tailers = newTailerManager(ctx)
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 	var killed []string
 	backend.Register(serializeTestBackend{killed: &killed})
-	seedWorkstream(t, db, "w1", "p1", "sertest", "ws-1")
-	mustInsertAgent(t, db, agentRow{
+	seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
+	mustInsertAgent(ctx, t, db, agentRow{
 		ID: "a1", SprintID: "w1-s", Backend: "sertest", TerminalHandle: "term-orig",
 		SessionID: "sess-1", Scope: "/s", Name: "a1", Prompt: "do a1", SubjectID: "subj-a1",
 		Status: StatusActive, State: StateWorking, CreatedAt: "t0",
@@ -400,11 +406,11 @@ func TestRestorePresentExitedRowReactivates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	tailers = newTailerManager(ctx)
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 	var killed []string
 	backend.Register(serializeTestBackend{killed: &killed})
-	seedWorkstream(t, db, "w1", "p1", "sertest", "ws-1")
-	mustInsertAgent(t, db, agentRow{
+	seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
+	mustInsertAgent(ctx, t, db, agentRow{
 		ID: "a1", SprintID: "w1-s", Backend: "sertest", TerminalHandle: "term-dead",
 		SessionID: "sess-1", Scope: "/s", Name: "a1", Prompt: "do a1", SubjectID: "subj-a1",
 		Status: StatusExited, State: StateIdle, CreatedAt: "t0",

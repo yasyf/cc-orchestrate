@@ -189,7 +189,7 @@ func TestTailerManagerStartStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	m := newTailerManager(ctx)
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 	noopAppend := func(context.Context, *event.Event) (int64, error) { return 0, nil }
 
 	ag := agentRow{ID: "a1", SessionID: "sess-x", Scope: "/s", SubjectID: "subj-1"}
@@ -224,19 +224,22 @@ type spawnBackend struct {
 	spec *backend.SpawnSpec
 }
 
-func (spawnBackend) Name() backend.BackendName         { return "spawntest" }
+func (spawnBackend) Name() backend.Name                { return "spawntest" }
 func (spawnBackend) Available() bool                   { return true }
 func (spawnBackend) EnsureReady(context.Context) error { return nil }
 func (spawnBackend) ListWorkstreams(context.Context) ([]backend.WorkstreamHandle, error) {
 	return nil, nil
 }
+
 func (spawnBackend) CreateWorkstream(context.Context, backend.WorkstreamSpec) (backend.WorkstreamHandle, error) {
 	return backend.WorkstreamHandle{}, nil
 }
+
 func (b spawnBackend) Spawn(_ context.Context, spec backend.SpawnSpec) (backend.AgentHandle, error) {
 	*b.spec = spec
 	return backend.AgentHandle{Backend: "spawntest", ID: "term-1", SessionID: spec.SessionID}, nil
 }
+
 func (spawnBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
 	return nil, nil
 }
@@ -475,7 +478,7 @@ func TestHandleSpawnRejectsKilledHierarchy(t *testing.T) {
 		{"killed repo", StatusKilled, StatusActive, StatusActive},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			db := newTestDB(t)
+			db := newTestDB(ctx, t)
 			if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "spawntest", Cwd: "/tmp/a", Status: tc.repoStatus, CreatedAt: "t0"}); err != nil {
 				t.Fatalf("insertRepo: %v", err)
 			}
@@ -492,6 +495,7 @@ func TestHandleSpawnRejectsKilledHierarchy(t *testing.T) {
 				t.Fatal("Append must not be called when the hierarchy is not active")
 				return 0, nil
 			}
+			//nolint:contextcheck // handleSpawn's tailer derives from the daemon-lifetime base ctx by design (see tailerManager doc)
 			reply := handleSpawn(opCtx(db, mustJSON(t, map[string]string{"sprint": "s1"}), appendFn))
 			if reply.OK || reply.Error == "" {
 				t.Fatalf("reply = %+v, want ok=false for a non-active hierarchy", reply)

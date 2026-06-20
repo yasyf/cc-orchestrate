@@ -39,19 +39,19 @@ type serializeBundle struct {
 // live Claude session via --resume (its transcript in ~/.claude survives a
 // ~/.cc-orchestrate wipe); Screen is preserved for inspection only and is never replayed.
 type serializedAgent struct {
-	ID             string              `json:"id"`
-	SprintID       string              `json:"sprint_id"`
-	Backend        backend.BackendName `json:"backend"`
-	TerminalHandle string              `json:"terminal_handle"`
-	SessionID      string              `json:"session_id"`
-	Scope          string              `json:"scope"`
-	Name           string              `json:"name"`
-	Prompt         string              `json:"prompt"`
-	SubjectID      string              `json:"subject_id"`
-	CCNotesTask    string              `json:"ccnotes_task"`
-	RestartCount   int                 `json:"restart_count"`
-	LastRestartAt  string              `json:"last_restart_at"`
-	Screen         string              `json:"screen"`
+	ID             string       `json:"id"`
+	SprintID       string       `json:"sprint_id"`
+	Backend        backend.Name `json:"backend"`
+	TerminalHandle string       `json:"terminal_handle"`
+	SessionID      string       `json:"session_id"`
+	Scope          string       `json:"scope"`
+	Name           string       `json:"name"`
+	Prompt         string       `json:"prompt"`
+	SubjectID      string       `json:"subject_id"`
+	CCNotesTask    string       `json:"ccnotes_task"`
+	RestartCount   int          `json:"restart_count"`
+	LastRestartAt  string       `json:"last_restart_at"`
+	Screen         string       `json:"screen"`
 }
 
 // serializedEvent is the EventSerialized body appended per agent when a snapshot is
@@ -247,11 +247,11 @@ func restoreHierarchy(ctx context.Context, db *sql.DB, bundle serializeBundle) e
 // readBundle strict-parses a serialize bundle: an unknown field, trailing garbage, or
 // malformed JSON fails loud, so a corrupt bundle restores nothing rather than partially.
 func readBundle(path string) (serializeBundle, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: user supplies the bundle path to restore by design
 	if err != nil {
 		return serializeBundle{}, fmt.Errorf("open bundle %q: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	dec := json.NewDecoder(f)
 	dec.DisallowUnknownFields()
 	var bundle serializeBundle

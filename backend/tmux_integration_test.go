@@ -32,7 +32,7 @@ func TestTmuxIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tmux socket dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 	t.Setenv("TMUX_TMPDIR", sockDir)
 
 	ctx := context.Background()
@@ -47,8 +47,8 @@ func TestTmuxIntegration(t *testing.T) {
 	// Force-kill the private server no matter how the test exits so a failed
 	// assertion never leaks a tmux session or socket.
 	t.Cleanup(func() {
-		b.run(context.Background(), tmuxBin, "kill-session", "-t", wantSession)
-		b.run(context.Background(), tmuxBin, "kill-server")
+		_, _ = b.run(context.Background(), tmuxBin, "kill-session", "-t", wantSession)
+		_, _ = b.run(context.Background(), tmuxBin, "kill-server")
 	})
 
 	proj, err := b.CreateWorkstream(ctx, WorkstreamSpec{Name: rawName, Cwd: cwd})

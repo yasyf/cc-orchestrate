@@ -62,7 +62,7 @@ type recordedCall struct {
 
 func recorder(out string) (*[]recordedCall, runner) {
 	calls := &[]recordedCall{}
-	r := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	r := func(_ context.Context, name string, args ...string) ([]byte, error) {
 		*calls = append(*calls, recordedCall{name: name, args: args})
 		return []byte(out), nil
 	}

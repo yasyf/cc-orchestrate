@@ -37,7 +37,7 @@ func (c *Client) do(ctx context.Context, req request) (response, error) {
 	if err != nil {
 		return response{}, fmt.Errorf("pty-host dial %s: %w", c.socket, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
 	}

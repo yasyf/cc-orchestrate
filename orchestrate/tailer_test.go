@@ -14,11 +14,11 @@ import (
 
 func appendLine(t *testing.T, path, data string) {
 	t.Helper()
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // G304: test appends to a transcript file under its own temp dir
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.WriteString(data); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestRunTailerStreamsStatuses(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	dir := filepath.Join(home, ".claude", "projects", "test-proj")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	session := "sess-123"
@@ -115,7 +115,7 @@ func TestRunTailerEmitsInboundLiveOnly(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	dir := filepath.Join(home, ".claude", "projects", "test-proj")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	session := "sess-inbound"
@@ -125,7 +125,7 @@ func TestRunTailerEmitsInboundLiveOnly(t *testing.T) {
 	// are replayed on start; the inbound turn must not be re-emitted, while the
 	// assistant turn's status emission signals that replay caught up and the tailer
 	// is live.
-	if err := os.WriteFile(path, []byte(lineUserPrompt+"\n"+lineText+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(lineUserPrompt+"\n"+lineText+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -187,20 +187,20 @@ func TestTailerManagerEmitsInboundEvent(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	dir := filepath.Join(home, ".claude", "projects", "p")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	session := "sess-mgr"
 	path := filepath.Join(dir, session+".jsonl")
 	// A replayed assistant turn: its status emission signals the tailer is live.
-	if err := os.WriteFile(path, []byte(lineText+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(lineText+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	m := newTailerManager(ctx)
-	db := newTestDB(t)
+	db := newTestDB(ctx, t)
 
 	var mu sync.Mutex
 	var events []*event.Event
@@ -280,14 +280,14 @@ func TestFindTranscriptPicksNewest(t *testing.T) {
 	older := filepath.Join(home, ".claude", "projects", "alpha")
 	newer := filepath.Join(home, ".claude", "projects", "beta")
 	for _, d := range []string{older, newer} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		if err := os.MkdirAll(d, 0o750); err != nil {
 			t.Fatal(err)
 		}
 	}
 	oldPath := filepath.Join(older, session+".jsonl")
 	newPath := filepath.Join(newer, session+".jsonl")
 	for _, p := range []string{oldPath, newPath} {
-		if err := os.WriteFile(p, []byte("{}\n"), 0o644); err != nil {
+		if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -321,18 +321,18 @@ func TestFindTranscriptHonorsConfigDir(t *testing.T) {
 
 	session := "cfg-sess"
 	decoy := filepath.Join(home, ".claude", "projects", "decoy")
-	real := filepath.Join(cfg, "projects", "real")
-	for _, d := range []string{decoy, real} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+	realDir := filepath.Join(cfg, "projects", "real")
+	for _, d := range []string{decoy, realDir} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// A ~/.claude match must be ignored entirely when CLAUDE_CONFIG_DIR is set.
-	if err := os.WriteFile(filepath.Join(decoy, session+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(decoy, session+".jsonl"), []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(real, session+".jsonl")
-	if err := os.WriteFile(want, []byte("{}\n"), 0o644); err != nil {
+	want := filepath.Join(realDir, session+".jsonl")
+	if err := os.WriteFile(want, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

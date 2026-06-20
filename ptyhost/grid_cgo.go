@@ -22,7 +22,7 @@ type ghosttyGrid struct {
 
 func newGrid(cols, rows int, reply io.Writer) grid {
 	term, err := lg.NewTerminal(
-		lg.WithSize(uint16(cols), uint16(rows)),
+		lg.WithSize(clampUint16(cols), clampUint16(rows)),
 		lg.WithWritePty(func(_ *lg.Terminal, data []byte) {
 			_, _ = reply.Write(data) // query replies (DA/DSR/cursor-position) go to the child
 		}),

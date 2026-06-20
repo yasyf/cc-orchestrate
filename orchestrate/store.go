@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // register the sqlite database/sql driver
 
 	"github.com/yasyf/cc-orchestrate/backend"
 )
@@ -40,7 +40,7 @@ const agentColumns = `agents.id, agents.sprint_id, agents.backend, COALESCE(agen
 type repoRow struct {
 	ID        string
 	Name      string
-	Backend   backend.BackendName
+	Backend   backend.Name
 	Cwd       string
 	Status    LifecycleStatus
 	CreatedAt string
@@ -56,7 +56,7 @@ type workstreamRow struct {
 	ID              string
 	RepoID          string
 	Name            string
-	Backend         backend.BackendName
+	Backend         backend.Name
 	WorkspaceHandle string
 	Branch          string
 	Worktree        string
@@ -84,7 +84,7 @@ type sprintRow struct {
 type agentRow struct {
 	ID             string
 	SprintID       string
-	Backend        backend.BackendName
+	Backend        backend.Name
 	TerminalHandle string
 	SessionID      string
 	Scope          string
@@ -158,7 +158,7 @@ func listRepos(ctx context.Context, db *sql.DB) ([]repoRow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list repos: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []repoRow{}
 	for rows.Next() {
 		p, err := scanRepo(rows)
@@ -222,7 +222,7 @@ func listWorkstreams(ctx context.Context, db *sql.DB, repoFilter string) ([]work
 	if err != nil {
 		return nil, fmt.Errorf("list workstreams: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []workstreamRow{}
 	for rows.Next() {
 		w, err := scanWorkstream(rows)
@@ -301,7 +301,7 @@ func listSprints(ctx context.Context, db *sql.DB, workstreamFilter string) ([]sp
 	if err != nil {
 		return nil, fmt.Errorf("list sprints: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []sprintRow{}
 	for rows.Next() {
 		sp, err := scanSprint(rows)
@@ -412,7 +412,7 @@ func queryAgents(ctx context.Context, db *sql.DB, query string, args ...any) ([]
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []agentRow{}
 	for rows.Next() {
 		a, err := scanAgent(rows)

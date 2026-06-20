@@ -19,7 +19,7 @@ func TestWorktree(t *testing.T) {
 
 	t.Run("git", func(t *testing.T) {
 		repo := t.TempDir()
-		initGitRepo(t, ctx, repo)
+		initGitRepo(ctx, t, repo)
 
 		dest := filepath.Join(t.TempDir(), "wt")
 		got, err := Add(ctx, repo, dest, "feat-x")
@@ -30,9 +30,9 @@ func TestWorktree(t *testing.T) {
 			t.Fatalf("worktree dir %s: %v", got, err)
 		}
 
-		real := evalSymlinks(t, got)
-		listed := mustRun(t, ctx, repo, "git", "worktree", "list", "--porcelain")
-		if !strings.Contains(listed, real) && !strings.Contains(listed, got) {
+		realPath := evalSymlinks(t, got)
+		listed := mustRun(ctx, t, repo, "git", "worktree", "list", "--porcelain")
+		if !strings.Contains(listed, realPath) && !strings.Contains(listed, got) {
 			t.Fatalf("worktree %s not listed:\n%s", got, listed)
 		}
 		if !strings.Contains(listed, "refs/heads/feat-x") {
@@ -45,8 +45,8 @@ func TestWorktree(t *testing.T) {
 		if _, err := os.Stat(got); !os.IsNotExist(err) {
 			t.Fatalf("worktree dir present after Remove: stat err = %v", err)
 		}
-		listed = mustRun(t, ctx, repo, "git", "worktree", "list", "--porcelain")
-		if strings.Contains(listed, real) || strings.Contains(listed, got) {
+		listed = mustRun(ctx, t, repo, "git", "worktree", "list", "--porcelain")
+		if strings.Contains(listed, realPath) || strings.Contains(listed, got) {
 			t.Fatalf("worktree still listed after Remove:\n%s", listed)
 		}
 	})
@@ -56,8 +56,8 @@ func TestWorktree(t *testing.T) {
 			t.Skip("jj not installed")
 		}
 		repo := t.TempDir()
-		initGitRepo(t, ctx, repo)
-		mustRun(t, ctx, repo, "jj", "git", "init", "--colocate")
+		initGitRepo(ctx, t, repo)
+		mustRun(ctx, t, repo, "jj", "git", "init", "--colocate")
 		if !UsesJJ(repo) {
 			t.Fatalf("UsesJJ(%s) = false after --colocate", repo)
 		}
@@ -91,8 +91,8 @@ func TestCurrentBranch(t *testing.T) {
 
 	t.Run("reports the checked-out branch", func(t *testing.T) {
 		repo := t.TempDir()
-		initGitRepo(t, ctx, repo)
-		mustRun(t, ctx, repo, "git", "checkout", "-b", "feature/x")
+		initGitRepo(ctx, t, repo)
+		mustRun(ctx, t, repo, "git", "checkout", "-b", "feature/x")
 		got, err := CurrentBranch(ctx, repo)
 		if err != nil {
 			t.Fatalf("CurrentBranch: %v", err)
@@ -106,7 +106,7 @@ func TestCurrentBranch(t *testing.T) {
 		// A freshly initialized repo with no commits: rev-parse --abbrev-ref HEAD
 		// would fail here, but symbolic-ref resolves the unborn branch.
 		repo := t.TempDir()
-		mustRun(t, ctx, repo, "git", "init", "-b", "main")
+		mustRun(ctx, t, repo, "git", "init", "-b", "main")
 		got, err := CurrentBranch(ctx, repo)
 		if err != nil {
 			t.Fatalf("CurrentBranch on unborn HEAD: %v", err)
@@ -123,21 +123,21 @@ func TestCurrentBranch(t *testing.T) {
 	})
 }
 
-func initGitRepo(t *testing.T, ctx context.Context, dir string) {
+func initGitRepo(ctx context.Context, t *testing.T, dir string) {
 	t.Helper()
-	mustRun(t, ctx, dir, "git", "init")
-	mustRun(t, ctx, dir, "git", "config", "user.email", "test@example.com")
-	mustRun(t, ctx, dir, "git", "config", "user.name", "cc-orchestrate test")
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi\n"), 0o644); err != nil {
+	mustRun(ctx, t, dir, "git", "init")
+	mustRun(ctx, t, dir, "git", "config", "user.email", "test@example.com")
+	mustRun(ctx, t, dir, "git", "config", "user.name", "cc-orchestrate test")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	mustRun(t, ctx, dir, "git", "add", "README.md")
-	mustRun(t, ctx, dir, "git", "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", "init")
+	mustRun(ctx, t, dir, "git", "add", "README.md")
+	mustRun(ctx, t, dir, "git", "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", "init")
 }
 
-func mustRun(t *testing.T, ctx context.Context, dir, name string, args ...string) string {
+func mustRun(ctx context.Context, t *testing.T, dir, name string, args ...string) string {
 	t.Helper()
-	c := exec.CommandContext(ctx, name, args...)
+	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: test helper runs git/jj with fixed args in a temp repo
 	c.Dir = dir
 	out, err := c.CombinedOutput()
 	if err != nil {

@@ -69,7 +69,7 @@ func cmuxLaunchScript(command []string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cmux: create launch script: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	script := "rm -f -- \"$0\"\n" + strings.Join(quoted, " ") + "\n"
 	if _, err := f.WriteString(script); err != nil {
 		return "", fmt.Errorf("cmux: write launch script %s: %w", f.Name(), err)
@@ -80,12 +80,12 @@ func cmuxLaunchScript(command []string) (string, error) {
 	return "bash " + ShellQuote(f.Name()) + `\n`, nil
 }
 
-func (b cmux) Name() BackendName { return cmuxName }
+func (b cmux) Name() Name { return cmuxName }
 
 func (b cmux) Available() bool { return installed(cmuxBin) }
 
 // EnsureReady is a no-op: the cmux socket daemon auto-starts on first command.
-func (b cmux) EnsureReady(ctx context.Context) error { return nil }
+func (b cmux) EnsureReady(_ context.Context) error { return nil }
 
 func (b cmux) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error) {
 	out, err := b.run(ctx, cmuxBin, "new-workspace", "--cwd", spec.Cwd, "--name", spec.Name)

@@ -9,7 +9,7 @@ import (
 
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput() //nolint:gosec // G204: test helper runs git with fixed args in a temp repo
 	if err != nil {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}

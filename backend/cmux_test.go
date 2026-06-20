@@ -25,7 +25,7 @@ type cmuxFakeRunner struct {
 	outputs [][]byte
 }
 
-func (f *cmuxFakeRunner) run(ctx context.Context, name string, args ...string) ([]byte, error) {
+func (f *cmuxFakeRunner) run(_ context.Context, name string, args ...string) ([]byte, error) {
 	out := f.outputs[len(f.calls)]
 	f.calls = append(f.calls, cmuxCall{name: name, args: args})
 	return out, nil
@@ -184,7 +184,7 @@ func TestCmuxSpawn(t *testing.T) {
 	work := t.TempDir()
 	// Stand-in for claude: record each argv element NUL-separated beside itself.
 	recorder := filepath.Join(work, "recorder.sh")
-	if err := os.WriteFile(recorder, []byte("#!/bin/bash\nprintf '%s\\0' \"$@\" > \"$(dirname \"$0\")/got.bin\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(recorder, []byte("#!/bin/bash\nprintf '%s\\0' \"$@\" > \"$(dirname \"$0\")/got.bin\"\n"), 0o755); err != nil { //nolint:gosec // G306: test recorder script must be executable
 		t.Fatal(err)
 	}
 	// If any of these markers were interpreted by a shell, the named file appears.
@@ -245,8 +245,8 @@ func TestCmuxSpawn(t *testing.T) {
 	}
 
 	path := strings.TrimSuffix(strings.TrimPrefix(sent, "bash "), `\n`)
-	t.Cleanup(func() { os.Remove(path) })
-	script, err := os.ReadFile(path)
+	t.Cleanup(func() { _ = os.Remove(path) })
+	script, err := os.ReadFile(path) //nolint:gosec // G304: test reads the temp launch script it just generated
 	if err != nil {
 		t.Fatalf("launch script: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestCmuxSpawn(t *testing.T) {
 
 	// Drive bash exactly as the pane shell would: type only the path. The argv
 	// must reach the recorder intact and nothing must be interpreted as a shell.
-	if out, err := exec.CommandContext(context.Background(), "bash", path).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(context.Background(), "bash", path).CombinedOutput(); err != nil { //nolint:gosec // G204: test runs bash on the temp launch script it just generated
 		t.Fatalf("bash launch script: %v: %s", err, out)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -271,7 +271,7 @@ func TestCmuxSpawn(t *testing.T) {
 			t.Errorf("injection executed: %s exists", marker)
 		}
 	}
-	raw, err := os.ReadFile(filepath.Join(work, "got.bin"))
+	raw, err := os.ReadFile(filepath.Join(work, "got.bin")) //nolint:gosec // G304: test reads a file under its own temp dir
 	if err != nil {
 		t.Fatalf("recorder output: %v", err)
 	}

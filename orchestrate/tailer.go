@@ -81,7 +81,7 @@ func findTranscript(sessionID string) (string, bool, error) {
 // duplicate audit frames on every daemon restart. onStatus carries that same live
 // flag: false while replaying history, true once the first read has caught up, so a
 // consumer can tell a genuinely-new status from a replayed one.
-func runTailer(ctx context.Context, sessionID, scope string, interval time.Duration, onStatus func(Status, bool) error, onInbound func(string) error) error {
+func runTailer(ctx context.Context, sessionID, _ string, interval time.Duration, onStatus func(Status, bool) error, onInbound func(string) error) error {
 	path, ok, err := waitForTranscript(ctx, sessionID, interval)
 	if err != nil {
 		return err
@@ -154,11 +154,11 @@ func waitForTranscript(ctx context.Context, sessionID string, interval time.Dura
 // readAppended returns the bytes written past offset and the new end offset,
 // leaving any trailing partial line for the caller to buffer.
 func readAppended(path string, offset int64) ([]byte, int64, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: path is the session's own transcript resolved under the claude config dir, not user input
 	if err != nil {
 		return nil, offset, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return nil, offset, err
 	}

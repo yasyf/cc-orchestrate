@@ -151,7 +151,7 @@ func resolveScreen(ctx context.Context, db *sql.DB, ag agentRow) (promptScreen, 
 	if !ok {
 		return nil, fmt.Errorf("unknown backend %q", ag.Backend)
 	}
-	if cap, isCap := b.(backend.Capturer); isCap && b.Caps().Has(backend.CanCapture) {
+	if capturer, isCap := b.(backend.Capturer); isCap && b.Caps().Has(backend.CanCapture) {
 		snd, isSnd := b.(backend.Sender)
 		if !isSnd {
 			return nil, fmt.Errorf("backend %q captures but cannot send", ag.Backend)
@@ -160,7 +160,7 @@ func resolveScreen(ctx context.Context, db *sql.DB, ag agentRow) (promptScreen, 
 		if err != nil {
 			return nil, err
 		}
-		return nativeScreen{cap: cap, snd: snd, handle: handle}, nil
+		return nativeScreen{cap: capturer, snd: snd, handle: handle}, nil
 	}
 	return ptyScreen{client: ptyhost.Dial(ptySocketPath(ag.SessionID))}, nil
 }

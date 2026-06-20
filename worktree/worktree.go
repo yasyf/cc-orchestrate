@@ -92,7 +92,7 @@ func resolveDest(repoRoot, dest string) (string, error) {
 // exit with label and the captured stderr so the failure carries git's or jj's
 // own diagnostic.
 func run(ctx context.Context, dir, label, name string, args ...string) ([]byte, error) {
-	c := exec.CommandContext(ctx, name, args...)
+	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: runs git/jj with internally-built args by design
 	c.Dir = dir
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr

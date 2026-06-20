@@ -85,7 +85,7 @@ func serializeCmd() *cobra.Command {
 			if err := json.Unmarshal(reply.Body, &res); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "serialized %d agent(s) to %s\n", res.Count, res.Path)
+			_, _ = fmt.Fprintf(c.OutOrStdout(), "serialized %d agent(s) to %s\n", res.Count, res.Path)
 			return nil
 		},
 	}
@@ -111,7 +111,7 @@ func restoreCmd() *cobra.Command {
 			if err := json.Unmarshal(reply.Body, &res); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "restored %d agent(s) from %s\n", res.Count, args[0])
+			_, _ = fmt.Fprintf(c.OutOrStdout(), "restored %d agent(s) from %s\n", res.Count, args[0])
 			return nil
 		},
 	}
@@ -142,10 +142,10 @@ func configCmd() *cobra.Command {
 				return err
 			}
 			if !out.Found {
-				fmt.Fprintf(c.OutOrStdout(), "%s: not set\n", args[0])
+				_, _ = fmt.Fprintf(c.OutOrStdout(), "%s: not set\n", args[0])
 				return nil
 			}
-			fmt.Fprintln(c.OutOrStdout(), out.Value)
+			_, _ = fmt.Fprintln(c.OutOrStdout(), out.Value)
 			return nil
 		},
 	}
@@ -200,11 +200,11 @@ func runOp(c *cobra.Command, op daemon.Op, body any) (daemon.Reply, error) {
 func renderTable(header []string, rows [][]string) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, strings.Join(header, "\t"))
+	_, _ = fmt.Fprintln(w, strings.Join(header, "\t"))
 	for _, r := range rows {
-		fmt.Fprintln(w, strings.Join(r, "\t"))
+		_, _ = fmt.Fprintln(w, strings.Join(r, "\t"))
 	}
-	w.Flush()
+	_ = w.Flush()
 
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 	for i, line := range lines {
@@ -229,7 +229,7 @@ func backendsCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				fmt.Fprint(c.OutOrStdout(), table)
+				_, _ = fmt.Fprint(c.OutOrStdout(), table)
 				return nil
 			},
 		},
@@ -247,13 +247,13 @@ func backendsCmd() *cobra.Command {
 // backend, then persists it as the selected default through the config-set op.
 func runBackendsSelect(c *cobra.Command, args []string) error {
 	name := args[0]
-	if err := backend.ValidateBackend(backend.BackendName(name)); err != nil {
+	if err := backend.ValidateBackend(backend.Name(name)); err != nil {
 		return fmt.Errorf("%w; run `%s backends list`", err, AppName)
 	}
 	if _, err := runOp(c, opConfigSet, map[string]string{"key": "backend", "value": name}); err != nil {
 		return err
 	}
-	fmt.Fprintf(c.OutOrStdout(), "selected backend: %s\n", name)
+	_, _ = fmt.Fprintf(c.OutOrStdout(), "selected backend: %s\n", name)
 	return nil
 }
 
@@ -261,7 +261,7 @@ func runBackendsSelect(c *cobra.Command, args []string) error {
 // without spawning the daemon. It returns "" when no state db exists yet or no
 // backend is selected, and a wrapped error when the db cannot be opened or read —
 // so a corrupt or locked db is surfaced rather than silently read as unset.
-func selectedBackend() (backend.BackendName, error) {
+func selectedBackend() (backend.Name, error) {
 	dbPath := appPaths().DBPath()
 	if _, err := os.Stat(dbPath); err != nil {
 		if os.IsNotExist(err) {
@@ -273,7 +273,7 @@ func selectedBackend() (backend.BackendName, error) {
 	if err != nil {
 		return "", fmt.Errorf("open state db: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var value string
 	switch err := db.QueryRow(`SELECT value FROM config WHERE key = 'backend'`).Scan(&value); {
 	case errors.Is(err, sql.ErrNoRows):
@@ -281,14 +281,14 @@ func selectedBackend() (backend.BackendName, error) {
 	case err != nil:
 		return "", fmt.Errorf("read selected backend: %w", err)
 	}
-	return backend.BackendName(value), nil
+	return backend.Name(value), nil
 }
 
 // backendRow is one line of `backends list`: a backend name, whether its runtime
 // is installed, and whether it is the effective default (the persisted selection,
 // or the first available one when none is selected).
 type backendRow struct {
-	name      backend.BackendName
+	name      backend.Name
 	available bool
 	isDefault bool
 }
@@ -367,7 +367,7 @@ func repoCmd() *cobra.Command {
 			for i, p := range views {
 				rows[i] = []string{p.ID, p.Name, p.Backend, p.Status, p.Cwd}
 			}
-			fmt.Fprint(c.OutOrStdout(), renderTable([]string{"ID", "NAME", "BACKEND", "STATUS", "CWD"}, rows))
+			_, _ = fmt.Fprint(c.OutOrStdout(), renderTable([]string{"ID", "NAME", "BACKEND", "STATUS", "CWD"}, rows))
 			return nil
 		},
 	}
@@ -393,9 +393,9 @@ func repoCmd() *cobra.Command {
 				return err
 			}
 			w := c.OutOrStdout()
-			fmt.Fprintf(w, "repo:      %s\n", out.RepoID)
-			fmt.Fprintf(w, "backend:   %s\n", out.Backend)
-			fmt.Fprintf(w, "workspace: %s\n", out.Workspace)
+			_, _ = fmt.Fprintf(w, "repo:      %s\n", out.RepoID)
+			_, _ = fmt.Fprintf(w, "backend:   %s\n", out.Backend)
+			_, _ = fmt.Fprintf(w, "workspace: %s\n", out.Workspace)
 			return nil
 		},
 	}
@@ -417,7 +417,7 @@ func repoCmd() *cobra.Command {
 			if err := json.Unmarshal(reply.Body, &out); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "activated repo: %s\n", out.RepoID)
+			_, _ = fmt.Fprintf(c.OutOrStdout(), "activated repo: %s\n", out.RepoID)
 			return nil
 		},
 	}
@@ -430,7 +430,7 @@ func repoCmd() *cobra.Command {
 			if _, err := runOp(c, opRepoKill, map[string]string{"id": args[0]}); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "killed repo: %s\n", args[0])
+			_, _ = fmt.Fprintf(c.OutOrStdout(), "killed repo: %s\n", args[0])
 			return nil
 		},
 	}
@@ -470,7 +470,7 @@ func workstreamCmd() *cobra.Command {
 				}
 				rows[i] = []string{w.ID, w.Name, w.RepoID, w.Branch, w.Worktree, primary, w.Status}
 			}
-			fmt.Fprint(c.OutOrStdout(), renderTable(
+			_, _ = fmt.Fprint(c.OutOrStdout(), renderTable(
 				[]string{"ID", "NAME", "REPO", "BRANCH", "WORKTREE", "PRIMARY", "STATUS"}, rows))
 			return nil
 		},
@@ -500,11 +500,11 @@ func workstreamCmd() *cobra.Command {
 				return err
 			}
 			w := c.OutOrStdout()
-			fmt.Fprintf(w, "workstream: %s\n", out.WorkstreamID)
-			fmt.Fprintf(w, "repo:       %s\n", out.RepoID)
-			fmt.Fprintf(w, "branch:     %s\n", out.Branch)
-			fmt.Fprintf(w, "worktree:   %s\n", out.Worktree)
-			fmt.Fprintf(w, "workspace:  %s\n", out.Workspace)
+			_, _ = fmt.Fprintf(w, "workstream: %s\n", out.WorkstreamID)
+			_, _ = fmt.Fprintf(w, "repo:       %s\n", out.RepoID)
+			_, _ = fmt.Fprintf(w, "branch:     %s\n", out.Branch)
+			_, _ = fmt.Fprintf(w, "worktree:   %s\n", out.Worktree)
+			_, _ = fmt.Fprintf(w, "workspace:  %s\n", out.Workspace)
 			return nil
 		},
 	}
@@ -527,7 +527,7 @@ func workstreamCmd() *cobra.Command {
 			if err := json.Unmarshal(reply.Body, &out); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "activated workstream: %s\n", out.WorkstreamID)
+			_, _ = fmt.Fprintf(c.OutOrStdout(), "activated workstream: %s\n", out.WorkstreamID)
 			return nil
 		},
 	}
@@ -542,7 +542,7 @@ func workstreamCmd() *cobra.Command {
 			if _, err := runOp(c, opWorkstreamKill, map[string]string{"id": args[0], "repo": killRepo}); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "killed workstream: %s\n", args[0])
+			_, _ = fmt.Fprintf(c.OutOrStdout(), "killed workstream: %s\n", args[0])
 			return nil
 		},
 	}
@@ -578,7 +578,7 @@ func sprintCmd() *cobra.Command {
 			for i, s := range views {
 				rows[i] = []string{s.ID, s.Name, s.WorkstreamID, s.Status}
 			}
-			fmt.Fprint(c.OutOrStdout(), renderTable(
+			_, _ = fmt.Fprint(c.OutOrStdout(), renderTable(
 				[]string{"ID", "NAME", "WORKSTREAM", "STATUS"}, rows))
 			return nil
 		},
@@ -606,9 +606,9 @@ func sprintCmd() *cobra.Command {
 				return err
 			}
 			w := c.OutOrStdout()
-			fmt.Fprintf(w, "sprint:     %s\n", out.SprintID)
-			fmt.Fprintf(w, "workstream: %s\n", out.WorkstreamID)
-			fmt.Fprintf(w, "name:       %s\n", out.Name)
+			_, _ = fmt.Fprintf(w, "sprint:     %s\n", out.SprintID)
+			_, _ = fmt.Fprintf(w, "workstream: %s\n", out.WorkstreamID)
+			_, _ = fmt.Fprintf(w, "name:       %s\n", out.Name)
 			return nil
 		},
 	}
@@ -630,7 +630,7 @@ func sprintCmd() *cobra.Command {
 			if err := json.Unmarshal(reply.Body, &out); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "activated sprint: %s\n", out.SprintID)
+			_, _ = fmt.Fprintf(c.OutOrStdout(), "activated sprint: %s\n", out.SprintID)
 			return nil
 		},
 	}
@@ -669,9 +669,9 @@ func agentCmd() *cobra.Command {
 				return err
 			}
 			w := c.OutOrStdout()
-			fmt.Fprintf(w, "agent:    %s\n", out.AgentID)
-			fmt.Fprintf(w, "backend:  %s\n", out.Backend)
-			fmt.Fprintf(w, "terminal: %s\n", out.Terminal)
+			_, _ = fmt.Fprintf(w, "agent:    %s\n", out.AgentID)
+			_, _ = fmt.Fprintf(w, "backend:  %s\n", out.Backend)
+			_, _ = fmt.Fprintf(w, "terminal: %s\n", out.Terminal)
 			return nil
 		},
 	}
@@ -700,7 +700,7 @@ func agentCmd() *cobra.Command {
 			for i, a := range views {
 				rows[i] = []string{a.ID, a.Name, a.SprintID, a.Backend, a.State, a.Status, strconv.Itoa(a.Tokens), strconv.Itoa(a.RestartCount), a.Activity}
 			}
-			fmt.Fprint(c.OutOrStdout(), renderTable(
+			_, _ = fmt.Fprint(c.OutOrStdout(), renderTable(
 				[]string{"ID", "NAME", "SPRINT", "BACKEND", "STATE", "STATUS", "TOKENS", "RESTARTS", "ACTIVITY"}, rows))
 			return nil
 		},
@@ -724,9 +724,9 @@ func agentCmd() *cobra.Command {
 				return err
 			}
 			if out.Transport == "native" {
-				fmt.Fprintf(c.OutOrStdout(), "sent to %s (native)\n", args[0])
+				_, _ = fmt.Fprintf(c.OutOrStdout(), "sent to %s (native)\n", args[0])
 			} else {
-				fmt.Fprintf(c.OutOrStdout(), "sent to %s (seq %d)\n", args[0], out.Seq)
+				_, _ = fmt.Fprintf(c.OutOrStdout(), "sent to %s (seq %d)\n", args[0], out.Seq)
 			}
 			return nil
 		},
@@ -746,14 +746,14 @@ func agentCmd() *cobra.Command {
 				return err
 			}
 			w := c.OutOrStdout()
-			fmt.Fprintf(w, "agent:    %s\n", a.ID)
-			fmt.Fprintf(w, "name:     %s\n", a.Name)
-			fmt.Fprintf(w, "status:   %s\n", a.Status)
-			fmt.Fprintf(w, "state:    %s\n", a.State)
-			fmt.Fprintf(w, "activity: %s\n", a.Activity)
-			fmt.Fprintf(w, "tokens:   %d\n", a.Tokens)
-			fmt.Fprintf(w, "restart:  %d\n", a.RestartCount)
-			fmt.Fprintf(w, "updated:  %s\n", a.UpdatedAt)
+			_, _ = fmt.Fprintf(w, "agent:    %s\n", a.ID)
+			_, _ = fmt.Fprintf(w, "name:     %s\n", a.Name)
+			_, _ = fmt.Fprintf(w, "status:   %s\n", a.Status)
+			_, _ = fmt.Fprintf(w, "state:    %s\n", a.State)
+			_, _ = fmt.Fprintf(w, "activity: %s\n", a.Activity)
+			_, _ = fmt.Fprintf(w, "tokens:   %d\n", a.Tokens)
+			_, _ = fmt.Fprintf(w, "restart:  %d\n", a.RestartCount)
+			_, _ = fmt.Fprintf(w, "updated:  %s\n", a.UpdatedAt)
 			return nil
 		},
 	}
@@ -779,7 +779,7 @@ func agentCmd() *cobra.Command {
 			if _, err := runOp(c, opAgentKill, map[string]string{"agent_id": args[0]}); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.OutOrStdout(), "killed agent: %s\n", args[0])
+			_, _ = fmt.Fprintf(c.OutOrStdout(), "killed agent: %s\n", args[0])
 			return nil
 		},
 	}

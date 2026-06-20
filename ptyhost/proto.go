@@ -3,7 +3,7 @@ package ptyhost
 // The control socket speaks one JSON request and one JSON response per connection.
 const (
 	opCapture = "capture" // reply with the rendered screen text
-	opKeys    = "keys"     // write Data to the child PTY, reply empty
+	opKeys    = "keys"    // write Data to the child PTY, reply empty
 )
 
 // request is one control-socket call.

@@ -28,13 +28,13 @@ type zellij struct{ run runner }
 
 func init() { Register(zellij{run: execRunner}) }
 
-func (b zellij) Name() BackendName { return zellijName }
+func (b zellij) Name() Name { return zellijName }
 
 func (b zellij) Available() bool { return installed(zellijBin) }
 
 func (b zellij) Caps() Caps { return Capabilities(CanSendText, CanCapture, CanEnumerate) }
 
-func (b zellij) EnsureReady(ctx context.Context) error { return nil }
+func (b zellij) EnsureReady(_ context.Context) error { return nil }
 
 func (b zellij) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error) {
 	session := sanitizeSession(spec.Name)

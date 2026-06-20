@@ -14,7 +14,7 @@ type tmuxRecorder struct {
 	err   error
 }
 
-func (r *tmuxRecorder) run(ctx context.Context, name string, args ...string) ([]byte, error) {
+func (r *tmuxRecorder) run(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, append([]string{name}, args...))
 	return []byte(r.out), r.err
 }

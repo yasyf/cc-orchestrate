@@ -521,15 +521,15 @@ func pathComponent(name string) string {
 // resolveBackend picks the backend for a repo: the explicit name, else the
 // persisted selection, else the first available one. It errors when an explicit
 // or selected backend is unknown, or when none is available.
-func resolveBackend(hc daemon.HandlerCtx, explicit string) (backend.Backend, backend.BackendName, error) {
-	name := backend.BackendName(explicit)
+func resolveBackend(hc daemon.HandlerCtx, explicit string) (backend.Backend, backend.Name, error) {
+	name := backend.Name(explicit)
 	if name == "" {
 		value, found, err := getConfig(hc.Ctx, hc.DB, configBackend)
 		if err != nil {
 			return nil, "", err
 		}
 		if found {
-			name = backend.BackendName(value)
+			name = backend.Name(value)
 		}
 	}
 	if name != "" {

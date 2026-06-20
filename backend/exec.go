@@ -15,7 +15,7 @@ type runner func(ctx context.Context, name string, args ...string) ([]byte, erro
 // execRunner runs name with args and returns stdout, wrapping a non-zero exit
 // with the captured stderr so the failure carries the backend's own diagnostic.
 func execRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
-	c := exec.CommandContext(ctx, name, args...)
+	c := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: orchestrator invokes backend CLIs (tmux/cmux/...) by design
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
 	if err := c.Run(); err != nil {

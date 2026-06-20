@@ -65,12 +65,12 @@ func decodeHerd[T any](b []byte) (T, error) {
 	return env.Result, nil
 }
 
-func (b herd) Name() BackendName { return herdName }
+func (b herd) Name() Name { return herdName }
 
 func (b herd) Available() bool { return installed(herdBin) }
 
 // EnsureReady is a no-op: the herdr server auto-starts on first command.
-func (b herd) EnsureReady(ctx context.Context) error { return nil }
+func (b herd) EnsureReady(_ context.Context) error { return nil }
 
 func (b herd) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error) {
 	out, err := b.run(ctx, herdBin, "workspace", "create", "--cwd", spec.Cwd, "--label", spec.Name)

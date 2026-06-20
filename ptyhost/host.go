@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -34,7 +35,7 @@ func Run(ctx context.Context, opts Options) error {
 	defer cancel()
 
 	ws := ttySize()
-	cmd := exec.CommandContext(ctx, opts.Argv[0], opts.Argv[1:]...)
+	cmd := exec.CommandContext(ctx, opts.Argv[0], opts.Argv[1:]...) //nolint:gosec // G204: pty-host runs the caller-specified child command by design
 	ptmx, err := pty.StartWithSize(cmd, ws)
 	if err != nil {
 		return fmt.Errorf("pty-host start %s: %w", opts.Argv[0], err)
@@ -99,11 +100,23 @@ func (w gridWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// clampUint16 maps a terminal dimension into uint16 range, guarding the int->uint16
+// narrowing against a negative or absurdly large value rather than wrapping it.
+func clampUint16(n int) uint16 {
+	if n < 0 {
+		return 0
+	}
+	if n > math.MaxUint16 {
+		return math.MaxUint16
+	}
+	return uint16(n)
+}
+
 // ttySize returns the controlling terminal's size, or a sane default when stdin is
 // not a terminal (e.g. under a test harness).
 func ttySize() *pty.Winsize {
 	if rows, cols, err := pty.Getsize(os.Stdin); err == nil && rows > 0 && cols > 0 {
-		return &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)}
+		return &pty.Winsize{Rows: clampUint16(rows), Cols: clampUint16(cols)}
 	}
 	return &pty.Winsize{Rows: 24, Cols: 80}
 }
@@ -140,7 +153,7 @@ func (s *ptyServer) accept(g grid, child io.Writer) {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			handleConn(conn, g, child)
 		}()
 	}

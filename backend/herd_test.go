@@ -30,7 +30,7 @@ type herdRecordedCall struct {
 }
 
 func recordingRunner(out string, rec *herdRecordedCall) runner {
-	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return func(_ context.Context, name string, args ...string) ([]byte, error) {
 		rec.name = name
 		rec.args = args
 		return []byte(out), nil
@@ -213,7 +213,7 @@ func TestHerdMetadata(t *testing.T) {
 }
 
 func TestHerdEnsureReadyDoesNotInvokeCLI(t *testing.T) {
-	b := herd{run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	b := herd{run: func(_ context.Context, name string, args ...string) ([]byte, error) {
 		t.Fatalf("EnsureReady must not invoke the CLI, got %s %v", name, args)
 		return nil, nil
 	}}
