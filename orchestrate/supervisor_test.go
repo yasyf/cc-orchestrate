@@ -3,6 +3,7 @@ package orchestrate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -60,13 +61,32 @@ func (b superviseBackend) Kill(_ context.Context, agent backend.AgentHandle) err
 	}
 	return nil
 }
+
 func (superviseBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error { return nil }
-func (superviseBackend) Capture(context.Context, backend.AgentHandle) (string, error)   { return "", nil }
+
+func (superviseBackend) Capture(context.Context, backend.AgentHandle) (string, error) { return "", nil }
+
 func (b superviseBackend) Caps() backend.Caps {
 	if b.enumerate {
 		return backend.Capabilities(backend.CanEnumerate, backend.CanCapture)
 	}
 	return backend.Capabilities(backend.CanCapture)
+}
+
+// probeBackend is superviseBackend plus AgentProber, exercising the transcript-
+// staleness path: AgentAlive returns aliveResp, or errors when probeErr, so a test can
+// drive a confirmed-dead, still-alive, or unresolvable process.
+type probeBackend struct {
+	superviseBackend
+	aliveResp bool
+	probeErr  bool
+}
+
+func (b probeBackend) AgentAlive(context.Context, backend.AgentHandle) (bool, error) {
+	if b.probeErr {
+		return false, errors.New("probe failed")
+	}
+	return b.aliveResp, nil
 }
 
 // eventLog collects appended events under a mutex so the supervisor's writes and the
@@ -603,6 +623,135 @@ func TestSupervisorCrashLoopAbandonsAtBudget(t *testing.T) {
 	}
 	if log.count(EventAbandoned) != 1 || log.count(EventExited) != 1 {
 		t.Fatalf("crash loop must abandon then exit exactly once; events=%v", log.types())
+	}
+}
+
+// TestSupervisorStaleness drives the #2 path: an agent whose terminal is still
+// enumerated (so the vanished-handle diff skips it) but whose transcript has gone stale.
+// The supervisor probes the backend, and resumes only when the process is confirmed dead
+// — killing the surviving terminal first. A live, unresolvable, or freshly spawned agent
+// is left untouched, which is the guard against resuming an idle or rate-limited agent.
+func TestSupervisorStaleness(t *testing.T) {
+	old := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+
+	writeStaleTranscript := func(t *testing.T, home string) {
+		t.Helper()
+		dir := filepath.Join(home, ".claude", "projects", "p")
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "sess-stale.jsonl")
+		if err := os.WriteFile(path, []byte(lineText+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Backdate the mtime well past stalenessBound so transcriptStale fires without sleeping.
+		past := time.Now().Add(-time.Hour)
+		if err := os.Chtimes(path, past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	type fixture struct {
+		ctx    context.Context
+		db     *sql.DB
+		log    *eventLog
+		mu     *sync.Mutex
+		spawns *int
+		killed *[]string
+	}
+	newStaleAgent := func(t *testing.T, aliveResp, probeErr bool, createdAt string) fixture {
+		t.Helper()
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("CLAUDE_CONFIG_DIR", "")
+		writeStaleTranscript(t, home)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		tailers = newTailerManager(ctx)
+		db := newTestDB(ctx, t)
+
+		var mu sync.Mutex
+		spawns := 0
+		nextTerm := "term-2"
+		var killed []string
+		// term-1 is still enumerated, so the vanished-handle diff skips it and leaves the
+		// dead-but-listed pane to the staleness pass.
+		backend.Register(probeBackend{
+			superviseBackend: superviseBackend{
+				agents:    []backend.AgentHandle{{Backend: "supervisetest", ID: "term-1"}},
+				enumerate: true,
+				mu:        &mu, spawns: &spawns, nextTerm: &nextTerm, killed: &killed,
+			},
+			aliveResp: aliveResp,
+			probeErr:  probeErr,
+		})
+		seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+		mustInsertAgent(ctx, t, db, agentRow{
+			ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
+			SessionID: "sess-stale", Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
+			CreatedAt: createdAt,
+		})
+		return fixture{ctx: ctx, db: db, log: &eventLog{}, mu: &mu, spawns: &spawns, killed: &killed}
+	}
+
+	t.Run("dead process resumes, killing the survivor first", func(t *testing.T) {
+		f := newStaleAgent(t, false /*dead*/, false, "t0")
+		if err := newSupervisor().tick(f.ctx, f.db, f.log.append); err != nil {
+			t.Fatal(err)
+		}
+		assertAgentStatus(f.ctx, t, f.db, "a1", StatusActive)
+		assertRestartCount(f.ctx, t, f.db, "a1", 1)
+		assertTerminalHandle(f.ctx, t, f.db, "a1", "term-2")
+		if f.log.count(EventRestarted) != 1 {
+			t.Fatalf("EventRestarted = %d, want 1; events=%v", f.log.count(EventRestarted), f.log.types())
+		}
+		f.mu.Lock()
+		gotKilled := append([]string(nil), *f.killed...)
+		gotSpawns := *f.spawns
+		f.mu.Unlock()
+		if len(gotKilled) != 1 || gotKilled[0] != "term-1" {
+			t.Fatalf("killed = %v, want [term-1] (kill the surviving dead pane before respawning)", gotKilled)
+		}
+		if gotSpawns != 1 {
+			t.Fatalf("Spawn calls = %d, want 1", gotSpawns)
+		}
+	})
+
+	for _, tc := range []struct {
+		name      string
+		aliveResp bool
+		probeErr  bool
+		recent    bool
+	}{
+		{name: "live process is left running", aliveResp: true},
+		{name: "an unresolvable probe leaves it alone", probeErr: true},
+		{name: "a recently spawned agent is not probed", recent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			createdAt := "t0"
+			if tc.recent {
+				createdAt = nowStamp()
+			}
+			f := newStaleAgent(t, tc.aliveResp, tc.probeErr, createdAt)
+			if err := newSupervisor().tick(f.ctx, f.db, f.log.append); err != nil {
+				t.Fatal(err)
+			}
+			assertRestartCount(f.ctx, t, f.db, "a1", 0)
+			assertTerminalHandle(f.ctx, t, f.db, "a1", "term-1")
+			if len(f.log.types()) != 0 {
+				t.Fatalf("a stale-but-not-confirmed-dead agent must emit nothing; events=%v", f.log.types())
+			}
+			f.mu.Lock()
+			gotSpawns := *f.spawns
+			gotKilled := len(*f.killed)
+			f.mu.Unlock()
+			if gotSpawns != 0 || gotKilled != 0 {
+				t.Fatalf("must not kill/respawn; spawns=%d killed=%d", gotSpawns, gotKilled)
+			}
+		})
 	}
 }
 

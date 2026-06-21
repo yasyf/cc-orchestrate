@@ -93,7 +93,7 @@ const (
 )
 
 // Caps is the set of capabilities a backend supports. The zero value supports
-// nothing — the pure-LCD backend (superset).
+// nothing — a pure-LCD backend that rides the cc-interact event plane for everything.
 type Caps struct{ set Capability }
 
 // Capabilities builds a Caps advertising the given capabilities.
@@ -138,6 +138,18 @@ type Sender interface {
 // path its driver cannot take.
 type Capturer interface {
 	Capture(ctx context.Context, agent AgentHandle) (string, error)
+}
+
+// AgentProber is a Backend that can report whether a spawned agent's process is
+// still alive in its terminal — distinct from whether the terminal still exists. A
+// backend whose terminal can outlive its child (a tmux pane under remain-on-exit
+// lingers as a dead pane that ListAgents still reports) implements it so the
+// supervisor can corroborate a transcript-staleness death signal before resuming a
+// stale agent. Unlike Sender/Capturer it carries no Caps bit: it is a best-effort
+// corroboration, so a backend that cannot answer it simply opts out of
+// staleness-driven resume rather than promising a path it lacks.
+type AgentProber interface {
+	AgentAlive(ctx context.Context, agent AgentHandle) (bool, error)
 }
 
 // registry holds the registered backends keyed by Name. registryMu guards it: drivers

@@ -14,7 +14,11 @@ const (
 )
 
 // herd places workspaces and spawns agents through the herdr CLI, which emits a
-// JSON envelope {"id":...,"result":{...}} on every command.
+// JSON envelope {"id":...,"result":{...}} on every command. It implements no
+// AgentProber: herd destroys an agent's pane the instant the child exits (its pane type
+// has no remain-on-exit mode), so a dead agent is a vanished pane the supervisor's
+// ListAgents diff already catches — unlike tmux/zellij, whose terminals outlive a dead
+// child and so need the prober to corroborate a staleness signal.
 type herd struct{ run runner }
 
 func init() { Register(herd{run: execRunner}) }

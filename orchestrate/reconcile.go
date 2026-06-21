@@ -46,14 +46,14 @@ func reconcileWorkstreams(ctx context.Context, db *sql.DB, appendFn daemon.Appen
 
 // reconcileAgents routes every active agent whose backend terminal has vanished
 // through reconcileVanished — the shared decision site that re-spawns it under the
-// restart budget or terminally exits it — but only for backends that can enumerate
-// their agents (CanEnumerate). superset's ListAgents is empty by design, so an empty
-// result there is "no signal", never "all agents gone" — gating on the capability is
-// what protects the fleet from a full prune on boot. It reaches a workstream's agents
-// through the sprint join. It runs after reconcileWorkstreams, so a killed
-// workstream's agents are already exited and its rows are skipped. The keep-alive
-// supervisor calls the identical reconcileVanished branch on its ticks, so boot and
-// the supervisor share one actor per agent.
+// restart budget or terminally exits it — but only for backends that advertise
+// CanEnumerate. A non-enumerable backend's empty ListAgents would be "no signal",
+// never "all agents gone", so gating on the capability is what protects the fleet
+// from a full prune on boot. It reaches a workstream's agents through the sprint
+// join. It runs after reconcileWorkstreams, so a killed workstream's agents are
+// already exited and its rows are skipped. The keep-alive supervisor calls the
+// identical reconcileVanished branch on its ticks, so boot and the supervisor share
+// one actor per agent.
 func reconcileAgents(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc) error {
 	wss, err := listWorkstreams(ctx, db, "")
 	if err != nil {

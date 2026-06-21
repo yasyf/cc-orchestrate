@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log"
+	"os"
 	"time"
 
 	"github.com/yasyf/cc-interact/daemon"
@@ -24,11 +25,23 @@ const restartBudget = 3
 // constructing the supervisor.
 var supervisorInterval = 30 * time.Second
 
-// supervisor is the daemon-lifetime keep-alive sibling of boot reconcile: it polls
-// each enumerable backend on a ticker and re-spawns (under a budget) any StatusActive
-// agent whose terminal has vanished, routing through the same reconcileVanished
-// decision site reconcile uses so a vanished agent is never both pruned and
-// restarted.
+// stalenessBound is how long an agent's transcript may go unwritten before the
+// supervisor treats it as a death candidate and asks the backend to confirm the
+// process is gone. Corroboration (AgentProber) makes a false positive impossible, so
+// the bound only sets detection latency, not safety. It is a var so a test can
+// shorten it.
+var stalenessBound = 2 * time.Minute
+
+// startupGrace suppresses the staleness probe for an agent spawned or restarted
+// within this window, so a just-resumed agent whose transcript has not caught up yet
+// is never mistaken for a dead one. It is belt to confirmDead's suspenders.
+var startupGrace = 45 * time.Second
+
+// supervisor is the daemon-lifetime keep-alive sibling of boot reconcile: it polls on
+// a ticker and re-spawns (under a budget) any StatusActive agent whose terminal has
+// vanished (enumerable backends) or whose process the backend confirms dead under a
+// surviving terminal (AgentProber backends), routing through the reconcileVanished /
+// reconcileDeadChild decision sites so a dying agent is never both pruned and restarted.
 type supervisor struct {
 	interval time.Duration
 }
@@ -53,12 +66,16 @@ func (s *supervisor) run(ctx context.Context, db *sql.DB, appendFn daemon.Append
 	}
 }
 
-// tick enumerates each active workstream on an enumerable backend, diffs its live
-// agent set against the StatusActive rows by terminal handle (the identical shape
-// reconcileAgents uses), and routes every vanished active agent through
-// reconcileVanished. A backend it cannot resolve, or one that cannot enumerate
-// (superset), is skipped explicitly — an empty ListAgents there is "no signal",
-// never "all gone".
+// tick reconciles each active workstream's agents on two independent signals: for an
+// enumerable backend it diffs the live agent set against the StatusActive rows by
+// terminal handle and resumes any whose terminal has vanished (reconcileVanished); for
+// a backend that can probe process liveness (AgentProber) it resumes any agent whose
+// transcript has gone stale and whose process the backend confirms is gone
+// (reconcileDeadChild) — the remain-on-exit case a vanished-handle diff misses because
+// a dead pane is still enumerated. The diff runs first: a dead-but-listed pane stays in
+// the diff's live set, so the diff skips it and leaves it to the staleness pass, which
+// kills the survivor before resuming. A backend it cannot resolve, or one that neither
+// enumerates nor probes, is skipped.
 func (s *supervisor) tick(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc) error {
 	wss, err := listWorkstreams(ctx, db, "")
 	if err != nil {
@@ -69,25 +86,24 @@ func (s *supervisor) tick(ctx context.Context, db *sql.DB, appendFn daemon.Appen
 			continue
 		}
 		bk, ok := backend.Get(ws.Backend)
-		if !ok || !bk.Caps().Has(backend.CanEnumerate) {
+		if !ok {
 			continue
 		}
-		live, err := bk.ListAgents(ctx, backend.WorkstreamHandle{
-			Backend: ws.Backend, ID: ws.WorkspaceHandle, Name: ws.Name, Cwd: ws.Worktree,
-		})
-		if err != nil {
-			log.Printf("cc-orchestrate: supervisor skips agents of %s: list agents: %v", ws.ID, err)
+		prober, canProbe := bk.(backend.AgentProber)
+		if !bk.Caps().Has(backend.CanEnumerate) && !canProbe {
 			continue
 		}
 		agents, err := listWorkstreamAgents(ctx, db, ws.ID)
 		if err != nil {
 			return err
 		}
-		for _, ag := range agents {
-			if ag.Status != StatusActive || containsAgentHandle(live, ag.TerminalHandle) {
-				continue
+		if bk.Caps().Has(backend.CanEnumerate) {
+			if err := reconcileVanishedAgents(ctx, db, appendFn, ws, bk, agents); err != nil {
+				return err
 			}
-			if err := reconcileVanished(ctx, db, appendFn, ag); err != nil {
+		}
+		if canProbe {
+			if err := reconcileStaleAgents(ctx, db, appendFn, prober, agents); err != nil {
 				return err
 			}
 		}
@@ -95,16 +111,53 @@ func (s *supervisor) tick(ctx context.Context, db *sql.DB, appendFn daemon.Appen
 	return nil
 }
 
-// reconcileVanished is the single decision site for a StatusActive agent whose
-// backend terminal has vanished, shared by boot reconcile and the keep-alive
-// supervisor so a vanished agent is never both pruned and restarted. Under
-// restartBudget it re-spawns the agent (resume into a fresh terminal) and keeps the
-// row active; at or over budget it abandons the agent and terminally exits it.
-//
-// It holds agentLock(ag.ID) and re-reads the row under the lock before acting:
-// handleAgentKill and markSprintKilled take the same lock and flip the row to a
-// terminal status, so re-checking StatusActive under the lock means a concurrently
-// killed agent is never resurrected.
+// reconcileVanishedAgents diffs an enumerable backend's live agents against the
+// workstream's StatusActive rows by terminal handle and routes every vanished one
+// through reconcileVanished. A failed enumeration is "no signal" and skipped, never
+// "all gone".
+func reconcileVanishedAgents(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ws workstreamRow, bk backend.Backend, agents []agentRow) error {
+	live, err := bk.ListAgents(ctx, backend.WorkstreamHandle{
+		Backend: ws.Backend, ID: ws.WorkspaceHandle, Name: ws.Name, Cwd: ws.Worktree,
+	})
+	if err != nil {
+		log.Printf("cc-orchestrate: supervisor skips agents of %s: list agents: %v", ws.ID, err)
+		return nil
+	}
+	for _, ag := range agents {
+		if ag.Status != StatusActive || containsAgentHandle(live, ag.TerminalHandle) {
+			continue
+		}
+		if err := reconcileVanished(ctx, db, appendFn, ag); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reconcileStaleAgents resumes every active agent whose transcript has gone stale and
+// whose backend confirms the process is dead — the terminal-outlived-its-child case.
+// recentlySpawned skips a just-(re)spawned agent whose transcript has not caught up;
+// proberConfirmDead is the authoritative gate that keeps an idle or rate-limited agent
+// whose process is still alive from being resumed.
+func reconcileStaleAgents(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, prober backend.AgentProber, agents []agentRow) error {
+	for _, ag := range agents {
+		if ag.Status != StatusActive || recentlySpawned(ag) || !transcriptStale(ag) {
+			continue
+		}
+		if err := reconcileDeadChild(ctx, db, appendFn, ag, proberConfirmDead(db, prober)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reconcileVanished is the decision site for a StatusActive agent whose backend
+// terminal has vanished, shared by boot reconcile and the keep-alive supervisor so a
+// vanished agent is never both pruned and restarted. It holds agentLock(ag.ID) and
+// re-reads the row under the lock before acting: handleAgentKill and markSprintKilled
+// take the same lock and flip the row to a terminal status, so re-checking
+// StatusActive under the lock means a concurrently killed agent is never resurrected.
+// The terminal is already gone, so it does not kill before respawning.
 func reconcileVanished(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow) error {
 	mu := agentLock(ag.ID)
 	mu.Lock()
@@ -116,6 +169,47 @@ func reconcileVanished(ctx context.Context, db *sql.DB, appendFn daemon.AppendFu
 	if cur.Status != StatusActive {
 		return nil
 	}
+	return respawnUnderBudget(ctx, db, appendFn, cur, false)
+}
+
+// reconcileDeadChild is the supervisor's decision site for a StatusActive agent whose
+// terminal is still present but whose process the backend confirms is dead (a tmux
+// remain-on-exit pane outliving its claude). Like reconcileVanished it serializes on
+// agentLock and re-reads the row, then re-confirms death under the lock via confirmDead
+// — so a just-resumed agent whose fresh terminal probes alive is a no-op, defeating the
+// spawn/resume race — and kills the surviving dead terminal before resuming into a new one.
+func reconcileDeadChild(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow, confirmDead func(context.Context, agentRow) bool) error {
+	mu := agentLock(ag.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	cur, err := getAgent(ctx, db, ag.ID)
+	if err != nil {
+		return err
+	}
+	if cur.Status != StatusActive {
+		return nil
+	}
+	if !confirmDead(ctx, cur) {
+		return nil
+	}
+	return respawnUnderBudget(ctx, db, appendFn, cur, true)
+}
+
+// respawnUnderBudget re-spawns cur (resume into a fresh terminal) while it stays under
+// restartBudget and abandons it at or over budget. The caller holds agentLock and has
+// re-read cur as StatusActive. When killFirst is set the agent's terminal is still
+// present (a dead child under a surviving pane), so it is torn down before the new one
+// is spawned; reconcileVanished passes false because its terminal is already gone.
+//
+// It counts and persists the restart attempt BEFORE respawning, then mirrors it onto
+// the in-memory row, so respawnAgent's tailer snapshot carries the incremented
+// RestartCount. The reset hook is gated on a positive count, so on a first restart
+// (0->1) the tailer must observe 1, not the stale 0, for a healthy recovery to clear
+// the budget. Counting first also means a respawn that fails leaves the attempt
+// recorded, so a persistently-failing agent climbs toward budget and is eventually
+// abandoned rather than retried forever at a stuck count; the agentLock + re-read of
+// cur serialize ticks, so a single death detection counts exactly one attempt.
+func respawnUnderBudget(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, cur agentRow, killFirst bool) error {
 	if cur.RestartCount >= restartBudget {
 		if _, err := appendFn(ctx, &event.Event{
 			SubjectID: cur.SubjectID, Origin: event.OriginSystem, Type: EventAbandoned, Payload: abandonedPayload(cur),
@@ -124,14 +218,6 @@ func reconcileVanished(ctx context.Context, db *sql.DB, appendFn daemon.AppendFu
 		}
 		return softExitAgent(ctx, db, appendFn, cur)
 	}
-	// Count and persist the restart attempt BEFORE respawning, then mirror it onto the
-	// in-memory row, so respawnAgent's tailer snapshot carries the incremented
-	// RestartCount. The reset hook is gated on a positive count, so on a first restart
-	// (0->1) the tailer must observe 1, not the stale 0, for a healthy recovery to clear
-	// the budget. Counting first also means a respawn that fails leaves the attempt
-	// recorded, so a persistently-failing agent climbs toward budget and is eventually
-	// abandoned rather than retried forever at a stuck count; the agentLock + re-read of
-	// cur serialize ticks, so a single vanish detection counts exactly one attempt.
 	attempt := cur.RestartCount + 1
 	stamp := nowStamp()
 	if err := markRestartAttempt(ctx, db, cur.ID, attempt, stamp); err != nil {
@@ -139,6 +225,11 @@ func reconcileVanished(ctx context.Context, db *sql.DB, appendFn daemon.AppendFu
 	}
 	cur.RestartCount = attempt
 	cur.LastRestartAt = stamp
+	if killFirst {
+		if err := killAgentTerminal(ctx, db, cur); err != nil {
+			return err
+		}
+	}
 	handle, err := respawnAgent(ctx, db, appendFn, cur)
 	if err != nil {
 		return err
@@ -147,4 +238,55 @@ func reconcileVanished(ctx context.Context, db *sql.DB, appendFn daemon.AppendFu
 		SubjectID: cur.SubjectID, Origin: event.OriginSystem, Type: EventRestarted, Payload: restartedPayload(cur, handle.ID, attempt),
 	})
 	return err
+}
+
+// transcriptStale reports whether an agent's transcript file has gone unwritten past
+// stalenessBound — the cheap pre-filter that nominates a death candidate before the
+// authoritative process probe. A missing transcript (the agent has not written yet) is
+// not stale: it is "no signal", left to other paths.
+func transcriptStale(ag agentRow) bool {
+	path, ok, err := findTranscript(ag.SessionID)
+	if err != nil || !ok {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return time.Since(info.ModTime()) > stalenessBound
+}
+
+// recentlySpawned reports whether an agent was spawned or last restarted within
+// startupGrace, so the staleness pass can skip an agent whose resumed transcript has
+// not caught up yet. created_at and last_restart_at are RFC3339 UTC stamps, which sort
+// chronologically as strings, so the later of the two is the most recent (re)spawn.
+func recentlySpawned(ag agentRow) bool {
+	ref := ag.CreatedAt
+	if ag.LastRestartAt > ref {
+		ref = ag.LastRestartAt
+	}
+	t, err := time.Parse(time.RFC3339, ref)
+	if err != nil {
+		return false
+	}
+	return time.Since(t) < startupGrace
+}
+
+// proberConfirmDead builds the under-lock liveness re-check for reconcileDeadChild: it
+// resolves the agent's current backend handle and asks the backend whether the process
+// is alive. Any failure to resolve or probe is read as "not confirmed dead", so an
+// ambiguous signal never resumes a possibly-live agent — a vanished terminal is left to
+// the ListAgents diff, an idle-but-alive process is left running.
+func proberConfirmDead(db *sql.DB, prober backend.AgentProber) func(context.Context, agentRow) bool {
+	return func(ctx context.Context, ag agentRow) bool {
+		handle, err := backendAgentHandle(ctx, db, ag)
+		if err != nil {
+			return false
+		}
+		alive, err := prober.AgentAlive(ctx, handle)
+		if err != nil {
+			return false
+		}
+		return !alive
+	}
 }
