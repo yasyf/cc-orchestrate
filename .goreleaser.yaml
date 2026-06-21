@@ -57,6 +57,10 @@ homebrew_casks:
   - name: cc-orchestrate
     binaries:
       - cc-orchestrate
+    # Short alias: `cco` is a second cask binary symlink onto the same artifact,
+    # so `brew uninstall` reaps it. `binaries` can't rename, so inject the stanza.
+    custom_block: |
+      binary "cc-orchestrate", target: "cco"
     repository:
       owner: yasyf
       name: homebrew-tap
