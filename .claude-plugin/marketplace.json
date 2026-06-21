@@ -1,0 +1,15 @@
+{
+  "name": "cc-orchestrate",
+  "owner": {
+    "name": "yasyf",
+    "email": "yasyf@yasyf.com"
+  },
+  "description": "Plugins for driving cc-orchestrate agent fleets from Claude Code.",
+  "plugins": [
+    {
+      "name": "cco",
+      "source": "./plugins/cco",
+      "description": "Drive cc-orchestrate (the cco CLI): spawn, watch, message, and kill fleets of Claude Code agents across pluggable backends."
+    }
+  ]
+}

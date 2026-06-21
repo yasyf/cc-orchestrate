@@ -54,6 +54,12 @@
         "source": "github",
         "repo": "yasyf/cc-notes"
       }
+    },
+    "cc-orchestrate": {
+      "source": {
+        "source": "github",
+        "repo": "yasyf/cc-orchestrate"
+      }
     }
   },
   "enabledPlugins": {
@@ -62,7 +68,8 @@
     "llm-prompts@skills": true,
     "writing-docs@skills": true,
     "captain-hook@captain-hook": true,
-    "cc-notes@cc-notes": true
+    "cc-notes@cc-notes": true,
+    "cco@cc-orchestrate": true
   },
   "hooks": {
     "UserPromptSubmit": [

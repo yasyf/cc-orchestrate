@@ -9,11 +9,9 @@ Orchestrate fleets of Claude Code agents over pluggable backends, from one seat.
 
 cc-orchestrate drives a fleet of Claude Code agents through one CLI instead of a
 sprawl of terminal tabs. It models the work as a four-level tree and gives every
-workstream its own git worktree, so two agents working the same repo never trip over
-each other's checkout. Backends are pluggable: the same commands spawn, message, and
-watch agents whether they live in herd workspaces, superset worktrees, cmux sessions,
-or plain zellij and tmux panes. Every interaction rides an event plane, not the
-terminal, so the orchestration never cares where an agent actually runs.
+workstream its own git worktree, so two agents in the same repo never trip over each
+other's checkout. Every interaction rides an event plane, not the terminal, so the
+orchestration never cares which backend an agent runs on.
 
 ```
 repo            a git repository
@@ -29,13 +27,14 @@ drivers on top.
 
 ## Install
 
-Install with Homebrew:
+Homebrew installs the `cc-orchestrate` binary plus a short **`cco`** alias — the two
+are the same binary, so use whichever you prefer. This README uses `cco`.
 
 ```bash
 brew install --cask yasyf/tap/cc-orchestrate
 ```
 
-Or build from source with the Go toolchain:
+Or build from source with the Go toolchain (the binary is `cc-orchestrate`):
 
 ```bash
 go install github.com/yasyf/cc-orchestrate@latest
@@ -51,10 +50,8 @@ go install github.com/yasyf/cc-orchestrate@latest
   sprint, so the single-stream flow needs no extra steps.
 - **Workstream** — one git worktree on its own branch, and the unit of isolation:
   strictly one worktree per workstream, never per agent. It owns the backend workspace
-  agents spawn into. A backend that forks its own worktree (superset) is adopted; for
-  every other backend cc-orchestrate runs `git worktree add` under
-  `~/.cc-orchestrate/worktrees`. On a Jujutsu repo it colocates a fresh jj repo inside
-  that worktree, so jj workspaces never collide.
+  agents spawn into. See [Worktree isolation](#worktree-isolation) for how each backend
+  maps onto a worktree.
 - **Sprint** — a grouping of agents inside a workstream that shares the workstream's
   worktree. Every workstream gets a default sprint, so you only reach for sprints when
   you want to slice a workstream's agents into named batches.
@@ -71,7 +68,7 @@ go install github.com/yasyf/cc-orchestrate@latest
 See which backends are installed and which one is the effective default:
 
 ```bash
-cc-orchestrate backends list
+cco backends list
 ```
 
 ```
@@ -88,21 +85,21 @@ default: the backend you pinned, or the first installed one when you've pinned n
 Pin tmux for this walkthrough:
 
 ```bash
-cc-orchestrate backends select tmux
+cco backends select tmux
 ```
 
 Create a repo in the current directory. This also provisions its primary workstream
 (the current checkout) and a default sprint:
 
 ```bash
-cc-orchestrate repo create demo --cwd .
+cco repo create demo --cwd .
 ```
 
 Open an isolated workstream for a feature. cc-orchestrate cuts a git worktree on a new
 branch and prints where it landed:
 
 ```bash
-cc-orchestrate workstream create feat-x --repo demo
+cco workstream create feat-x --repo demo
 ```
 
 ```
@@ -115,7 +112,7 @@ Spawn an agent into that workstream with a prompt; it runs in the worktree, not 
 repo root:
 
 ```bash
-cc-orchestrate agent spawn --workstream feat-x --name a1 --prompt "summarize the repo and wait"
+cco agent spawn --workstream feat-x --name a1 --prompt "summarize the repo and wait"
 ```
 
 `agent spawn` prints the new agent's id, backend, and terminal:
@@ -129,43 +126,57 @@ terminal: feat-x:0.0
 List the fleet, then read one agent's status derived from its transcript:
 
 ```bash
-cc-orchestrate agent list
-cc-orchestrate agent status a1f3c2
+cco agent list
+cco agent status a1f3c2
 ```
 
 Send a new instruction to a running agent; it arrives on the agent's watch Monitor:
 
 ```bash
-cc-orchestrate agent send-message a1f3c2 "now open a PR with your summary"
+cco agent send-message a1f3c2 "now open a PR with your summary"
 ```
 
 When the agent is done, kill it; then tear down the workstream, which removes its
 worktree:
 
 ```bash
-cc-orchestrate agent kill a1f3c2
-cc-orchestrate workstream kill feat-x --repo demo
+cco agent kill a1f3c2
+cco workstream kill feat-x --repo demo
 ```
 
 ## Commands
 
-cc-orchestrate groups its surface by what you're orchestrating:
+cco groups its surface by what you're orchestrating. Every line below is a
+`cco <command>`:
 
 - `backends list` / `backends select <backend>` — show installed runners and pin the default.
 - `config get <key>` — read a persisted config value (`backend`, `active-repo`, `active-workstream`, `active-sprint`).
 - `repo list` / `repo create <name> [--backend B] [--cwd DIR]` / `repo activate <id>` / `repo kill <id>` — manage repos. A kill soft-terminates the repo and cascades to its workstreams, sprints, and agents.
-- `workstream list [--repo R]` / `workstream create <name> [--repo R] [--branch B]` / `workstream activate <id|name>` / `workstream kill <id|name>` — manage worktrees (alias `ws`). A kill tears down the backend workspace and removes the worktree.
+- `workstream list [--repo R]` / `workstream create <name> [--repo R] [--branch B]` / `workstream activate <id|name> [--repo R]` / `workstream kill <id|name> [--repo R]` — manage worktrees (alias `ws`). A kill tears down the backend workspace and removes the worktree.
 - `sprint list [--workstream W]` / `sprint create <name> [--workstream W]` / `sprint activate <id|name>` — group a workstream's agents.
 - `agent spawn [--repo R | --workstream W | --sprint S] [--name N] [--cwd DIR] --prompt "..."` — spawn a Claude agent. With only `--repo`, it lands in that repo's primary workstream and default sprint; `--workstream` and `--sprint` target deeper.
 - `agent list [--repo R]` / `agent status <id>` — read a point-in-time snapshot of the fleet or one agent.
 - `agent send-message <id> "text"` — push an instruction to a running agent.
 - `agent watch --all` / `agent watch --id <id>` — stream agent events as line-delimited JSON.
 - `agent kill <id>` — stop a running agent.
-- `mcp` — run the parent-facing MCP control server over stdio (see below).
+- `serialize [--out PATH]` / `restore <bundle>` — snapshot every active agent into a restorable bundle, then rehydrate the fleet from one (re-inserts missing rows and resumes sessions).
+- `mcp` — run the parent-facing MCP control server over stdio (see [Drive a fleet from a parent agent](#drive-a-fleet-from-a-parent-agent-over-mcp)).
 
 The active repo, workstream, and sprint set the target for a bare `agent spawn`. Each
 `activate` resets the more-specific selections, so the most recent activation wins;
 killing an active entity clears its selection.
+
+### Substrate commands
+
+Beneath the domain commands, cco exposes the cc-interact event plane directly. You
+rarely touch these — the daemon auto-starts, and status and messaging normally flow
+through `agent …`:
+
+- `daemon` / `status` / `stop` — the lazy daemon starts on first use; `status` queries it and `stop` shuts it down.
+- `watch` — stream raw events from a session.
+- `session record` — capture a session's transcript or events.
+- `guard-edit` — edit a guard-style prompt.
+- `channel` / `channel-ack` — send and acknowledge channel messages.
 
 ## Worktree isolation
 
@@ -180,6 +191,20 @@ primary workstream is special: it's the repo's own checkout, so it never gets a
 On a Jujutsu repo, cc-orchestrate still creates a real git worktree, then runs
 `jj git init --git-repo .` inside it to colocate an independent jj repo. That sidesteps
 the cross-conflicts you hit when several `jj workspace`s share one backing repo.
+
+## Claude Code plugin
+
+cc-orchestrate ships a Claude Code plugin so a parent Claude session knows how to drive
+the fleet. Add the marketplace and install the `cco` skill:
+
+```
+/plugin marketplace add yasyf/cc-orchestrate
+/plugin install cco@cc-orchestrate
+```
+
+The skill loads the command surface — the four-level model, the backends, and the
+spawn, watch, message, and kill flow — into context and registers a `/cco` command, so
+Claude can orchestrate with `cco` directly.
 
 ## cc-notes integration
 
@@ -220,8 +245,8 @@ The server exposes one tool per orchestration op, grouped by entity:
 - agent: `agent_spawn`, `agent_list`, `agent_status`, `agent_send_message`, `agent_kill`
 
 The MCP surface is request/response only — `agent_list` and `agent_status` return a
-point-in-time snapshot. For live status, run `cc-orchestrate agent watch` under a
-Monitor alongside the MCP session.
+point-in-time snapshot. For live status, run `cco agent watch` under a Monitor
+alongside the MCP session.
 
 ## How status and messaging work
 
