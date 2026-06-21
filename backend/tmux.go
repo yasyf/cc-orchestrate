@@ -113,3 +113,17 @@ func (b tmux) Capture(ctx context.Context, agent AgentHandle) (string, error) {
 	}
 	return string(out), nil
 }
+
+// AgentAlive reports whether the agent pane's command is still running. Under
+// remain-on-exit a pane outlives its command as a dead pane (#{pane_dead} == 1) that
+// ListAgents still reports by #{pane_id}, so this is the corroboration the supervisor
+// needs before resuming a stale agent. A pane that has truly vanished makes
+// display-message error; the caller reads that as "not confirmed dead" and leaves
+// the vanished case to the ListAgents diff.
+func (b tmux) AgentAlive(ctx context.Context, agent AgentHandle) (bool, error) {
+	out, err := b.run(ctx, tmuxBin, "display-message", "-p", "-t", agent.ID, "#{pane_dead}")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) != "1", nil
+}

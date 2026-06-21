@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // paneIDRe matches a tmux pane id, the "%N" form tmux prints for #{pane_id}.
@@ -124,6 +125,75 @@ func TestTmuxIntegration(t *testing.T) {
 		}
 	case containsWorkstream(afterKillProj, proj.ID):
 		t.Fatalf("session %q still present after KillWorkstream: %+v", proj.ID, afterKillProj)
+	}
+}
+
+// TestTmuxAgentAliveIntegration drives real tmux to prove the remain-on-exit blind spot
+// AgentAlive closes: a pane whose command exits lingers as a dead pane that ListAgents
+// still enumerates, yet AgentAlive reports it not-alive while a live pane reports alive.
+func TestTmuxAgentAliveIntegration(t *testing.T) {
+	if _, err := exec.LookPath(tmuxBin); err != nil {
+		t.Skipf("tmux not installed (%v); skipping real-tmux integration test", err)
+	}
+	sockDir, err := os.MkdirTemp("/tmp", "cco-tmux-alive-")
+	if err != nil {
+		t.Fatalf("tmux socket dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	t.Setenv("TMUX_TMPDIR", sockDir)
+
+	ctx := context.Background()
+	b := tmux{run: execRunner}
+	cwd := t.TempDir()
+	t.Cleanup(func() { _, _ = b.run(context.Background(), tmuxBin, "kill-server") })
+
+	proj, err := b.CreateWorkstream(ctx, WorkstreamSpec{Name: t.Name(), Cwd: cwd})
+	if err != nil {
+		t.Fatalf("CreateWorkstream: %v", err)
+	}
+	// remain-on-exit keeps a pane whose command has exited as a dead pane that ListAgents
+	// still lists — the exact case the vanished-handle diff cannot see.
+	if _, err := b.run(ctx, tmuxBin, "set-option", "-g", "remain-on-exit", "on"); err != nil {
+		t.Fatalf("set remain-on-exit: %v", err)
+	}
+
+	live, err := b.Spawn(ctx, SpawnSpec{Workstream: proj, Name: "live", Cwd: cwd, Command: []string{"sh", "-c", "sleep 30"}, SessionID: "s-live"})
+	if err != nil {
+		t.Fatalf("Spawn live: %v", err)
+	}
+	dead, err := b.Spawn(ctx, SpawnSpec{Workstream: proj, Name: "dead", Cwd: cwd, Command: []string{"sh", "-c", "exit 7"}, SessionID: "s-dead"})
+	if err != nil {
+		t.Fatalf("Spawn dead: %v", err)
+	}
+
+	// Wait for the exiter to finish and tmux to flag its pane dead.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		alive, err := b.AgentAlive(ctx, dead)
+		if err == nil && !alive {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("dead pane never reported not-alive (last alive=%v err=%v)", alive, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if alive, err := b.AgentAlive(ctx, live); err != nil || !alive {
+		t.Fatalf("AgentAlive(live) = %v, %v; want true, nil", alive, err)
+	}
+
+	// The dead pane is STILL enumerated — proving the diff alone misses it and the
+	// AgentAlive corroboration is what lets the supervisor resume it.
+	agents, err := b.ListAgents(ctx, proj)
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	if _, ok := findAgent(agents, dead.ID); !ok {
+		t.Fatalf("dead pane %q not listed; remain-on-exit should keep it: %+v", dead.ID, agents)
+	}
+	if _, ok := findAgent(agents, live.ID); !ok {
+		t.Fatalf("live pane %q not listed: %+v", live.ID, agents)
 	}
 }
 

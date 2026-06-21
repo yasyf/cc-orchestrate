@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -174,5 +175,35 @@ func TestTmuxCaps(t *testing.T) {
 	c := (tmux{}).Caps()
 	if !c.Has(CanSendText) || !c.Has(CanCapture) || !c.Has(CanEnumerate) {
 		t.Fatalf("Caps = %+v, want CanSendText+CanCapture+CanEnumerate", c)
+	}
+}
+
+func TestTmuxAgentAlive(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		out       string
+		err       error
+		wantAlive bool
+		wantErr   bool
+	}{
+		{name: "live pane", out: "0\n", wantAlive: true},
+		{name: "dead pane under remain-on-exit", out: "1\n", wantAlive: false},
+		{name: "vanished pane surfaces the error", err: errors.New("can't find pane"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &tmuxRecorder{out: tc.out, err: tc.err}
+			alive, err := (tmux{run: rec.run}).AgentAlive(ctx, AgentHandle{ID: "%3"})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %t", err, tc.wantErr)
+			}
+			if err == nil && alive != tc.wantAlive {
+				t.Fatalf("alive = %t, want %t", alive, tc.wantAlive)
+			}
+			want := [][]string{{"tmux", "display-message", "-p", "-t", "%3", "#{pane_dead}"}}
+			if !reflect.DeepEqual(rec.calls, want) {
+				t.Fatalf("argv = %v, want %v", rec.calls, want)
+			}
+		})
 	}
 }
