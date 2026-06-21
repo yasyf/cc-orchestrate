@@ -1,5 +1,5 @@
 ---
-name: cco
+name: cc-orchestrate
 description: Drive cc-orchestrate (the cco CLI) to spawn, watch, message, and kill fleets of Claude Code agents across backends (herd, superset, cmux, zellij, tmux). Use when orchestrating agents with cco or cc-orchestrate — creating repos, workstreams, and sprints; spawning agents into git worktrees; streaming agent status; or driving a fleet from a parent session over MCP.
 ---
 

@@ -195,16 +195,16 @@ the cross-conflicts you hit when several `jj workspace`s share one backing repo.
 ## Claude Code plugin
 
 cc-orchestrate ships a Claude Code plugin so a parent Claude session knows how to drive
-the fleet. Add the marketplace and install the `cco` skill:
+the fleet. Add the marketplace and install the plugin:
 
 ```
 /plugin marketplace add yasyf/cc-orchestrate
-/plugin install cco@cc-orchestrate
+/plugin install cc-orchestrate@cc-orchestrate
 ```
 
 The skill loads the command surface — the four-level model, the backends, and the
-spawn, watch, message, and kill flow — into context and registers a `/cco` command, so
-Claude can orchestrate with `cco` directly.
+spawn, watch, message, and kill flow — into context and registers a `/cc-orchestrate`
+command, so Claude can orchestrate with the `cco` CLI directly.
 
 ## cc-notes integration
 

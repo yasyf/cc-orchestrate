@@ -7,8 +7,8 @@
   "description": "Plugins for driving cc-orchestrate agent fleets from Claude Code.",
   "plugins": [
     {
-      "name": "cco",
-      "source": "./plugins/cco",
+      "name": "cc-orchestrate",
+      "source": "./plugins/cc-orchestrate",
       "description": "Drive cc-orchestrate (the cco CLI): spawn, watch, message, and kill fleets of Claude Code agents across pluggable backends."
     }
   ]

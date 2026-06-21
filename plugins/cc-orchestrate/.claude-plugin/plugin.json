@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "cco",
+  "name": "cc-orchestrate",
   "description": "Drive cc-orchestrate agent fleets from Claude — the cco CLI command surface, the repo/workstream/sprint/agent model, the five backends, and the spawn/watch/message/kill flow.",
   "author": {
     "name": "yasyf",

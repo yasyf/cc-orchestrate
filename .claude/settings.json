@@ -69,7 +69,7 @@
     "writing-docs@skills": true,
     "captain-hook@captain-hook": true,
     "cc-notes@cc-notes": true,
-    "cco@cc-orchestrate": true
+    "cc-orchestrate@cc-orchestrate": true
   },
   "hooks": {
     "UserPromptSubmit": [
