@@ -206,6 +206,48 @@ func TestZellijListAgentsParsesRealJSON(t *testing.T) {
 	}
 }
 
+// realExitedPaneJSON is captured from `list-panes --json` after a command pane's child
+// exited: zellij holds the pane (exited:true, exit_status:7, is_held:true) with
+// terminal_command still populated, so ListAgents still lists it but AgentAlive sees dead.
+const realExitedPaneJSON = `[
+  {"id":0,"is_plugin":true,"title":"(.) - zellij:link","exited":false,"exit_status":null,"terminal_command":null,"plugin_url":"zellij:link","tab_id":0},
+  {"id":1,"is_plugin":false,"title":"myagent","exited":true,"exit_status":7,"is_held":true,"terminal_command":"sh -c exit 7","plugin_url":null,"tab_id":0}
+]`
+
+// TestZellijAgentAlive asserts the list-panes argv plus the exited-bit parse: a held
+// exited pane reads dead, a running pane reads alive, and a pane absent from the list
+// surfaces the not-found error the supervisor reads as "not confirmed dead".
+func TestZellijAgentAlive(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name      string
+		out       string
+		paneID    string
+		wantAlive bool
+		wantErr   bool
+	}{
+		{name: "running command pane is alive", out: realPanesJSON, paneID: "terminal_1", wantAlive: true},
+		{name: "held exited pane is dead", out: realExitedPaneJSON, paneID: "terminal_1", wantAlive: false},
+		{name: "vanished pane surfaces the not-found error", out: realPanesJSON, paneID: "terminal_9", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls, r := recorder(tc.out)
+			alive, err := zellij{run: r}.AgentAlive(ctx, AgentHandle{Backend: "zellij", ID: tc.paneID, WorkstreamID: "proj-1"})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %t", err, tc.wantErr)
+			}
+			if err == nil && alive != tc.wantAlive {
+				t.Fatalf("alive = %t, want %t", alive, tc.wantAlive)
+			}
+			want := []string{"zellij", "--session", "proj-1", "action", "list-panes", "--json"}
+			got := append([]string{(*calls)[0].name}, (*calls)[0].args...)
+			if !slices.Equal(got, want) {
+				t.Fatalf("argv = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestZellijListWorkstreamsParsesRealList(t *testing.T) {
 	_, r := recorder(realSessionsList)
 	projects, err := zellij{run: r}.ListWorkstreams(context.Background())

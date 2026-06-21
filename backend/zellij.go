@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -15,11 +16,15 @@ const (
 
 // pane mirrors one element of `zellij action list-panes --json`, which is a flat
 // array of pane objects (one per pane across every tab), not a tab-keyed map.
+// Exited is the per-pane process-liveness bit: zellij keeps a command pane listed
+// after its child exits (it holds the pane and shows the exit status), flipping
+// exited true while terminal_command stays populated — the signal AgentAlive reads.
 type pane struct {
 	ID       int    `json:"id"`
 	IsPlugin bool   `json:"is_plugin"`
 	Title    string `json:"title"`
 	Command  string `json:"terminal_command"`
+	Exited   bool   `json:"exited"`
 }
 
 // zellij drives the zellij multiplexer: a project is a background session, an
@@ -127,6 +132,32 @@ func (b zellij) Capture(ctx context.Context, agent AgentHandle) (string, error) 
 		return "", err
 	}
 	return string(out), nil
+}
+
+// AgentAlive reports whether the agent pane's command is still running. zellij holds a
+// command pane open after its child exits (it shows the exit status and "<Press ENTER to
+// re-run>" rather than closing), so ListAgents still enumerates the pane by its
+// terminal_command and the vanished-handle diff cannot see the death; the pane manifest's
+// exited flag is the corroboration the supervisor needs before resuming a stale agent. A
+// pane that has truly vanished is absent from list-panes, so AgentAlive returns the
+// not-found error, which the caller reads as "not confirmed dead" — leaving the vanished
+// case to the ListAgents diff. paneID(p) namespaces the match as terminal_N/plugin_N
+// because list-panes can emit a plugin pane and a terminal pane sharing a numeric id.
+func (b zellij) AgentAlive(ctx context.Context, agent AgentHandle) (bool, error) {
+	out, err := b.run(ctx, zellijBin, "--session", agent.WorkstreamID, "action", "list-panes", "--json")
+	if err != nil {
+		return false, err
+	}
+	panes, err := decodeJSON[[]pane](out, "zellij", "panes")
+	if err != nil {
+		return false, err
+	}
+	for _, p := range panes {
+		if paneID(p) == agent.ID {
+			return !p.Exited, nil
+		}
+	}
+	return false, fmt.Errorf("zellij: pane %s not found in session %s", agent.ID, agent.WorkstreamID)
 }
 
 func paneID(p pane) string {
