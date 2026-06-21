@@ -3,9 +3,12 @@ package backend
 import (
 	"context"
 	"errors"
+	"net"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -90,11 +93,74 @@ func TestSupersetMetadata(t *testing.T) {
 		t.Errorf("Name() = %q, want superset", b.Name())
 	}
 	got := b.Caps()
-	if got.Has(CanSendText) || got.Has(CanCapture) || got.Has(CanEnumerate) {
-		t.Errorf("Caps() = %+v, want no CanSendText/CanCapture/CanEnumerate", got)
+	if got.Has(CanSendText) || got.Has(CanCapture) {
+		t.Errorf("Caps() = %+v, want no CanSendText/CanCapture", got)
+	}
+	if !got.Has(CanEnumerate) {
+		t.Errorf("Caps() = %+v, want CanEnumerate", got)
 	}
 	if !got.Has(ManagesWorktree) {
 		t.Errorf("Caps() = %+v, want ManagesWorktree", got)
+	}
+}
+
+// serveFakePtyDaemon listens on socket and answers one hello/list exchange with the
+// given sessions, exercising the real frame codec end to end (a real ephemeral
+// socket, not a mock). The returned func stops the listener and joins the goroutine.
+func serveFakePtyDaemon(t *testing.T, socket string, sessions []supersetSession) func() {
+	t.Helper()
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("listen %s: %v", socket, err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		if _, err := readSupersetFrame(conn); err != nil { // hello
+			return
+		}
+		if err := writeSupersetFrame(conn, map[string]any{"type": "hello-ack", "protocol": supersetDaemonProtocol, "daemonVersion": "0.2.4"}); err != nil {
+			return
+		}
+		if _, err := readSupersetFrame(conn); err != nil { // list
+			return
+		}
+		_ = writeSupersetFrame(conn, supersetFrame{Type: "list-reply", Sessions: sessions})
+	}()
+	return func() {
+		_ = ln.Close()
+		<-done
+	}
+}
+
+func TestSupersetListAgents(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "ptyd.sock")
+	stop := serveFakePtyDaemon(t, socket, []supersetSession{
+		{ID: "term-alive-1", PID: 100, Alive: true},
+		{ID: "term-dead", PID: 0, Alive: false},
+		{ID: "term-alive-2", PID: 200, Alive: true},
+	})
+	defer stop()
+
+	orig := supersetDaemonSocketPath
+	supersetDaemonSocketPath = func() (string, error) { return socket, nil }
+	t.Cleanup(func() { supersetDaemonSocketPath = orig })
+
+	got, err := (superset{}).ListAgents(context.Background(), WorkstreamHandle{})
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	ids := make([]string, len(got))
+	for i, h := range got {
+		ids[i] = h.ID
+	}
+	if want := []string{"term-alive-1", "term-alive-2"}; !slices.Equal(ids, want) {
+		t.Fatalf("ListAgents ids = %v, want %v (only alive sessions)", ids, want)
 	}
 }
 
@@ -327,6 +393,29 @@ func TestSupersetKill(t *testing.T) {
 			t.Fatalf("want no CLI calls, got %v", r.calls)
 		}
 	})
+	t.Run("treats pkill exit 1 (no match) as success", func(t *testing.T) {
+		r := &supersetRunner{errs: []error{exitErr(t, 1)}}
+		if err := (superset{run: r.run}).Kill(ctx, AgentHandle{SessionID: "sess-1"}); err != nil {
+			t.Fatalf("Kill: want nil on pkill exit 1, got %v", err)
+		}
+	})
+	t.Run("propagates a real pkill failure", func(t *testing.T) {
+		r := &supersetRunner{errs: []error{exitErr(t, 2)}}
+		if err := (superset{run: r.run}).Kill(ctx, AgentHandle{SessionID: "sess-1"}); err == nil {
+			t.Fatal("Kill: want error on pkill exit 2, got nil")
+		}
+	})
+}
+
+// exitErr returns a real *exec.ExitError carrying the given exit code, so a test can
+// drive the pkill exit-code branch of superset.Kill without a real pkill.
+func exitErr(t *testing.T, code int) error {
+	t.Helper()
+	err := exec.Command("sh", "-c", "exit "+strconv.Itoa(code)).Run() //nolint:gosec // G204: code is an int, not tainted input
+	if err == nil {
+		t.Fatalf("exit %d produced no error", code)
+	}
+	return err
 }
 
 func TestSupersetKillWorkstream(t *testing.T) {
@@ -335,20 +424,6 @@ func TestSupersetKillWorkstream(t *testing.T) {
 		t.Fatalf("KillWorkstream: %v", err)
 	}
 	assertCalls(t, r.calls, [][]string{{"superset", "workspaces", "delete", "ws-1", "--local", "--json"}})
-}
-
-func TestSupersetListAgentsIsEmptyAndQuiet(t *testing.T) {
-	r := &supersetRunner{}
-	got, err := superset{run: r.run}.ListAgents(context.Background(), WorkstreamHandle{ID: "ws-1"})
-	if err != nil {
-		t.Fatalf("ListAgents: %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("agents = %+v, want none", got)
-	}
-	if len(r.calls) != 0 {
-		t.Fatalf("want no CLI calls, got %v", r.calls)
-	}
 }
 
 func TestMatchProjectID(t *testing.T) {

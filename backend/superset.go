@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -98,11 +99,13 @@ func (b superset) Name() Name { return supersetBin }
 
 func (b superset) Available() bool { return installed(supersetBin) }
 
-// Caps advertises ManagesWorktree: superset forks and owns its own git worktree
-// per workspace, so cc-orchestrate adopts the returned WorkstreamHandle.Worktree
-// rather than creating one. It is otherwise pure-LCD (no native send/capture/
-// enumerate path).
-func (b superset) Caps() Caps { return Capabilities(ManagesWorktree) }
+// Caps advertises ManagesWorktree (superset forks and owns its own git worktree
+// per workspace, so cc-orchestrate adopts the returned WorkstreamHandle.Worktree)
+// and CanEnumerate (ListAgents reads live session liveness from the host's
+// pty-daemon, so the supervisor resumes a superset agent whose claude died). It has
+// no native send or capture path; those still ride the cc-interact event plane and
+// the pty-host wrapper.
+func (b superset) Caps() Caps { return Capabilities(ManagesWorktree, CanEnumerate) }
 
 // EnsureReady verifies the host service is running and healthy and that a user is
 // authenticated; it never logs in. The two checks fail loud with the command to run.
@@ -267,21 +270,49 @@ func (b superset) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error
 	}, nil
 }
 
-// ListAgents always returns empty: superset has no running-agent CLI, so the
-// orchestrate agents table is the source of truth.
-func (b superset) ListAgents(_ context.Context, _ WorkstreamHandle) ([]AgentHandle, error) {
-	return []AgentHandle{}, nil
+// ListAgents reports the superset agents whose PTY child is still alive, read from
+// the host's pty-daemon supervisor (its hello/list control socket). The daemon's
+// list is host-wide and keyed by the same terminalId Spawn returns — cc-orchestrate's
+// terminal handle — and the supervisor diff only tests membership of the handles it
+// already tracks, so the host-wide live set is the signal it needs: an agent whose
+// claude exited drops out (Alive=false) and is resumed. A dead or unreachable daemon
+// yields an error, which the supervisor treats as "no signal" and skips, never "all
+// agents gone".
+func (b superset) ListAgents(ctx context.Context, _ WorkstreamHandle) ([]AgentHandle, error) {
+	socket, err := supersetDaemonSocketPath()
+	if err != nil {
+		return nil, err
+	}
+	sessions, err := listSupersetSessions(ctx, socket)
+	if err != nil {
+		return nil, err
+	}
+	handles := []AgentHandle{}
+	for _, s := range sessions {
+		if s.Alive {
+			handles = append(handles, AgentHandle{Backend: b.Name(), ID: s.ID})
+		}
+	}
+	return handles, nil
 }
 
 // Kill terminates the agent by its claude --session-id, since superset exposes no
 // per-terminal kill. The pkill pattern is passed after `--` because it begins
-// with dashes that pkill would otherwise read as options.
+// with dashes that pkill would otherwise read as options. pkill exits 1 when no
+// process matches, which is success here — the agent is already gone — so it is
+// not surfaced as an error; only a real failure (exit 2/3) propagates.
 func (b superset) Kill(ctx context.Context, agent AgentHandle) error {
 	if agent.SessionID == "" {
 		return errors.New("superset: cannot kill agent without a session id")
 	}
-	_, err := b.run(ctx, "pkill", "-f", "--", "--session-id "+agent.SessionID)
-	return err
+	if _, err := b.run(ctx, "pkill", "-f", "--", "--session-id "+agent.SessionID); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // KillWorkstream deletes the workspace, which SIGHUP→SIGKILLs all of its terminals.
