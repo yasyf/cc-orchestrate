@@ -176,10 +176,11 @@ func TestCmux(t *testing.T) {
 	}
 }
 
-// TestCmuxSpawn proves the launch path: new-pane then a send whose typed text is
-// only a metacharacter-free `bash <temp-path>\n`, while the real argv (compact
-// JSON, a multi-line brief, and a prompt loaded with shell metacharacters) rides
-// a self-removing temp script that round-trips through bash with no injection.
+// TestCmuxSpawn proves the launch path: new-pane then a respawn-pane whose --command is
+// only a metacharacter-free `bash <temp-path>`, while the real argv (compact JSON, a
+// multi-line brief, and a prompt loaded with shell metacharacters) rides a self-removing
+// temp script that execs through bash with no injection, making the agent the surface's
+// top-level process.
 func TestCmuxSpawn(t *testing.T) {
 	work := t.TempDir()
 	// Stand-in for claude: record each argv element NUL-separated beside itself.
@@ -218,42 +219,44 @@ func TestCmuxSpawn(t *testing.T) {
 		t.Errorf("handle = %#v, want %#v", got, want)
 	}
 	if len(f.calls) != 2 {
-		t.Fatalf("calls = %#v, want a new-pane then a send", f.calls)
+		t.Fatalf("calls = %#v, want a new-pane then a respawn-pane", f.calls)
 	}
 	if wantPane := []string{"new-pane", "--workspace", "workspace:7"}; !reflect.DeepEqual(f.calls[0].args, wantPane) {
 		t.Errorf("pane args = %#v, want %#v", f.calls[0].args, wantPane)
 	}
 
-	send := f.calls[1].args
-	if pre := []string{"send", "--workspace", "workspace:7", "--surface", "surface:10", "--"}; !reflect.DeepEqual(send[:len(pre)], pre) {
-		t.Errorf("send prefix = %#v, want %#v", send[:len(pre)], pre)
+	respawn := f.calls[1].args
+	if pre := []string{"respawn-pane", "--workspace", "workspace:7", "--surface", "surface:10", "--command"}; !reflect.DeepEqual(respawn[:len(pre)], pre) {
+		t.Errorf("respawn-pane prefix = %#v, want %#v", respawn[:len(pre)], pre)
 	}
-	sent := send[len(send)-1]
+	sent := respawn[len(respawn)-1]
 
-	// The typed text injects nothing: a bash invocation of the temp path plus the
-	// documented "\n" Enter, with no real newline or shell metacharacter from argv.
-	if !strings.HasPrefix(sent, "bash ") || !strings.HasSuffix(sent, `\n`) {
-		t.Fatalf("sent = %q, want `bash <path>\\n`", sent)
+	// The command injects nothing: a bash invocation of the temp path, with no real
+	// newline or shell metacharacter from the argv reaching the command line.
+	if !strings.HasPrefix(sent, "bash ") {
+		t.Fatalf("command = %q, want `bash <path>`", sent)
 	}
-	if strings.Contains(sent, "\n") {
-		t.Errorf("sent contains a real newline that cmux would type as Enter: %q", sent)
+	if strings.ContainsAny(sent, "\n\r\t") {
+		t.Errorf("command leaks a control character from the argv: %q", sent)
 	}
 	for _, meta := range []string{"$(", "`", ";", `"`, "PWNED"} {
 		if strings.Contains(sent, meta) {
-			t.Errorf("sent leaks %q from the argv: %q", meta, sent)
+			t.Errorf("command leaks %q from the argv: %q", meta, sent)
 		}
 	}
 
-	path := strings.TrimSuffix(strings.TrimPrefix(sent, "bash "), `\n`)
+	path := strings.TrimPrefix(sent, "bash ")
 	t.Cleanup(func() { _ = os.Remove(path) })
 	script, err := os.ReadFile(path) //nolint:gosec // G304: test reads the temp launch script it just generated
 	if err != nil {
 		t.Fatalf("launch script: %v", err)
 	}
-	if !strings.HasPrefix(string(script), "rm -f -- \"$0\"\n") {
-		t.Errorf("script does not self-remove first: %q", script)
+	// Self-remove first, then exec the agent so it replaces bash as the surface's
+	// top-level process.
+	if !strings.HasPrefix(string(script), "rm -f -- \"$0\"\nexec ") {
+		t.Errorf("script does not self-remove then exec: %q", script)
 	}
-	// The metacharacters are carried in the file (quoted), never typed.
+	// The metacharacters are carried in the file (quoted), never on the command line.
 	if !strings.Contains(string(script), "$(touch "+subst+")") {
 		t.Errorf("script dropped the brief's command substitution: %q", script)
 	}

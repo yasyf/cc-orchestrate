@@ -54,15 +54,17 @@ func cmuxRef(out []byte, prefix string) (string, error) {
 	return "", fmt.Errorf("cmux: no %s ref in output: %q", prefix, out)
 }
 
-// cmuxLaunchScript writes command as a self-removing POSIX script under a temp
-// path and returns the text cmux send must type into the pane shell: a bash
-// invocation of that path plus cmux's documented "\n" Enter. The argv rides the
-// script as file bytes (each token POSIX-quoted, the brief's embedded newlines
-// preserved) instead of being typed, because cmux send reinterprets any "\n",
-// "\r", or "\t" in the typed text as Enter/Enter/Tab — which would split the
-// multi-line --append-system-prompt brief into partial commands and let an
-// arbitrary prompt inject shell metacharacters. The only typed text is the temp
-// path, whose characters never include a backslash escape or a metacharacter.
+// cmuxLaunchScript writes command as a self-removing POSIX script under a temp path
+// and returns the `bash <temp-path>` command line respawn-pane runs as the surface's
+// program. The script execs the argv, so the agent replaces bash and becomes the
+// surface's top-level process: when the agent exits, cmux auto-closes the surface, which
+// the keep-alive supervisor's ListAgents diff sees as a vanished terminal and resumes —
+// the same liveness path every other backend rides. Running the agent under the surface's
+// own fish login shell instead would leave the shell (and the surface) alive after a
+// crash, hiding the death. The argv rides the script as file bytes (each token
+// POSIX-quoted, the brief's embedded newlines preserved) rather than the command line, so
+// an arbitrary prompt cannot inject shell metacharacters; the only text on the command
+// line is the temp path, which carries none.
 func cmuxLaunchScript(command []string) (string, error) {
 	quoted := quoteAll(command)
 	f, err := os.CreateTemp("", "cc-orchestrate-cmux-*.sh")
@@ -70,14 +72,14 @@ func cmuxLaunchScript(command []string) (string, error) {
 		return "", fmt.Errorf("cmux: create launch script: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	script := "rm -f -- \"$0\"\n" + strings.Join(quoted, " ") + "\n"
+	script := "rm -f -- \"$0\"\nexec " + strings.Join(quoted, " ") + "\n"
 	if _, err := f.WriteString(script); err != nil {
 		return "", fmt.Errorf("cmux: write launch script %s: %w", f.Name(), err)
 	}
 	if err := f.Close(); err != nil {
 		return "", fmt.Errorf("cmux: close launch script %s: %w", f.Name(), err)
 	}
-	return "bash " + ShellQuote(f.Name()) + `\n`, nil
+	return "bash " + ShellQuote(f.Name()), nil
 }
 
 func (b cmux) Name() Name { return cmuxName }
@@ -115,6 +117,13 @@ func (b cmux) ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error) {
 	return workstreams, nil
 }
 
+// Spawn opens a fresh surface with new-pane, then respawn-pane replaces that surface's
+// fish login shell with the agent so the agent is the surface's top-level process. That
+// matters for liveness: a child of the surface's shell would let the shell — and so the
+// surface — outlive a crashed agent, hiding the death from the supervisor; as the surface
+// program, the agent's exit auto-closes the surface, which the ListAgents diff resumes.
+// The argv rides a self-removing temp script (cmuxLaunchScript) that respawn-pane runs as
+// `bash <path>`, keeping an arbitrary prompt off the command line.
 func (b cmux) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
 	out, err := b.run(ctx, cmuxBin, "new-pane", "--workspace", spec.Workstream.ID)
 	if err != nil {
@@ -128,7 +137,7 @@ func (b cmux) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
 	if err != nil {
 		return AgentHandle{}, err
 	}
-	if _, err := b.run(ctx, cmuxBin, "send", "--workspace", spec.Workstream.ID, "--surface", surface, "--", launch); err != nil {
+	if _, err := b.run(ctx, cmuxBin, "respawn-pane", "--workspace", spec.Workstream.ID, "--surface", surface, "--command", launch); err != nil {
 		return AgentHandle{}, err
 	}
 	return AgentHandle{
