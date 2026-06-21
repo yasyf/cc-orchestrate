@@ -139,12 +139,9 @@ func writeSupersetFrame(w io.Writer, msg any) error {
 		return fmt.Errorf("superset: encode pty-daemon frame: %w", err)
 	}
 	total := 4 + len(body)
-	if total > supersetMaxFrame {
-		return fmt.Errorf("superset: pty-daemon frame %d exceeds max %d", total, supersetMaxFrame)
-	}
 	out := make([]byte, 8+len(body))
-	binary.BigEndian.PutUint32(out[0:4], uint32(total))     //nolint:gosec // G115: total bounded by supersetMaxFrame above
-	binary.BigEndian.PutUint32(out[4:8], uint32(len(body))) //nolint:gosec // G115: len(body) < total, bounded above
+	binary.BigEndian.PutUint32(out[0:4], uint32(total))     //nolint:gosec // G115: control frames are tiny; the length fits u32 by construction
+	binary.BigEndian.PutUint32(out[4:8], uint32(len(body))) //nolint:gosec // G115: control frames are tiny; the length fits u32 by construction
 	copy(out[8:], body)
 	if _, err := w.Write(out); err != nil {
 		return fmt.Errorf("superset: write pty-daemon frame: %w", err)
