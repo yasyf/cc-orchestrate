@@ -15,7 +15,7 @@ jobs:
     # macOS host: native clang builds both darwin arches (Go's darwin net/crypto need
     # the macOS SDK frameworks, which only the host clang has), and `zig cc` cross-
     # builds the fully-static linux binaries. So one runner covers all four targets.
-    runs-on: macos-14
+    runs-on: macos-latest
     env:
       # Absolute path to the per-target libghostty-vt pkgconfig dirs; .goreleaser.yaml
       # needs it absolute because cgo runs pkg-config from the libghostty module dir.
