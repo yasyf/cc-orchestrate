@@ -32,8 +32,7 @@ brew install --cask yasyf/tap/cc-orchestrate
 ```
 
 Homebrew installs the `cc-orchestrate` binary plus a short **`cco`** alias — the same
-binary, so use whichever you prefer. This README uses `cco`. To build from source:
-`go install github.com/yasyf/cc-orchestrate@latest` (the binary is `cc-orchestrate`).
+binary, so use whichever you prefer. This README uses `cco`.
 
 ## Concepts
 
