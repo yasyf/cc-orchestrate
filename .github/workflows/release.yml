@@ -7,69 +7,17 @@ on:
 permissions:
   contents: write
 
-env:
-  GOTOOLCHAIN: auto
-
 jobs:
-  goreleaser:
-    # macOS host: native clang builds both darwin arches (Go's darwin net/crypto need
-    # the macOS SDK frameworks, which only the host clang has), and `zig cc` cross-
-    # builds the fully-static linux binaries. So one runner covers all four targets.
-    runs-on: macos-latest
-    env:
-      # Absolute path to the per-target libghostty-vt pkgconfig dirs; .goreleaser.yaml
-      # needs it absolute because cgo runs pkg-config from the libghostty module dir.
-      LIBGHOSTTY_ROOT: ${{ github.workspace }}/.libghostty
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.2"
-          cache: true
-
-      # The release binaries default to the go-libghostty (cgo) grid. Zig 0.15 builds
-      # libghostty-vt for every target; the Homebrew formula is patched for the Xcode
-      # 26 SDK (ziglang/zig#31658) that the upstream tarball trips on. Installed
-      # directly here (mise is the local-dev toolchain only); cmake fetches the pinned
-      # ghostty source.
-      - name: Install Zig 0.15 + cmake
-        run: |
-          brew install zig@0.15 cmake
-          echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
-
-      - name: Import Developer ID certificate
-        env:
-          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
-          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
-          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
-        run: |
-          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
-          KP="$(openssl rand -base64 24)"
-          security create-keychain -p "$KP" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$KP" "$KEYCHAIN"
-          echo -n "$MACOS_SIGN_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$MACOS_SIGN_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KP" "$KEYCHAIN" >/dev/null
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/[\" ]//g')
-          rm -f "$RUNNER_TEMP/cert.p12"
-          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk -F'"' '/Developer ID Application/{print $2; exit}')"
-          echo "MACOS_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
-          echo -n "$MACOS_NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
-          echo "MACOS_NOTARY_KEY_FILE=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
-
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          # Developer ID signing + notarization (read by scripts/macos-codesign.sh).
-          MACOS_SIGN_IDENTITY: ${{ env.MACOS_SIGN_IDENTITY }}
-          MACOS_NOTARY_KEY_FILE: ${{ env.MACOS_NOTARY_KEY_FILE }}
-          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-          MACOS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+  release:
+    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@v1
+    secrets: inherit
+    with:
+      # cgo (libghostty-vt) → native clang for darwin + zig for static linux, so the
+      # release runs on macOS and signs with codesign+notarytool (not quill).
+      runner: macos-latest
+      signer: codesign
+      pre-build: |
+        brew install zig@0.15 cmake
+        echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
+        echo "LIBGHOSTTY_ROOT=$GITHUB_WORKSPACE/.libghostty" >> "$GITHUB_ENV"
+        echo "GOTOOLCHAIN=auto" >> "$GITHUB_ENV"
