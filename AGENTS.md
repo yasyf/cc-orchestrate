@@ -110,6 +110,13 @@ hide helpers with lowercase identifiers and doc comments, not the compiler.
 cc-interact's `examples/echo/main.go` is the consumer template — read it before adding
 a command.
 
+**Comments are terse and used sparingly — the code documents itself** through names,
+types, and organization. The one exception is documentation-generation comments:
+godoc on exported types, funcs, and the package, each starting with the identifier's
+name (`// NewRootCmd builds …`); unexported helpers get none. Beyond godoc, comment
+only for TODOs, non-obvious workarounds, or disabled code — never to restate the
+signature.
+
 **Wrap errors, never swallow.** `fmt.Errorf("doing X: %w", err)` and let it propagate;
 reserve `panic` for programmer error the API forbids. Thread `context.Context` first
 through every command, op, and `os/exec` call so cancellation tears down the child.
