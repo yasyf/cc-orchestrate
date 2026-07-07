@@ -1,0 +1,78 @@
+[
+  {
+    "objectID": "reference/cli/backends.html",
+    "href": "reference/cli/backends.html",
+    "title": "cc-orchestrate backends",
+    "section": "",
+    "text": "List supported backends and whether each is installed on this machine.\n\n\ncc-orchestrate backends\n\n\nFull --help output\n\n\nUsage: cc-orchestrate backends [OPTIONS]\n\n  List supported backends and whether each is installed on this machine.\n\nOptions:\n  --help  Show this message and exit.",
+    "crumbs": [
+      "[cc-orchestrate backends]{.doc-object-name .doc-function .doc-label .doc-label-cli}"
+    ]
+  },
+  {
+    "objectID": "license.html",
+    "href": "license.html",
+    "title": "License",
+    "section": "",
+    "text": "Required Notice: Copyright Yasyf Mohamedali (https://github.com/yasyf/cc-orchestrate)\n\n# PolyForm Noncommercial License 1.0.0\n\n&lt;https://polyformproject.org/licenses/noncommercial/1.0.0&gt;\n\n## Acceptance\n\nIn order to get any license under these terms, you must agree\nto them as both strict obligations and conditions to all\nyour licenses.\n\n## Copyright License\n\nThe licensor grants you a copyright license for the\nsoftware to do everything you might do with the software\nthat would otherwise infringe the licensor's copyright\nin it for any permitted purpose.  However, you may\nonly distribute the software according to [Distribution\nLicense](#distribution-license) and make changes or new works\nbased on the software according to [Changes and New Works\nLicense](#changes-and-new-works-license).\n\n## Distribution License\n\nThe licensor grants you an additional copyright license\nto distribute copies of the software.  Your license\nto distribute covers distributing the software with\nchanges and new works permitted by [Changes and New Works\nLicense](#changes-and-new-works-license).\n\n## Notices\n\nYou must ensure that anyone who gets a copy of any part of\nthe software from you also gets a copy of these terms or the\nURL for them above, as well as copies of any plain-text lines\nbeginning with `Required Notice:` that the licensor provided\nwith the software.  For example:\n\n&gt; Required Notice: Copyright Yoyodyne, Inc. (http://example.com)\n\n## Changes and New Works License\n\nThe licensor grants you an additional copyright license to\nmake changes and new works based on the software for any\npermitted purpose.\n\n## Patent License\n\nThe licensor grants you a patent license for the software that\ncovers patent claims the licensor can license, or becomes able\nto license, that you would infringe by using the software.\n\n## Noncommercial Purposes\n\nAny noncommercial purpose is a permitted purpose.\n\n## Personal Uses\n\nPersonal use for research, experiment, and testing for\nthe benefit of public knowledge, personal study, private\nentertainment, hobby projects, amateur pursuits, or religious\nobservance, without any anticipated commercial application,\nis use for a permitted purpose.\n\n## Noncommercial Organizations\n\nUse by any charitable organization, educational institution,\npublic research organization, public safety or health\norganization, environmental protection organization,\nor government institution is use for a permitted purpose\nregardless of the source of funding or obligations resulting\nfrom the funding.\n\n## Fair Use\n\nYou may have \"fair use\" rights for the software under the\nlaw. These terms do not limit them.\n\n## No Other Rights\n\nThese terms do not allow you to sublicense or transfer any of\nyour licenses to anyone else, or prevent the licensor from\ngranting licenses to anyone else.  These terms do not imply\nany other licenses.\n\n## Patent Defense\n\nIf you make any written claim that the software infringes or\ncontributes to infringement of any patent, your patent license\nfor the software granted under these terms ends immediately. If\nyour company makes such a claim, your patent license ends\nimmediately for work on behalf of your company.\n\n## Violations\n\nThe first time you are notified in writing that you have\nviolated any of these terms, or done anything with the software\nnot covered by your licenses, your licenses can nonetheless\ncontinue if you come into full compliance with these terms,\nand take practical steps to correct past violations, within\n32 days of receiving notice.  Otherwise, all your licenses\nend immediately.\n\n## No Liability\n\n***As far as the law allows, the software comes as is, without\nany warranty or condition, and the licensor will not be liable\nto you for any damages arising out of these terms or the use\nor nature of the software, under any kind of legal claim.***\n\n## Definitions\n\nThe **licensor** is the individual or entity offering these\nterms, and the **software** is the software the licensor makes\navailable under these terms.\n\n**You** refers to the individual or entity agreeing to these\nterms.\n\n**Your company** is any legal entity, sole proprietorship,\nor other kind of organization that you work for, plus all\norganizations that have control over, are under the control of,\nor are under common control with that organization.  **Control**\nmeans ownership of substantially all the assets of an entity,\nor the power to direct its management and policies by vote,\ncontract, or otherwise.  Control can be direct or indirect.\n\n**Your licenses** are all the licenses granted to you for the\nsoftware under these terms.\n\n**Use** means anything you do with the software requiring one\nof your licenses."
+  },
+  {
+    "objectID": "skill.html",
+    "href": "skill.html",
+    "title": "cc-orchestrate",
+    "section": "",
+    "text": "Orchestrate fleets of Claude Code agents across pluggable backends like cmux and superset.\n\nResources\n\nFull documentation\nllms.txt — Indexed API reference for LLMs\nllms-full.txt — Comprehensive documentation for LLMs\nSource code\n\n\n\n\n\nReusePolyForm-Noncommercial-1.0.0"
+  },
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "cc-orchestrate",
+    "section": "",
+    "text": "cc-orchestrate\nOne CLI to run fleets of Claude Code agents — on cmux, superset, or any backend you wire in.\nOrchestrate fleets of Claude Code agents across pluggable backends like cmux and superset.\ncc-orchestrate is a CLI for running fleets of Claude Code agents from one seat instead of a sprawl of terminal tabs. Backends are pluggable: the same orchestration drives agents living in cmux sessions, superset worktrees, or whatever runner you wire in next, so fleet logic never cares where an agent actually executes."
+  },
+  {
+    "objectID": "index.html#install",
+    "href": "index.html#install",
+    "title": "cc-orchestrate",
+    "section": "Install",
+    "text": "Install\nNo install needed — run everything through uvx:\nuvx cc-orchestrate --help\nuvx fetches cc-orchestrate into a throwaway environment and runs it. To add it to a project instead:\nuv add cc-orchestrate"
+  },
+  {
+    "objectID": "index.html#quickstart",
+    "href": "index.html#quickstart",
+    "title": "cc-orchestrate",
+    "section": "Quickstart",
+    "text": "Quickstart\nCheck which backends are installed on your machine:\nuvx cc-orchestrate backends\ncmux    available\nsuperset    available\nA backend reports not found when its CLI is missing from your PATH. Install the runner and re-run the check."
+  },
+  {
+    "objectID": "index.html#what-problems-does-this-solve",
+    "href": "index.html#what-problems-does-this-solve",
+    "title": "cc-orchestrate",
+    "section": "What problems does this solve?",
+    "text": "What problems does this solve?\n\nRunning more than a couple of Claude Code agents means babysitting a sprawl of terminal tabs and tmux panes by hand. cc-orchestrate gives the whole fleet one front door.\nEvery runner has its own invocation quirks — cmux sessions, superset worktrees, plain terminals. Backends absorb those differences, so what you dispatch stays portable across them.\nKnowing what a machine can even run is guesswork. cc-orchestrate backends reports which runners are installed before you dispatch anything."
+  },
+  {
+    "objectID": "index.html#docs",
+    "href": "index.html#docs",
+    "title": "cc-orchestrate",
+    "section": "Docs",
+    "text": "Docs\nRead the docs for the full guide and API reference."
+  },
+  {
+    "objectID": "skills.html",
+    "href": "skills.html",
+    "title": "Skills",
+    "section": "",
+    "text": "A skill is a package of structured files that teaches an AI coding agent how to work with a specific tool or framework. The skill below was generated by Great Docs from this project’s documentation. Install it in your agent and it will be able to run commands, edit configuration, write content, and troubleshoot problems without step-by-step guidance from you.\n\n  \n    ▶    Install this skill\n  \n  \n    \n      \nAny agent — install with npx:\nnpx skills add https://yasyf.github.io/cc-orchestrate/\nCodex / OpenCode\nTell the agent:Fetch the skill file at https://yasyf.github.io/cc-orchestrate/skill.md and follow the instructions.\nManual — download the skill file:\ncurl -O https://yasyf.github.io/cc-orchestrate/skill.md\nOr browse the SKILL.md file.\n      \n    \n  \n\n\nSKILL.md\n---\nname: package\ndescription: &gt;\n  Orchestrate fleets of Claude Code agents across pluggable backends like cmux and superset.\nlicense: PolyForm-Noncommercial-1.0.0\ncompatibility: Requires Python &gt;=3.13.\n---\n\n# cc-orchestrate\n\nOrchestrate fleets of Claude Code agents across pluggable backends like cmux and superset.\n\n## Resources\n\n- [Full documentation](https://yasyf.github.io/cc-orchestrate/)\n- [llms.txt](llms.txt) — Indexed API reference for LLMs\n- [llms-full.txt](llms-full.txt) — Comprehensive documentation for LLMs\n- [Source code](https://github.com/yasyf/cc-orchestrate)"
+  },
+  {
+    "objectID": "reference/cli/index.html",
+    "href": "reference/cli/index.html",
+    "title": "cc-orchestrate",
+    "section": "",
+    "text": "Orchestrate fleets of Claude Code agents across pluggable backends like cmux and superset.\n\n\ncc-orchestrate [OPTIONS] COMMAND [ARGS]...\n\n\nFull --help output\n\n\nUsage: cc-orchestrate [OPTIONS] COMMAND [ARGS]...\n\n  Orchestrate fleets of Claude Code agents across pluggable backends like cmux\n  and superset.\n\nOptions:\n  --version  Show the version and exit.\n  --help     Show this message and exit.\n\nCommands:\n  backends  List supported backends and whether each is installed on this...\n\n\n\n\nOptions\n\n\n--version\n\nShow the version and exit.\n\n\n\n\n\nCommands\n\n\nbackends\n\nList supported backends and whether each is installed on this machine.",
+    "crumbs": [
+      "[cc-orchestrate]{.doc-object-name .doc-function .doc-label .doc-label-cli-group}"
+    ]
+  }
+]
