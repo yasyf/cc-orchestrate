@@ -1,0 +1,57 @@
+---
+title: "[cc-orchestrate]{.doc-object-name .doc-function .doc-label .doc-label-cli-group}"
+body-classes: doc-api-page
+sidebar: cli-reference
+page-navigation: false
+html-table-processing: none
+---
+
+# [cc-orchestrate]{.doc-object-name .doc-function .doc-label .doc-label-cli-group}
+
+::: {.doc-subject}
+Orchestrate fleets of Claude Code agents across pluggable backends like cmux and superset.
+:::
+
+::: {.doc-signature .doc-Kind.FUNCTION}
+```bash
+cc-orchestrate [OPTIONS] COMMAND [ARGS]...
+```
+:::
+
+::: {.details summary="Full --help output"}
+
+::: {.cli-manpage}
+
+```
+Usage: cc-orchestrate [OPTIONS] COMMAND [ARGS]...
+
+  Orchestrate fleets of Claude Code agents across pluggable backends like cmux
+  and superset.
+
+Options:
+  --version  Show the version and exit.
+  --help     Show this message and exit.
+
+Commands:
+  backends  List supported backends and whether each is installed on this...
+```
+
+:::
+
+:::
+
+## Options {.doc-parameters}
+
+::: {.doc-definition-items}
+<code><span class="doc-parameter-name">&#45;&#45;version</span></code>
+:   Show the version and exit.
+
+:::
+
+## Commands {.doc-parameters}
+
+::: {.doc-definition-items}
+<code>[backends]{.doc-parameter-name}</code>
+:   [List supported backends and whether each is installed on this machine.](backends.qmd)
+
+:::

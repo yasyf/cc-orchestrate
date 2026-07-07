@@ -1,0 +1,11 @@
+{
+  "skills": [
+    {
+      "name": "package",
+      "description": "Orchestrate fleets of Claude Code agents across pluggable backends like cmux and superset.",
+      "files": [
+        "SKILL.md"
+      ]
+    }
+  ]
+}

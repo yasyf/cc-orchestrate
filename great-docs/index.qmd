@@ -1,0 +1,113 @@
+---
+title: ""
+toc: false
+body-classes: "gd-homepage"
+---
+
+<style>
+section.level1:first-of-type > h1:first-child,
+section.level2:first-of-type > h2:first-child,
+.column-body-outset-right > section.level1:first-of-type > h1,
+#quarto-document-content > section:first-of-type > h1 {
+  margin-top: 4px !important;
+}
+</style>
+
+```{=html}
+<div class="gd-hero">
+<img src="docs/assets/logo.png" alt="Logo" class="gd-hero-logo" style="max-height:200px" />
+<p class="gd-hero-name">cc-orchestrate</p>
+<p class="gd-hero-tagline">One CLI to run fleets of Claude Code agents — on cmux, superset, or any backend you wire in.</p>
+</div>
+
+```
+
+::: {.column-margin}
+#### Links
+
+<a href="https://pypi.org/project/cc-orchestrate/">View on PyPI<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -0.05em; margin-left: 0em; margin-top: 0.1em;" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg></a><br>
+<a href="https://github.com/yasyf/cc-orchestrate">Browse source code<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -0.05em; margin-left: 0em; margin-top: 0.1em;" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg></a><br>
+<a href="https://github.com/yasyf/cc-orchestrate/issues">Issues<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -0.05em; margin-left: 0em; margin-top: 0.1em;" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg></a><br>
+<a href="https://github.com/yasyf/cc-orchestrate/blob/main/CHANGELOG.md">Changelog<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -0.05em; margin-left: 0em; margin-top: 0.1em;" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg></a><br>
+
+#### AI / Agents
+
+<a href="skills.html">Skills<svg class="gd-sparkle" xmlns="http://www.w3.org/2000/svg" width="0.85em" height="0.85em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -0.1em; margin-left: 0.25em;"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.582a.5.5 0 0 1 0 .963L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg></a><br>
+[llms.txt](llms.txt)<br>
+[llms-full.txt](llms-full.txt)<br>
+
+#### Developers
+
+<div><span><p><strong style="padding-bottom: 4px;">Yasyf Mohamedali</strong></p></span><span style="margin-top: -0.15em; display: block;"><p><small>Maintainer</small></p></span><span style="margin-top: -0.15em; display: block;"><a href="mailto:yasyfm@gmail.com" title="Email"><i class="bi bi-envelope-fill"></i></a> <a href="https://github.com/yasyf" title="GitHub"><i class="bi bi-github"></i></a></span></div>
+
+#### Community
+
+[Full license](license.qmd)<br>
+
+#### Meta
+
+**Requires:** Python `>=3.13`<br>
+**Provides-Extra:** `dev`
+:::
+
+![cc-orchestrate banner](https://github.com/yasyf/cc-orchestrate/raw/main/docs/assets/readme-banner.webp)
+
+[![PyPI](https://img.shields.io/pypi/v/cc-orchestrate.svg)](https://pypi.org/project/cc-orchestrate/)
+[![Python](https://img.shields.io/pypi/pyversions/cc-orchestrate.svg)](https://pypi.org/project/cc-orchestrate/)
+[![Docs](https://img.shields.io/github/actions/workflow/status/yasyf/cc-orchestrate/docs.yml?branch=main&label=docs)](https://yasyf.github.io/cc-orchestrate/)
+[![License: PolyForm-Noncommercial-1.0.0](https://img.shields.io/badge/License-PolyForm-Noncommercial-1.0.0-blue.svg)](https://github.com/yasyf/cc-orchestrate/blob/main/LICENSE)
+
+Orchestrate fleets of Claude Code agents across pluggable backends like cmux and superset.
+
+cc-orchestrate is a CLI for running fleets of Claude Code agents from one seat
+instead of a sprawl of terminal tabs. Backends are pluggable: the same
+orchestration drives agents living in cmux sessions, superset worktrees, or
+whatever runner you wire in next, so fleet logic never cares where an agent
+actually executes.
+
+### Install
+
+No install needed — run everything through [uvx](https://docs.astral.sh/uv/):
+
+```bash
+uvx cc-orchestrate --help
+```
+
+`uvx` fetches cc-orchestrate into a throwaway environment and runs it. To add it
+to a project instead:
+
+```bash
+uv add cc-orchestrate
+```
+
+### Quickstart
+
+Check which backends are installed on your machine:
+
+```bash
+uvx cc-orchestrate backends
+```
+
+```
+cmux	available
+superset	available
+```
+
+A backend reports `not found` when its CLI is missing from your `PATH`.
+Install the runner and re-run the check.
+
+### What problems does this solve?
+
+- Running more than a couple of Claude Code agents means babysitting a sprawl
+  of terminal tabs and tmux panes by hand. cc-orchestrate gives the whole
+  fleet one front door.
+- Every runner has its own invocation quirks — cmux sessions, superset
+  worktrees, plain terminals. Backends absorb those differences, so what you
+  dispatch stays portable across them.
+- Knowing what a machine can even run is guesswork. `cc-orchestrate backends`
+  reports which runners are installed before you dispatch anything.
+
+### Docs
+
+[Read the docs](https://yasyf.github.io/cc-orchestrate/) for the full guide and API reference.
+
