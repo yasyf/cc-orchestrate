@@ -112,6 +112,17 @@
         ]
       }
     ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx capt-hook review run",
+            "async": true
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
@@ -129,6 +140,16 @@
           {
             "type": "command",
             "command": "uvx capt-hook run Stop"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uvx capt-hook run SubagentStop"
           }
         ]
       }
