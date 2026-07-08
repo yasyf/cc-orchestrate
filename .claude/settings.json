@@ -55,6 +55,12 @@
         "repo": "yasyf/cc-notes"
       }
     },
+    "cc-context": {
+      "source": {
+        "source": "github",
+        "repo": "yasyf/cc-context"
+      }
+    },
     "cc-orchestrate": {
       "source": {
         "source": "github",
@@ -63,7 +69,7 @@
     }
   },
   "enabledPlugins": {
-    "cc-context@skills": true,
+    "cc-context@cc-context": true,
     "codex@skills": true,
     "slop-cop@skills": true,
     "llm-prompts@skills": true,
