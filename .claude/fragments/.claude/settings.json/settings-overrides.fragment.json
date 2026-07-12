@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python:*)",
+      "Bash(uv build:*)",
+      "Bash(uv lock:*)",
+      "Bash(uv run:*)",
+      "Bash(uv sync:*)"
+    ]
+  },
+  "extraKnownMarketplaces": {
+    "cc-orchestrate": {
+      "source": {
+        "source": "github",
+        "repo": "yasyf/cc-orchestrate"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "cc-orchestrate@cc-orchestrate": true
+  }
+}

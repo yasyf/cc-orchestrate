@@ -9,13 +9,12 @@
     "ENABLE_LSP_TOOL": "1",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
     "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+    "JJ_CONFIG": ".claude/jj-config.toml",
     "TY_OUTPUT_FORMAT": "concise",
-    "TY_CONFIG_FILE": ".claude/ty-quiet.toml",
-    "JJ_CONFIG": ".claude/jj-config.toml"
+    "TY_CONFIG_FILE": ".claude/ty-quiet.toml"
   },
   "permissions": {
     "allow": [
-      "Bash(.venv/bin/python:*)",
       "Bash(cat:*)",
       "Bash(find:*)",
       "Bash(gh api:*)",
@@ -27,11 +26,17 @@
       "Bash(jq:*)",
       "Bash(ls:*)",
       "Bash(rg:*)",
+      "Bash(wc:*)",
+      "Bash(go build:*)",
+      "Bash(go doc:*)",
+      "Bash(go test:*)",
+      "Bash(go vet:*)",
+      "Bash(task:*)",
+      "Bash(.venv/bin/python:*)",
       "Bash(uv build:*)",
       "Bash(uv lock:*)",
       "Bash(uv run:*)",
-      "Bash(uv sync:*)",
-      "Bash(wc:*)"
+      "Bash(uv sync:*)"
     ],
     "defaultMode": "auto"
   },
@@ -42,12 +47,6 @@
         "repo": "yasyf/cc-skills"
       },
       "autoUpdate": true
-    },
-    "captain-hook": {
-      "source": {
-        "source": "github",
-        "repo": "yasyf/captain-hook"
-      }
     },
     "cc-notes": {
       "source": {
@@ -61,6 +60,12 @@
         "repo": "yasyf/cc-context"
       }
     },
+    "captain-hook": {
+      "source": {
+        "source": "github",
+        "repo": "yasyf/captain-hook"
+      }
+    },
     "cc-orchestrate": {
       "source": {
         "source": "github",
@@ -69,13 +74,13 @@
     }
   },
   "enabledPlugins": {
-    "cc-context@cc-context": true,
     "codex@skills": true,
     "slop-cop@skills": true,
     "llm-prompts@skills": true,
     "writing-docs@skills": true,
-    "captain-hook@captain-hook": true,
+    "cc-context@cc-context": true,
     "cc-notes@cc-notes": true,
+    "captain-hook@captain-hook": true,
     "cc-orchestrate@cc-orchestrate": true
   }
 }
