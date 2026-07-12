@@ -1,0 +1,8 @@
+fragments = [
+  "cc-orchestrate-guide",
+  "cc-skills:ccx",
+  "cc-orchestrate-conventions",
+]
+
+[sources.cc-skills]
+source = "github:yasyf/cc-skills@main"
