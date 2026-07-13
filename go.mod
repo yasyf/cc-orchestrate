@@ -1,6 +1,6 @@
 module github.com/yasyf/cc-orchestrate
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/charmbracelet/x/vt v0.0.0-20260615092313-b57e5e6d29bb
