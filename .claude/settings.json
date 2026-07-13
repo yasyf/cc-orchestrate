@@ -73,7 +73,8 @@
       "source": {
         "source": "github",
         "repo": "yasyf/cc-orchestrate"
-      }
+      },
+      "autoUpdate": true
     }
   },
   "enabledPlugins": {
