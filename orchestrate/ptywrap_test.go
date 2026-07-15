@@ -1,6 +1,8 @@
 package orchestrate
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -9,23 +11,59 @@ import (
 
 func TestWrapForCapture(t *testing.T) {
 	self := "/abs/cc-orchestrate"
-	command := []string{"claude", "--session-id", "sid-1", "--flag", "v"}
+	claudeCmd := []string{"claude", "--session-id", "sid-1", "--flag", "v"}
+	ccpCmd := []string{"/opt/homebrew/bin/ccp", "run", "--session-id", "sid-1", "--flag", "v"}
 
-	t.Run("capturing backend leaves argv unchanged", func(t *testing.T) {
-		got, err := wrapForCapture(self, "sid-1", command, backend.Capabilities(backend.CanCapture))
+	t.Run("capturing backend leaves claude argv unchanged", func(t *testing.T) {
+		got, err := wrapForCapture(self, "sid-1", claudeCmd, backend.Capabilities(backend.CanCapture))
 		if err != nil {
 			t.Fatalf("wrapForCapture: %v", err)
 		}
-		if !slices.Equal(got, command) {
-			t.Fatalf("argv = %v, want unchanged %v", got, command)
+		if !slices.Equal(got, claudeCmd) {
+			t.Fatalf("argv = %v, want unchanged %v", got, claudeCmd)
+		}
+	})
+
+	t.Run("capturing backend leaves ccp argv unchanged", func(t *testing.T) {
+		got, err := wrapForCapture(self, "sid-1", ccpCmd, backend.Capabilities(backend.CanCapture))
+		if err != nil {
+			t.Fatalf("wrapForCapture: %v", err)
+		}
+		if !slices.Equal(got, ccpCmd) {
+			t.Fatalf("argv = %v, want unchanged %v", got, ccpCmd)
 		}
 	})
 
 	t.Run("non-capturing wrap resolves claude under the pty-host", func(t *testing.T) {
-		got := wrapPTYHost(self, "sid-1", "/usr/bin/claude", command)
+		bin := t.TempDir()
+		claudePath := filepath.Join(bin, "claude")
+		if err := os.WriteFile(claudePath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write fake claude: %v", err)
+		}
+		t.Setenv("PATH", bin)
+		t.Setenv("HOME", t.TempDir())
+
+		got, err := wrapForCapture(self, "sid-1", claudeCmd, backend.Capabilities())
+		if err != nil {
+			t.Fatalf("wrapForCapture: %v", err)
+		}
 		want := []string{
 			self, "pty-host", "--session-id", "sid-1", "--",
-			"/usr/bin/claude", "--session-id", "sid-1", "--flag", "v",
+			claudePath, "--session-id", "sid-1", "--flag", "v",
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("wrapped argv =\n  %v\nwant\n  %v", got, want)
+		}
+	})
+
+	t.Run("non-capturing wrap passes the resolved ccp path through unchanged", func(t *testing.T) {
+		got, err := wrapForCapture(self, "sid-1", ccpCmd, backend.Capabilities())
+		if err != nil {
+			t.Fatalf("wrapForCapture: %v", err)
+		}
+		want := []string{
+			self, "pty-host", "--session-id", "sid-1", "--",
+			"/opt/homebrew/bin/ccp", "run", "--session-id", "sid-1", "--flag", "v",
 		}
 		if !slices.Equal(got, want) {
 			t.Fatalf("wrapped argv =\n  %v\nwant\n  %v", got, want)

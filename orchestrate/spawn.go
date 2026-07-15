@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/google/uuid"
@@ -23,6 +24,8 @@ import (
 // subject is born "active" (matching daemon.Config.ActiveStatuses) and closes to
 // "exited" when the agent terminates.
 var lifecycle = subject.Lifecycle{Initial: string(StatusActive), Closed: string(StatusExited)}
+
+var lookupPath = exec.LookPath
 
 // mcpServer is one entry of the child's --mcp-config: the orchestrate binary
 // re-invoked as the child's channel MCP server, scoped to its session and cwd.
@@ -67,20 +70,18 @@ func childSettings(self string) string {
 	return string(b)
 }
 
-// claudeCommand is the full argv a backend runs for a child agent. Command[0] is
-// the bare "claude"; the backend driver resolves the absolute real binary. The
-// orchestration brief is appended to the child's system prompt so it arms its
-// receive Monitor and knows to report back. An empty prompt omits the trailing
-// positional argument.
+// claudeCommand is the full argv a backend runs for a child agent. It launches
+// through ccp when installed and otherwise starts bare claude. The orchestration
+// brief is appended to the child's system prompt so it arms its receive Monitor
+// and knows to report back. An empty prompt omits the trailing positional argument.
 func claudeCommand(self, sid, scope, prompt string) []string {
-	argv := []string{
-		"claude",
+	argv := append(claudeInvocation(),
 		"--session-id", sid,
 		"--mcp-config", childMCPConfig(self, sid, scope),
 		"--strict-mcp-config",
 		"--settings", childSettings(self),
 		"--append-system-prompt", spawnBrief(self, sid, scope),
-	}
+	)
 	if prompt != "" {
 		argv = append(argv, prompt)
 	}
@@ -94,14 +95,20 @@ func claudeCommand(self, sid, scope, prompt string) []string {
 // --fork-session, and carries no trailing positional prompt — the resumed
 // session already holds its history.
 func resumeCommand(self, sid, scope string) []string {
-	return []string{
-		"claude",
+	return append(claudeInvocation(),
 		"--resume", sid,
 		"--mcp-config", childMCPConfig(self, sid, scope),
 		"--strict-mcp-config",
 		"--settings", childSettings(self),
 		"--append-system-prompt", spawnBrief(self, sid, scope),
+	)
+}
+
+func claudeInvocation() []string {
+	if ccp, err := lookupPath("ccp"); err == nil {
+		return []string{ccp, "run"}
 	}
+	return []string{"claude"}
 }
 
 // spawnBrief is the orchestration brief appended to a child agent's system prompt.

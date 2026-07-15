@@ -1,6 +1,7 @@
 package orchestrate
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -23,23 +24,27 @@ func ptySocketPath(sessionID string) string {
 
 // wrapForCapture wraps a child argv to run under this binary's pty-host when the
 // backend cannot capture its terminal natively; a capturing backend's argv is
-// returned unchanged. The child's claude is resolved to the real binary first so the
-// host does not recurse through a backend's claude wrapper shim.
+// returned unchanged. The child executable is resolved first because the host may
+// run under a different PATH; claude also skips a backend's wrapper shim.
 func wrapForCapture(self, sessionID string, command []string, caps backend.Caps) ([]string, error) {
 	if caps.Has(backend.CanCapture) {
 		return command, nil
 	}
-	realClaude, err := backend.ResolveClaude()
-	if err != nil {
-		return nil, err
+	executable := command[0]
+	if command[0] == "claude" {
+		var err error
+		executable, err = backend.ResolveClaude()
+		if err != nil {
+			return nil, fmt.Errorf("resolve claude: %w", err)
+		}
 	}
-	return wrapPTYHost(self, sessionID, realClaude, command), nil
+	return wrapPTYHost(self, sessionID, executable, command), nil
 }
 
-// wrapPTYHost rewrites a claude argv to run under the pty-host: this binary as the
-// host, the session id, then the real claude path in place of command[0] ("claude").
-func wrapPTYHost(self, sessionID, realClaude string, command []string) []string {
-	return append([]string{self, ptyHostCmdName, "--session-id", sessionID, "--", realClaude}, command[1:]...)
+// wrapPTYHost rewrites an argv to run under the pty-host with the resolved child
+// executable in place of command[0].
+func wrapPTYHost(self, sessionID, executable string, command []string) []string {
+	return append([]string{self, ptyHostCmdName, "--session-id", sessionID, "--", executable}, command[1:]...)
 }
 
 // ptyHostCmd is the hidden `pty-host` command: it runs the argv after `--` under a

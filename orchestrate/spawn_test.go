@@ -2,8 +2,11 @@ package orchestrate
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -96,67 +99,130 @@ func TestChildSettings(t *testing.T) {
 }
 
 func TestClaudeCommand(t *testing.T) {
+	old := lookupPath
+	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { lookupPath = old })
+
+	const (
+		self  = "/opt/cc-orchestrate"
+		sid   = "sid-1"
+		scope = "/work"
+	)
+
 	t.Run("with prompt", func(t *testing.T) {
-		argv := claudeCommand("/opt/cc-orchestrate", "sid-1", "/work", "fix the bug")
-		if argv[0] != "claude" {
-			t.Fatalf("argv[0] = %q, want claude", argv[0])
+		got := claudeCommand(self, sid, scope, "fix the bug")
+		want := []string{
+			"claude",
+			"--session-id", sid,
+			"--mcp-config", childMCPConfig(self, sid, scope),
+			"--strict-mcp-config",
+			"--settings", childSettings(self),
+			"--append-system-prompt", spawnBrief(self, sid, scope),
+			"fix the bug",
 		}
-		if got := flagValue(argv, "--session-id"); got != "sid-1" {
-			t.Errorf("--session-id = %q, want sid-1", got)
-		}
-		if !contains(argv, "--strict-mcp-config") {
-			t.Errorf("argv missing --strict-mcp-config: %v", argv)
-		}
-		if got := flagValue(argv, "--mcp-config"); got != childMCPConfig("/opt/cc-orchestrate", "sid-1", "/work") {
-			t.Errorf("--mcp-config = %q", got)
-		}
-		if got := flagValue(argv, "--settings"); got != childSettings("/opt/cc-orchestrate") {
-			t.Errorf("--settings = %q", got)
-		}
-		if got := flagValue(argv, "--append-system-prompt"); got != spawnBrief("/opt/cc-orchestrate", "sid-1", "/work") {
-			t.Errorf("--append-system-prompt = %q", got)
-		}
-		if last := argv[len(argv)-1]; last != "fix the bug" {
-			t.Errorf("trailing arg = %q, want the prompt", last)
+		if !slices.Equal(got, want) {
+			t.Fatalf("argv =\n  %v\nwant\n  %v", got, want)
 		}
 	})
 	t.Run("empty prompt omits the trailing arg", func(t *testing.T) {
-		argv := claudeCommand("/opt/cc-orchestrate", "sid-1", "/work", "")
-		if last := argv[len(argv)-1]; last != spawnBrief("/opt/cc-orchestrate", "sid-1", "/work") {
-			t.Errorf("trailing arg = %q, want the brief value (no prompt)", last)
+		got := claudeCommand(self, sid, scope, "")
+		want := []string{
+			"claude",
+			"--session-id", sid,
+			"--mcp-config", childMCPConfig(self, sid, scope),
+			"--strict-mcp-config",
+			"--settings", childSettings(self),
+			"--append-system-prompt", spawnBrief(self, sid, scope),
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("argv =\n  %v\nwant\n  %v", got, want)
 		}
 	})
 }
 
 func TestResumeCommand(t *testing.T) {
-	argv := resumeCommand("/opt/cc-orchestrate", "sid-1", "/work")
-	if argv[0] != "claude" {
-		t.Fatalf("argv[0] = %q, want claude", argv[0])
+	old := lookupPath
+	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { lookupPath = old })
+
+	const (
+		self  = "/opt/cc-orchestrate"
+		sid   = "sid-1"
+		scope = "/work"
+	)
+	got := resumeCommand(self, sid, scope)
+	want := []string{
+		"claude",
+		"--resume", sid,
+		"--mcp-config", childMCPConfig(self, sid, scope),
+		"--strict-mcp-config",
+		"--settings", childSettings(self),
+		"--append-system-prompt", spawnBrief(self, sid, scope),
 	}
-	if got := flagValue(argv, "--resume"); got != "sid-1" {
-		t.Errorf("--resume = %q, want sid-1", got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("argv =\n  %v\nwant\n  %v", got, want)
 	}
-	if contains(argv, "--session-id") {
-		t.Errorf("resume argv carries --session-id: %v", argv)
+}
+
+func TestPooledClaudeCommands(t *testing.T) {
+	const (
+		self  = "/opt/cc-orchestrate"
+		sid   = "sid-1"
+		scope = "/work"
+	)
+	tests := []struct {
+		name    string
+		command func() []string
+		want    []string
+	}{
+		{
+			name:    "spawn",
+			command: func() []string { return claudeCommand(self, sid, scope, "fix the bug") },
+			want: []string{
+				"/opt/homebrew/bin/ccp", "run",
+				"--session-id", sid,
+				"--mcp-config", childMCPConfig(self, sid, scope),
+				"--strict-mcp-config",
+				"--settings", childSettings(self),
+				"--append-system-prompt", spawnBrief(self, sid, scope),
+				"fix the bug",
+			},
+		},
+		{
+			name:    "resume",
+			command: func() []string { return resumeCommand(self, sid, scope) },
+			want: []string{
+				"/opt/homebrew/bin/ccp", "run",
+				"--resume", sid,
+				"--mcp-config", childMCPConfig(self, sid, scope),
+				"--strict-mcp-config",
+				"--settings", childSettings(self),
+				"--append-system-prompt", spawnBrief(self, sid, scope),
+			},
+		},
 	}
-	if contains(argv, "--fork-session") {
-		t.Errorf("resume argv carries --fork-session: %v", argv)
-	}
-	if !contains(argv, "--strict-mcp-config") {
-		t.Errorf("argv missing --strict-mcp-config: %v", argv)
-	}
-	if got := flagValue(argv, "--mcp-config"); got != childMCPConfig("/opt/cc-orchestrate", "sid-1", "/work") {
-		t.Errorf("--mcp-config = %q, want the shared child config", got)
-	}
-	if got := flagValue(argv, "--settings"); got != childSettings("/opt/cc-orchestrate") {
-		t.Errorf("--settings = %q, want the shared child settings", got)
-	}
-	if got := flagValue(argv, "--append-system-prompt"); got != spawnBrief("/opt/cc-orchestrate", "sid-1", "/work") {
-		t.Errorf("--append-system-prompt = %q, want the re-arming brief", got)
-	}
-	// The brief is the last token: a resume carries no trailing positional prompt.
-	if last := argv[len(argv)-1]; last != spawnBrief("/opt/cc-orchestrate", "sid-1", "/work") {
-		t.Errorf("trailing arg = %q, want the brief (no positional prompt)", last)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			old := lookupPath
+			calls := 0
+			lookupPath = func(bin string) (string, error) {
+				calls++
+				if bin != "ccp" {
+					t.Fatalf("lookup binary = %q, want ccp", bin)
+				}
+				return "/opt/homebrew/bin/ccp", nil
+			}
+			t.Cleanup(func() { lookupPath = old })
+
+			got := tc.command()
+			if calls != 1 {
+				t.Errorf("lookup calls = %d, want 1", calls)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("argv =\n  %v\nwant\n  %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -256,6 +322,9 @@ func TestHandleSpawn(t *testing.T) {
 	old := pollInterval
 	pollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
+	oldLookup := lookupPath
+	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { lookupPath = oldLookup })
 	t.Setenv("HOME", t.TempDir())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -404,6 +473,129 @@ func TestHandleSpawn(t *testing.T) {
 	}
 }
 
+// spawnPoolingHierarchy inserts the repo/workstream/sprint a pooling test spawns into.
+func spawnPoolingHierarchy(ctx context.Context, t *testing.T, db *sql.DB) {
+	t.Helper()
+	if err := insertRepo(ctx, db, repoRow{
+		ID: "p1", Name: "alpha", Backend: "spawntest",
+		Cwd: "/tmp/alpha", Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertRepo: %v", err)
+	}
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "spawntest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/tmp/alpha", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertWorkstream: %v", err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{
+		ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
+	}
+}
+
+// pooledLookupCases is the shared {fallback, pooled} lookupPath table for the
+// handleSpawn and respawnAgent pooling tests.
+var pooledLookupCases = []struct {
+	name     string
+	lookup   func(string) (string, error)
+	wantHead []string
+}{
+	{"fallback", func(string) (string, error) { return "", exec.ErrNotFound }, []string{"claude"}},
+	{"pooled", func(string) (string, error) { return "/opt/homebrew/bin/ccp", nil }, []string{"/opt/homebrew/bin/ccp", "run"}},
+}
+
+// TestHandleSpawnPooling proves the argv handleSpawn hands the backend carries
+// claudeInvocation's ccp/claude decision, head and all.
+func TestHandleSpawnPooling(t *testing.T) {
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	t.Setenv("HOME", t.TempDir())
+
+	for _, tc := range pooledLookupCases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldLookup := lookupPath
+			lookupPath = tc.lookup
+			t.Cleanup(func() { lookupPath = oldLookup })
+
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			tailers = newTestTailerManager(ctx)
+
+			var gotSpec backend.SpawnSpec
+			backend.Register(spawnBackend{spec: &gotSpec})
+
+			st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+			if err != nil {
+				t.Fatalf("store.Open: %v", err)
+			}
+			t.Cleanup(func() { _ = st.Close() })
+			db := st.DB()
+			spawnPoolingHierarchy(ctx, t, db)
+
+			subjects := subject.Resolver{Store: store.NewSubjectStore(db)}
+			appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+			body := mustJSON(t, map[string]string{"repo": "p1", "name": "worker", "prompt": "fix it"})
+			hc := daemon.HandlerCtx{
+				Ctx: ctx, Env: daemon.Envelope{Body: body},
+				Window: subject.Window{Session: "parent", ClaudePID: 4242},
+				Scope:  "/parent", Subjects: subjects, DB: db, Append: appendFn,
+			}
+
+			reply := handleSpawn(hc)
+			if !reply.OK {
+				t.Fatalf("reply not ok: %s", reply.Error)
+			}
+			if len(gotSpec.Command) < len(tc.wantHead) || !slices.Equal(gotSpec.Command[:len(tc.wantHead)], tc.wantHead) {
+				t.Fatalf("spawn command head = %v, want %v", gotSpec.Command, tc.wantHead)
+			}
+		})
+	}
+}
+
+// TestRespawnAgentPooling proves respawnAgent's resumeCommand argv reflects the
+// same claudeInvocation ccp/claude decision handleSpawn's claudeCommand does.
+func TestRespawnAgentPooling(t *testing.T) {
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	t.Setenv("HOME", t.TempDir())
+
+	for _, tc := range pooledLookupCases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldLookup := lookupPath
+			lookupPath = tc.lookup
+			t.Cleanup(func() { lookupPath = oldLookup })
+
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			tailers = newTestTailerManager(ctx)
+
+			var gotSpec backend.SpawnSpec
+			backend.Register(spawnBackend{spec: &gotSpec})
+
+			db := newTestDB(ctx, t)
+			spawnPoolingHierarchy(ctx, t, db)
+			ag := agentRow{
+				ID: "a1", SprintID: "s1", Backend: "spawntest", TerminalHandle: "term-0",
+				SessionID: "sess-1", Scope: "/tmp/alpha", Name: "worker",
+				Status: StatusActive, State: StateUnknown, CreatedAt: "t0",
+			}
+			mustInsertAgent(ctx, t, db, ag)
+
+			appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+			if _, err := respawnAgent(ctx, db, appendFn, ag); err != nil {
+				t.Fatalf("respawnAgent: %v", err)
+			}
+			if len(gotSpec.Command) < len(tc.wantHead) || !slices.Equal(gotSpec.Command[:len(tc.wantHead)], tc.wantHead) {
+				t.Fatalf("respawn command head = %v, want %v", gotSpec.Command, tc.wantHead)
+			}
+		})
+	}
+}
+
 // TestSpawnedPayloadTerminalKey guards the map→struct conversion of the
 // EventSpawned body: the "terminal" key must survive serialization even when the
 // agent has no terminal handle yet, proving the struct field carries no omitempty.
@@ -434,25 +626,6 @@ func TestSpawnedPayloadTerminalKey(t *testing.T) {
 			}
 		})
 	}
-}
-
-func contains(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
-}
-
-// flagValue returns the argument following the named flag in argv.
-func flagValue(argv []string, flag string) string {
-	for i, a := range argv {
-		if a == flag && i+1 < len(argv) {
-			return argv[i+1]
-		}
-	}
-	return ""
 }
 
 func keysOf(m map[string]*tailerCancel) []string {
