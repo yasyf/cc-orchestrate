@@ -3,7 +3,7 @@
 The concrete style rules for the Go in this repository. cc-orchestrate is a
 single Go CLI that consumes the [cc-interact](https://github.com/yasyf/cc-interact)
 framework, so these rules mirror cc-interact's own conventions — match that module
-when in doubt. Target the `go 1.26.2` toolchain (cc-interact's floor).
+when in doubt. Target the `go 1.26.5` toolchain (cc-interact's floor).
 
 ## Core Principles
 

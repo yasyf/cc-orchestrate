@@ -1,7 +1,7 @@
 # cc-orchestrate Development Guide
 
 Orchestrate fleets of Claude Code agents across pluggable backends. A single Go CLI
-(module `github.com/yasyf/cc-orchestrate`, `go 1.26.2`) built as a consumer of the
+(module `github.com/yasyf/cc-orchestrate`, `go 1.26.5`) built as a consumer of the
 [cc-interact](https://github.com/yasyf/cc-interact) framework: cc-interact brings the
 lazy daemon, append-only SQLite event log, HTTP/SSE plane, stdio MCP channel, and
 hook handlers; cc-orchestrate adds the repo → workstream → sprint → agent domain
@@ -16,10 +16,13 @@ cc-orchestrate/
 ├── main.go           # package main — thin entrypoint: builds orchestrate.Root() and executes it
 ├── orchestrate/      # composition root: cmd.Deps, daemon.New + domain ops, transcript tailer, cobra tree
 ├── backend/          # Backend interface, specs/handles, registry + precedence, the 5 drivers
+├── ptyhost/          # pty-host + terminal-grid capture: cgo libghostty-vt grid, pure-Go x/vt fallback
 ├── worktree/         # git/jj worktree helper: Add/Remove/UsesJJ/InitJJ/CurrentBranch
 ├── ccnotes/          # optional, gated cc-notes binding (workstream→project, sprint→sprint, agent→task)
-├── docs/             # brand assets (banner, logo, social preview)
-├── .github/          # GitHub Actions: CI (go vet + go test -race) and the GoReleaser release
+├── plugins/          # the cc-orchestrate Claude Code plugin (published via .claude-plugin/marketplace.json)
+├── scripts/          # build-libghostty.sh — native libghostty-vt build for the cgo path
+├── docs/             # brand assets + the GitHub Pages landing site (docs/site)
+├── .github/          # Actions: CI (build, integration, cgo, lint, vuln) and the GoReleaser release
 ├── AGENTS.md         # This file — shared conventions
 └── README.md         # Project overview
 ```

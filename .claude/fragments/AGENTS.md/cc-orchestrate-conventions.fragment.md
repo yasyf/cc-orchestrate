@@ -1,7 +1,11 @@
 ## Go Style
 
-Target the `go 1.26.2` toolchain (cc-interact's floor). Build and check with
-`go build ./...`, `go vet ./...`, and `go test -race ./...`.
+Target the `go 1.26.5` toolchain (cc-interact's floor). Quick local check:
+`CGO_ENABLED=0 go build ./...`, `CGO_ENABLED=0 go vet ./...`, and
+`CGO_ENABLED=0 go test ./...` — the pure-Go x/vt grid path. `-race` needs cgo,
+and a cgo build links libghostty-vt: run `scripts/build-libghostty.sh` once,
+then `PKG_CONFIG_PATH=$PWD/.libghostty/ghostty-native/share/pkgconfig
+go test -race ./...`. CI's `cgo` job covers that path on every push.
 
 **Flat packages, no `internal/`.** Mirror cc-interact: export what consumers need,
 hide helpers with lowercase identifiers and doc comments, not the compiler.
