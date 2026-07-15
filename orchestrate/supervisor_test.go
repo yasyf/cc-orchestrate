@@ -154,7 +154,7 @@ func TestSupervisorTick(t *testing.T) {
 	t.Run("vanish under budget re-spawns and increments", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 
 		var mu sync.Mutex
@@ -193,7 +193,7 @@ func TestSupervisorTick(t *testing.T) {
 	t.Run("at budget abandons then exits, no re-spawn", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 
 		var mu sync.Mutex
@@ -248,7 +248,7 @@ func TestSupervisorTick(t *testing.T) {
 	t.Run("non-enumerable backend is never supervised", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 
 		var mu sync.Mutex
@@ -284,7 +284,7 @@ func TestSupervisorTick(t *testing.T) {
 	t.Run("a kill racing a restart yields exactly one terminal outcome", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 
 		var mu sync.Mutex
@@ -334,7 +334,7 @@ func TestSupervisorTick(t *testing.T) {
 	t.Run("a kill racing a supervisor restart targets the fresh terminal", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 
 		var mu sync.Mutex
@@ -428,7 +428,7 @@ func TestTailerResetsRestartBudgetOnLiveHealthOnly(t *testing.T) {
 
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
-			tailers = newTailerManager(ctx)
+			tailers = newTestTailerManager(ctx)
 			db := newTestDB(ctx, t)
 			seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
 			mustInsertAgent(ctx, t, db, agentRow{
@@ -504,7 +504,7 @@ func TestSupervisorFirstRestartResetsBudgetViaTailer(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 	db := newTestDB(ctx, t)
 
 	var mu sync.Mutex
@@ -584,7 +584,7 @@ func TestSupervisorCrashLoopAbandonsAtBudget(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 	db := newTestDB(ctx, t)
 
 	var mu sync.Mutex
@@ -670,7 +670,7 @@ func TestSupervisorStaleness(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 
 		var mu sync.Mutex

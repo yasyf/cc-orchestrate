@@ -17,7 +17,7 @@ const channelNotifyMethod = "notifications/claude/channel"
 // the orchestrated agent uses to send progress, results, or questions back to its
 // orchestrator. The handler round-trips to the daemon via opReport because the
 // channel server is a separate stdio process and cannot Append directly.
-func channelTools(_ context.Context, session, scope string) ([]channel.Tool, string, error) {
+func channelTools(_ context.Context, session, scope string) ([]channel.Tool, string, string, error) {
 	client := newClient()
 	pid := os.Getpid()
 	report := channel.Tool{
@@ -44,5 +44,5 @@ func channelTools(_ context.Context, session, scope string) ([]channel.Tool, str
 			return string(reply.Body), false
 		},
 	}
-	return []channel.Tool{report}, channelNotifyMethod, nil
+	return []channel.Tool{report}, channelNotifyMethod, "", nil
 }

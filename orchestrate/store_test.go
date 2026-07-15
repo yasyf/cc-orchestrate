@@ -25,6 +25,12 @@ func newTestDB(ctx context.Context, t *testing.T) *sql.DB {
 	return db
 }
 
+func newTestTailerManager(ctx context.Context) *tailerManager {
+	return newTailerManager(ctx, func(fn func(context.Context)) {
+		go fn(ctx)
+	})
+}
+
 func TestRepoCRUD(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(ctx, t)

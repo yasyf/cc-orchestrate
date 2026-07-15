@@ -199,7 +199,7 @@ func TestTailerManagerEmitsInboundEvent(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	m := newTailerManager(ctx)
+	m := newTestTailerManager(ctx)
 	db := newTestDB(ctx, t)
 
 	var mu sync.Mutex
@@ -354,7 +354,7 @@ func TestFindTranscriptHomeError(t *testing.T) {
 // TestTailerManagerFinish proves a self-exited tailer drops its own entry but never
 // a successor that already replaced it under the same agent id.
 func TestTailerManagerFinish(t *testing.T) {
-	m := newTailerManager(context.Background())
+	m := newTestTailerManager(context.Background())
 
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()

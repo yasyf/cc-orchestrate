@@ -113,7 +113,6 @@ func TestAgentWatchObservesReport(t *testing.T) {
 		Paths:          appPaths(),
 		Version:        Version,
 		ActiveStatuses: []string{"active"},
-		WindowAlive:    func(int) bool { return true },
 		Migrate:        migrate,
 	})
 	if err != nil {
@@ -121,7 +120,7 @@ func TestAgentWatchObservesReport(t *testing.T) {
 	}
 	db := s.DB()
 
-	subjects := subject.Resolver{Store: store.NewSubjectStore(db, []string{"active"})}
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db)}
 	sub, _, err := subjects.Start(ctx, subject.Window{Session: "child-sid"}, "/work", "agent-child-sid", lifecycle, true)
 	if err != nil {
 		t.Fatalf("Start subject: %v", err)

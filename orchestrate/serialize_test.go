@@ -81,7 +81,7 @@ func TestSerializeRestoreRoundTrip(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 	db := newTestDB(ctx, t)
 	backend.Register(serializeTestBackend{})
 	seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
@@ -194,7 +194,7 @@ func TestRestoreIntoWipedDB(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 	db := newTestDB(ctx, t)
 	backend.Register(serializeTestBackend{})
 	if err := insertRepo(ctx, db, repoRow{
@@ -260,7 +260,7 @@ func TestSerializeWriteFailureAppendsNoEvent(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 	db := newTestDB(ctx, t)
 	backend.Register(serializeTestBackend{})
 	seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
@@ -310,7 +310,7 @@ func TestRestoreStrictParseFailsLoud(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
-			tailers = newTailerManager(ctx)
+			tailers = newTestTailerManager(ctx)
 			db := newTestDB(ctx, t)
 			backend.Register(serializeTestBackend{})
 			seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
@@ -343,7 +343,7 @@ func TestRestorePresentRowRewritesHandle(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 	db := newTestDB(ctx, t)
 	var killed []string
 	backend.Register(serializeTestBackend{killed: &killed})
@@ -405,7 +405,7 @@ func TestRestorePresentExitedRowReactivates(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 	db := newTestDB(ctx, t)
 	var killed []string
 	backend.Register(serializeTestBackend{killed: &killed})

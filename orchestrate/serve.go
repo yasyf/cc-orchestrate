@@ -53,14 +53,12 @@ var supervisorRunner *supervisor
 // orchestrate schema and the channel presence lifecycle, registers the domain
 // ops, then serves control RPCs until ctx is cancelled.
 func serve(ctx context.Context) error {
-	tailers = newTailerManager(ctx)
 	c := channel.Connectivity{}
 	s, err := daemon.New(daemon.Config{
 		AppName:        AppName,
 		Paths:          appPaths(),
 		Version:        Version,
 		ActiveStatuses: []string{string(StatusActive)},
-		WindowAlive:    func(int) bool { return true },
 		// c.Type() (not c.EventType) so the SSE plane filters the same presence
 		// type these hooks emit, correct even for the Connectivity zero value.
 		PresenceEventType: c.Type(),
@@ -71,6 +69,7 @@ func serve(ctx context.Context) error {
 		// tailer for every agent still active across the restart (the post-reconcile
 		// active set).
 		BootReconcile: func(ctx context.Context, s *daemon.Server) error {
+			tailers = newTailerManager(ctx, s.Background)
 			if err := c.BootReconcile(ctx, s); err != nil {
 				return err
 			}
@@ -92,7 +91,9 @@ func serve(ctx context.Context) error {
 			// Start the keep-alive supervisor only after the boot prune+resume has
 			// settled, on the daemon-lifetime ctx so it tears down on shutdown.
 			supervisorRunner = newSupervisor()
-			go supervisorRunner.run(ctx, db, s.Append)
+			s.Background(func(ctx context.Context) {
+				supervisorRunner.run(ctx, db, s.Append)
+			})
 			return nil
 		},
 	})
@@ -129,6 +130,7 @@ func serve(ctx context.Context) error {
 // spawned the agent.
 type tailerManager struct {
 	base     context.Context
+	launch   func(func(context.Context))
 	interval time.Duration
 	grace    time.Duration
 	mu       sync.Mutex
@@ -140,8 +142,8 @@ type tailerManager struct {
 // its own entry only, never a successor that already took its agent id.
 type tailerCancel struct{ cancel context.CancelFunc }
 
-func newTailerManager(ctx context.Context) *tailerManager {
-	return &tailerManager{base: ctx, interval: pollInterval, grace: probeGrace, cancels: map[string]*tailerCancel{}}
+func newTailerManager(ctx context.Context, launch func(func(context.Context))) *tailerManager {
+	return &tailerManager{base: ctx, launch: launch, interval: pollInterval, grace: probeGrace, cancels: map[string]*tailerCancel{}}
 }
 
 // start launches a background transcript tailer for an agent, persisting each
@@ -161,7 +163,7 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 	}
 	m.cancels[ag.ID] = tc
 	m.mu.Unlock()
-	go func() {
+	m.launch(func(context.Context) {
 		defer m.finish(ag.ID, tc)
 		// emit persists a derived Status to the row and mirrors it onto the subject
 		// log. Both the prober and the tailer's replay reach it; only the live tailer
@@ -208,7 +210,7 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 		if err != nil {
 			log.Printf("cc-orchestrate: tailer for agent %s stopped: %v", ag.ID, err)
 		}
-	}()
+	})
 }
 
 // stop cancels an agent's tailer and forgets it. It is a no-op for an agent with

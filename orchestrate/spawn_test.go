@@ -188,7 +188,7 @@ func TestTailerManagerStartStop(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	m := newTailerManager(ctx)
+	m := newTestTailerManager(ctx)
 	db := newTestDB(ctx, t)
 	noopAppend := func(context.Context, *event.Event) (int64, error) { return 0, nil }
 
@@ -260,7 +260,7 @@ func TestHandleSpawn(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 
 	var gotSpec backend.SpawnSpec
 	backend.Register(spawnBackend{spec: &gotSpec})
@@ -294,7 +294,7 @@ func TestHandleSpawn(t *testing.T) {
 		t.Fatalf("insertSprint: %v", err)
 	}
 
-	subjects := subject.Resolver{Store: store.NewSubjectStore(db, []string{"active"})}
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db)}
 	// Capture appended events under a mutex: the agent's transcript tailer runs in
 	// a background goroutine sharing this appendFn.
 	var mu sync.Mutex

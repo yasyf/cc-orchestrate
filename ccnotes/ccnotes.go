@@ -37,7 +37,7 @@ func CreateProject(ctx context.Context, repoRoot, name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cc-notes open %q: %w", repoRoot, err)
 	}
-	project, err := c.CreateProject(ctx, notes.ProjectSpec{Title: name})
+	project, _, err := c.CreateProject(ctx, notes.ProjectSpec{Title: name})
 	if err != nil {
 		return "", fmt.Errorf("cc-notes create project %q: %w", name, err)
 	}
@@ -51,7 +51,7 @@ func CreateSprint(ctx context.Context, repoRoot, projectID, name string) (string
 	if err != nil {
 		return "", fmt.Errorf("cc-notes open %q: %w", repoRoot, err)
 	}
-	sprint, err := c.CreateSprint(ctx, notes.SprintSpec{Title: name, Project: model.EntityID(projectID)})
+	sprint, _, err := c.CreateSprint(ctx, notes.SprintSpec{Title: name, Project: model.EntityID(projectID)})
 	if err != nil {
 		return "", fmt.Errorf("cc-notes create sprint %q: %w", name, err)
 	}
@@ -67,7 +67,7 @@ func CreateTask(ctx context.Context, repoRoot, name, branch, sprintID, projectID
 	if err != nil {
 		return "", fmt.Errorf("cc-notes open %q: %w", repoRoot, err)
 	}
-	task, err := c.CreateTask(ctx, notes.TaskSpec{
+	created, err := c.CreateTask(ctx, notes.TaskSpec{
 		Title:   name,
 		Branch:  model.Branch(branch),
 		Sprint:  model.EntityID(sprintID),
@@ -76,5 +76,8 @@ func CreateTask(ctx context.Context, repoRoot, name, branch, sprintID, projectID
 	if err != nil {
 		return "", fmt.Errorf("cc-notes create task %q: %w", name, err)
 	}
-	return string(task.ID), nil
+	if created.Degraded {
+		return "", fmt.Errorf("cc-notes degraded task %s to backlog (branch %q not honored)", created.Task.ID, branch)
+	}
+	return string(created.Task.ID), nil
 }

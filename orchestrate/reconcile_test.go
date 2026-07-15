@@ -123,7 +123,7 @@ func TestReconcile(t *testing.T) {
 	noopAppend := func(context.Context, *event.Event) (int64, error) { return 1, nil }
 
 	t.Run("present workstream and agent: no change", func(t *testing.T) {
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 		backend.Register(reconcileBackend{
 			projects:  []backend.WorkstreamHandle{{ID: "ws-1"}},
@@ -144,7 +144,7 @@ func TestReconcile(t *testing.T) {
 	})
 
 	t.Run("vanished workstream is killed and its agents exited", func(t *testing.T) {
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 		backend.Register(reconcileBackend{projects: nil, enumerate: true}) // ws-1 gone
 		seedWorkstream(ctx, t, db, "w1", "p1", "recontest", "ws-1")
@@ -163,7 +163,7 @@ func TestReconcile(t *testing.T) {
 	// supervisor share the reconcileVanished decision, so a vanished agent is never
 	// both pruned and restarted.
 	t.Run("vanished agent under budget is restarted", func(t *testing.T) {
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 		backend.Register(reconcileBackend{
 			projects:  []backend.WorkstreamHandle{{ID: "ws-1"}}, // workstream present
@@ -188,7 +188,7 @@ func TestReconcile(t *testing.T) {
 	// A vanished active agent at the restart budget is abandoned and terminally
 	// exited — the only path reconcileVanished still soft-exits.
 	t.Run("vanished agent at budget is abandoned and exited", func(t *testing.T) {
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 		backend.Register(reconcileBackend{
 			projects:  []backend.WorkstreamHandle{{ID: "ws-1"}},
@@ -215,7 +215,7 @@ func TestReconcile(t *testing.T) {
 	// The superset guarantee: an empty ListAgents from a backend that cannot
 	// enumerate must never be read as "all agents gone".
 	t.Run("agent survives when backend cannot enumerate", func(t *testing.T) {
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 		backend.Register(reconcileBackend{
 			projects:  []backend.WorkstreamHandle{{ID: "ws-1"}},
@@ -236,7 +236,7 @@ func TestReconcile(t *testing.T) {
 	})
 
 	t.Run("unknown backend is skipped without aborting boot", func(t *testing.T) {
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 		db := newTestDB(ctx, t)
 		seedWorkstream(ctx, t, db, "w2", "p2", "ghostbackend", "ws-2")
 		seedAgent(ctx, t, db, "a2", "w2", "ghostbackend", "term-2")

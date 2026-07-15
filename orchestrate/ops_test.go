@@ -404,7 +404,7 @@ func newFullDB(t *testing.T) *sql.DB {
 func TestHandleReport(t *testing.T) {
 	ctx := context.Background()
 	db := newFullDB(t)
-	subjects := subject.Resolver{Store: store.NewSubjectStore(db, []string{"active"})}
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db)}
 
 	// Create the child's subject keyed by its session id and scope, exactly as a
 	// spawn would. handleReport must resolve it from session + scope alone.
@@ -460,7 +460,7 @@ func TestHandleReport(t *testing.T) {
 func TestHandleReportNoSubject(t *testing.T) {
 	ctx := context.Background()
 	db := newFullDB(t)
-	subjects := subject.Resolver{Store: store.NewSubjectStore(db, []string{"active"})}
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db)}
 	appendFn := func(context.Context, *event.Event) (int64, error) {
 		t.Fatal("Append must not be called without a subject")
 		return 0, nil
@@ -789,7 +789,7 @@ func TestHandleRepoActivate(t *testing.T) {
 func TestHandleAgentKill(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 
 	db := newTestDB(ctx, t)
 	if err := insertWorkstream(ctx, db, workstreamRow{
@@ -908,7 +908,7 @@ func TestHandleAgentKill(t *testing.T) {
 func TestHandleRepoKill(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 
 	repo := gitRepo(ctx, t, "main")
 	wtPath, err := worktree.Add(ctx, repo, filepath.Join(t.TempDir(), "wt"), "feat-x")
@@ -1226,7 +1226,7 @@ func TestHandleWorkstreamKill(t *testing.T) {
 	t.Run("non-primary tears down the backend and removes its worktree", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 
 		repo := gitRepo(ctx, t, "main")
 		wtPath, err := worktree.Add(ctx, repo, filepath.Join(t.TempDir(), "feat"), "feat")
@@ -1292,7 +1292,7 @@ func TestHandleWorkstreamKill(t *testing.T) {
 	t.Run("primary never removes its worktree (the repo root)", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
-		tailers = newTailerManager(ctx)
+		tailers = newTestTailerManager(ctx)
 
 		repo := gitRepo(ctx, t, "main")
 		db := newTestDB(ctx, t)
@@ -1418,7 +1418,7 @@ func TestActivateResetsPrecedenceChain(t *testing.T) {
 func TestKillClearsActiveSelection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 
 	setup := func(t *testing.T) *sql.DB {
 		t.Helper()

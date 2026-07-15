@@ -100,7 +100,7 @@ func TestCCNotesDisabledSpawnLeavesTaskEmpty(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 
 	repo := gitRepo(ctx, t, "main")
 	if ccnotes.Enabled(ctx, repo) {
@@ -133,7 +133,7 @@ func TestCCNotesDisabledSpawnLeavesTaskEmpty(t *testing.T) {
 		t.Fatalf("insertSprint: %v", err)
 	}
 
-	subjects := subject.Resolver{Store: store.NewSubjectStore(db, []string{"active"})}
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db)}
 	appendFn := func(_ context.Context, _ *event.Event) (int64, error) { return 1, nil }
 	body := mustJSON(t, map[string]string{"repo": "p1", "name": "worker"})
 	hc := daemon.HandlerCtx{
@@ -171,7 +171,7 @@ func TestCCNotesSpawnFailureLeavesNoSubjectOrAgent(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	tailers = newTailerManager(ctx)
+	tailers = newTestTailerManager(ctx)
 
 	repo := gitRepo(ctx, t, "main")
 	// A ref under refs/cc-notes/ makes the repo look cc-notes-enabled.
@@ -211,7 +211,7 @@ func TestCCNotesSpawnFailureLeavesNoSubjectOrAgent(t *testing.T) {
 		t.Fatalf("insertSprint: %v", err)
 	}
 
-	subjects := subject.Resolver{Store: store.NewSubjectStore(db, []string{"active"})}
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db)}
 	appendFn := func(context.Context, *event.Event) (int64, error) {
 		t.Fatal("Append must not run when cc-notes fails before the subject is started")
 		return 0, nil

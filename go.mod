@@ -7,8 +7,8 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
-	github.com/yasyf/cc-interact v0.1.3
-	github.com/yasyf/cc-notes v0.7.0
+	github.com/yasyf/cc-interact v0.7.0
+	github.com/yasyf/cc-notes v0.31.1
 	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6
 	modernc.org/sqlite v1.52.0
 )
@@ -51,8 +51,8 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/crypto v0.50.0 // indirect
-	golang.org/x/net v0.53.0 // indirect
+	golang.org/x/crypto v0.53.0 // indirect
+	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
