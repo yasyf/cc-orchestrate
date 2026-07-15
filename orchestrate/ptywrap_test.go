@@ -37,7 +37,8 @@ func TestWrapForCapture(t *testing.T) {
 	t.Run("non-capturing wrap resolves claude under the pty-host", func(t *testing.T) {
 		bin := t.TempDir()
 		claudePath := filepath.Join(bin, "claude")
-		if err := os.WriteFile(claudePath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		//nolint:gosec // the fake claude must be executable for LookPath to resolve it
+		if err := os.WriteFile(claudePath, []byte("#!/bin/sh\n"), 0o700); err != nil {
 			t.Fatalf("write fake claude: %v", err)
 		}
 		t.Setenv("PATH", bin)
