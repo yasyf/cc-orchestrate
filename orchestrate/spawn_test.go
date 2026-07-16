@@ -19,34 +19,8 @@ import (
 	"github.com/yasyf/cc-interact/subject"
 
 	"github.com/yasyf/cc-orchestrate/backend"
+	"github.com/yasyf/cc-orchestrate/channelsetup"
 )
-
-func TestChildMCPConfig(t *testing.T) {
-	raw := childMCPConfig("/opt/cc-orchestrate", "sid-1", "/work/scope")
-
-	var got struct {
-		MCPServers map[string]mcpServer `json:"mcpServers"`
-	}
-	if err := json.Unmarshal([]byte(raw), &got); err != nil {
-		t.Fatalf("childMCPConfig produced invalid JSON: %v\n%s", err, raw)
-	}
-	srv, ok := got.MCPServers["cc-orchestrate"]
-	if !ok {
-		t.Fatalf("missing cc-orchestrate server in %s", raw)
-	}
-	if srv.Command != "/opt/cc-orchestrate" {
-		t.Errorf("command = %q, want /opt/cc-orchestrate", srv.Command)
-	}
-	want := []string{"channel", "--session", "sid-1", "--cwd", "/work/scope"}
-	if len(srv.Args) != len(want) {
-		t.Fatalf("args = %v, want %v", srv.Args, want)
-	}
-	for i := range want {
-		if srv.Args[i] != want[i] {
-			t.Fatalf("args = %v, want %v", srv.Args, want)
-		}
-	}
-}
 
 func TestChildSettings(t *testing.T) {
 	cases := []struct {
@@ -72,7 +46,8 @@ func TestChildSettings(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := childSettings(tc.self)
 			var got struct {
-				Hooks map[string][]hookMatcher `json:"hooks"`
+				Channels []string                 `json:"channels"`
+				Hooks    map[string][]hookMatcher `json:"hooks"`
 			}
 			if err := json.Unmarshal([]byte(raw), &got); err != nil {
 				t.Fatalf("childSettings produced invalid JSON: %v\n%s", err, raw)
@@ -95,6 +70,9 @@ func TestChildSettings(t *testing.T) {
 				guard[0].Hooks[0].Command != tc.wantGuard {
 				t.Errorf("PreToolUse hook = %+v, want command %q", guard[0].Hooks, tc.wantGuard)
 			}
+			if want := []string{channelsetup.ChannelID}; !slices.Equal(got.Channels, want) {
+				t.Errorf("channels = %v, want %v", got.Channels, want)
+			}
 		})
 	}
 }
@@ -115,8 +93,6 @@ func TestClaudeCommand(t *testing.T) {
 		want := []string{
 			"claude",
 			"--session-id", sid,
-			"--mcp-config", childMCPConfig(self, sid, scope),
-			"--strict-mcp-config",
 			"--settings", childSettings(self),
 			"--append-system-prompt", spawnBrief(self, sid, scope),
 			"fix the bug",
@@ -130,8 +106,6 @@ func TestClaudeCommand(t *testing.T) {
 		want := []string{
 			"claude",
 			"--session-id", sid,
-			"--mcp-config", childMCPConfig(self, sid, scope),
-			"--strict-mcp-config",
 			"--settings", childSettings(self),
 			"--append-system-prompt", spawnBrief(self, sid, scope),
 		}
@@ -155,8 +129,6 @@ func TestResumeCommand(t *testing.T) {
 	want := []string{
 		"claude",
 		"--resume", sid,
-		"--mcp-config", childMCPConfig(self, sid, scope),
-		"--strict-mcp-config",
 		"--settings", childSettings(self),
 		"--append-system-prompt", spawnBrief(self, sid, scope),
 	}
@@ -182,8 +154,6 @@ func TestPooledClaudeCommands(t *testing.T) {
 			want: []string{
 				"/opt/homebrew/bin/ccp", "run",
 				"--session-id", sid,
-				"--mcp-config", childMCPConfig(self, sid, scope),
-				"--strict-mcp-config",
 				"--settings", childSettings(self),
 				"--append-system-prompt", spawnBrief(self, sid, scope),
 				"fix the bug",
@@ -195,8 +165,6 @@ func TestPooledClaudeCommands(t *testing.T) {
 			want: []string{
 				"/opt/homebrew/bin/ccp", "run",
 				"--resume", sid,
-				"--mcp-config", childMCPConfig(self, sid, scope),
-				"--strict-mcp-config",
 				"--settings", childSettings(self),
 				"--append-system-prompt", spawnBrief(self, sid, scope),
 			},
@@ -229,21 +197,41 @@ func TestPooledClaudeCommands(t *testing.T) {
 
 func TestSpawnBrief(t *testing.T) {
 	brief := spawnBrief("/opt/cc-orchestrate", "sid-1", "/work")
-	if want := "/opt/cc-orchestrate watch --session sid-1 --cwd /work"; !strings.Contains(brief, want) {
-		t.Errorf("brief missing watch command %q:\n%s", want, brief)
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "watch command", want: "/opt/cc-orchestrate watch --session sid-1 --cwd /work"},
+		{name: "channel ack command", want: "/opt/cc-orchestrate channel-ack --session sid-1 --cwd /work"},
+		{name: "channel tag", want: `<channel source="cc-orchestrate">`},
+		{name: "directive event", want: "orchestrate.message"},
+		{name: "report tool", want: `"report"`},
+		{name: "message id dedupe", want: `Deduplicate by the message's "id" field`},
 	}
-	if !strings.Contains(brief, "orchestrate.message") {
-		t.Errorf("brief does not name the orchestrate.message event:\n%s", brief)
-	}
-	if !strings.Contains(brief, `"report"`) {
-		t.Errorf("brief does not mention the report tool:\n%s", brief)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(brief, tc.want) {
+				t.Errorf("brief missing %q:\n%s", tc.want, brief)
+			}
+		})
 	}
 }
 
 func TestSpawnBriefShellQuotesSpaces(t *testing.T) {
 	brief := spawnBrief("/Apps/My Tools/cc-orchestrate", "sid-1", "/my work")
-	if want := "'/Apps/My Tools/cc-orchestrate' watch --session sid-1 --cwd '/my work'"; !strings.Contains(brief, want) {
-		t.Errorf("brief missing shell-quoted watch command %q:\n%s", want, brief)
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "watch", want: "'/Apps/My Tools/cc-orchestrate' watch --session sid-1 --cwd '/my work'"},
+		{name: "channel ack", want: "'/Apps/My Tools/cc-orchestrate' channel-ack --session sid-1 --cwd '/my work'"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(brief, tc.want) {
+				t.Errorf("brief missing shell-quoted command %q:\n%s", tc.want, brief)
+			}
+		})
 	}
 }
 

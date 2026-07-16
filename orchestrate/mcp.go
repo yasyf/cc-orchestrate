@@ -20,7 +20,7 @@ import (
 // parent subscribes to live agent updates out of band via `agent watch` under a
 // Claude Code Monitor.
 func runMCP(ctx context.Context, in io.Reader, out io.Writer) error {
-	srv := channel.NewServer(channel.ServerInfo{Name: AppName, Version: Version}, mcpTools())
+	srv := channel.NewServer(channel.ServerInfo{Name: AppName, Version: buildVersion()}, mcpTools())
 	return srv.Serve(ctx, in, out)
 }
 

@@ -310,7 +310,6 @@ func TestFormatEventLine(t *testing.T) {
 		{"message", `{"type":"orchestrate.message","text":"go on"}`, "message   go on", false},
 		{"message multiline", `{"type":"orchestrate.message","text":"first\nsecond"}`, `message   first\nsecond`, true},
 		{"report", `{"type":"orchestrate.report","text":"halfway","state":"working"}`, "report    halfway state=working", false},
-		{"inbound", `{"type":"orchestrate.inbound","text":"hi"}`, "inbound   hi", false},
 		{"exited", `{"type":"orchestrate.exited"}`, "exited", false},
 		{"spawned", `{"type":"orchestrate.spawned","backend":"tmux","terminal":"t1"}`, "spawned   backend=tmux terminal=t1", false},
 		{"restarted", `{"type":"orchestrate.restarted","terminal":"t2","attempt":1}`, "restarted terminal=t2 attempt=1", false},

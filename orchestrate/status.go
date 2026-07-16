@@ -100,14 +100,12 @@ func newStatusAcc() *statusAcc {
 	return &statusAcc{pending: map[string]string{}, seenMsg: map[string]bool{}}
 }
 
-// feed parses one JSONL line and updates the accumulator, returning the inbound
-// instruction text when the line is a user turn carrying one (else ""). A line
-// that fails to parse, lives on a sidechain, or carries no message body is
-// silently skipped.
-func (a *statusAcc) feed(line []byte) string {
+// feed parses one JSONL line and updates the accumulator. A line that fails to
+// parse, lives on a sidechain, or carries no message body is silently skipped.
+func (a *statusAcc) feed(line []byte) {
 	var l transcriptLine
 	if json.Unmarshal(line, &l) != nil || l.IsSidechain || l.Message == nil {
-		return ""
+		return
 	}
 	switch l.Type {
 	case "assistant":
@@ -119,29 +117,7 @@ func (a *statusAcc) feed(line []byte) string {
 				delete(a.pending, b.ToolUseID)
 			}
 		}
-		return inboundText(l.Message.Content, blocks)
 	}
-	return ""
-}
-
-// inboundText returns the human/orchestrator instruction a user turn carries, or
-// "" when the turn is tool output. A plain-string content is the instruction; a
-// block array is one only when it carries text and no tool_result (tool results
-// are not instructions).
-func inboundText(content json.RawMessage, blocks []contentBlock) string {
-	if len(blocks) == 0 {
-		return rawString(content)
-	}
-	var texts []string
-	for _, b := range blocks {
-		if b.Type == "tool_result" {
-			return ""
-		}
-		if b.Type == "text" && b.Text != "" {
-			texts = append(texts, b.Text)
-		}
-	}
-	return strings.Join(texts, "\n")
 }
 
 func (a *statusAcc) feedAssistant(m *message) {

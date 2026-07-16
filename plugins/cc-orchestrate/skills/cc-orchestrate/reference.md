@@ -64,7 +64,7 @@ Precedence when none is pinned: **herd, superset, cmux, zellij, tmux** (first in
 | `cco agent spawn` | none | `--repo <r>` \| `--workstream <w>` \| `--sprint <s>`, `--name <n>`, `--cwd <dir>` (default: the workstream worktree), `--prompt <p>` | Spawn a child agent into a sprint. With only `--repo`, lands in its primary workstream's default sprint. Prints `agent`, `backend`, `terminal`. |
 | `cco agent list` | none | `--repo <r>`, `--status <s>` | List agents (`ID`, `NAME`, `SPRINT`, `BACKEND`, `STATE`, `STATUS`, `TOKENS`, `RESTARTS`, `ACTIVITY`). |
 | `cco agent show <id>` | exactly 1 | — | One agent's derived status (alias: `status`). |
-| `cco agent send-message <id> <text>` | exactly 2 | — | Send an instruction to a running agent. Prints `seq`, `transport`. |
+| `cco agent send-message <id> <text>` | exactly 2 | — | Send an instruction to a running agent over the event plane. Prints `seq`. |
 | `cco agent watch` | none | `--id <id>` \| `--all` (exactly one required) | Stream agent events, one formatted line each; `--json` restores the raw NDJSON (`--all` tags lines with `agent_id`). Runs under a Monitor. |
 | `cco agent kill <id>` | exactly 1 | — | Kill a running agent. |
 | `cco agent respawn [<id>]` | 0 or 1 | `--dead` (exactly one of arg/flag) | Revive one exited agent into its old session, or sweep every eligible exited agent. |
@@ -89,10 +89,18 @@ Precedence when none is pinned: **herd, superset, cmux, zellij, tmux** (first in
 `cco mcp` runs the MCP control server over stdio (no args). Register it in a parent
 session's `.mcp.json` to drive the fleet from another agent. See *MCP tools* below.
 
+### setup-channels — approve channel delivery (hidden)
+
+| Command | Flags | Description |
+|---|---|---|
+| `cco setup-channels` | `--check` (default), `--apply`, `--decline` | `--check` prints `{"offer": bool, "reason": "…"}`. `--apply` adds the cc-orchestrate plugin to Claude's managed channel allowlist (one-time macOS admin prompt) so spawned agents receive `<channel source="cc-orchestrate">` tags. `--decline` records the refusal so the offer is not repeated. |
+
 ## Substrate commands (cc-interact plane)
 
 The low-level event plane most workflows never touch directly. `--session` defaults to
-`cc-orchestrate` where it applies.
+`cc-orchestrate` where it applies; `cco channel` instead defaults to
+`$CLAUDE_CODE_SESSION_ID`, so the plugin's flagless invocation binds the hosting
+Claude session.
 
 | Command | Description |
 |---|---|
@@ -102,8 +110,8 @@ The low-level event plane most workflows never touch directly. `--session` defau
 | `cco watch` | Stream events from a session (`--session`, `--subject-id`, `--consumer`, `--exclude-origin`). |
 | `cco session record` | Record a transcript/events for a session (`--session`, `--output`). |
 | `cco guard-edit` | Edit a guard-style prompt (`--session`, `--name`, `--edit`). |
-| `cco channel` | Send a message over the channel (`--session`, `--subject-id`, `--text`, `--file`). |
-| `cco channel-ack` | Acknowledge a channel message (`--session`, `--subject-id`, `--seq`). |
+| `cco channel` | Run the channel MCP server over stdio (`--session`, default `$CLAUDE_CODE_SESSION_ID`; `--cwd`, default the current directory). Loaded into every session by the cc-orchestrate plugin; pushes the session's events as channel tags and serves the `report` tool. |
+| `cco channel-ack` | Prove the channel round trip when the first tag arrives (`--session`, `--cwd`). |
 
 ## MCP tools
 

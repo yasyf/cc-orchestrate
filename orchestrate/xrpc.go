@@ -312,7 +312,7 @@ func buildCatalog() map[string]any {
 	}
 	return map[string]any{
 		"app":     AppName,
-		"version": Version,
+		"version": buildVersion(),
 		"methods": entries,
 		"events": map[string]any{
 			"stream": "/events?session=fleet",

@@ -50,7 +50,7 @@ func serve(ctx context.Context) error {
 	s, err := daemon.New(daemon.Config{
 		AppName:        AppName,
 		Paths:          appPaths(),
-		Version:        Version,
+		Version:        buildVersion(),
 		ActiveStatuses: []string{string(StatusActive)},
 		// c.Type() (not c.EventType) so the SSE plane filters the same presence
 		// type these hooks emit, correct even for the Connectivity zero value.
@@ -181,16 +181,7 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 		// completion before the tailer, then the tailer's first real status overwrites
 		// the transient blocked state.
 		runProber(cctx, db, ag, emit, m.interval, m.grace)
-		err := runTailer(cctx, ag.SessionID, ag.Scope, m.interval, onStatus,
-			func(text string) error {
-				if text == ag.Prompt {
-					return nil // the spawn prompt is already recorded by EventSpawned
-				}
-				_, err := appendFn(cctx, &event.Event{
-					SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventInbound, Payload: inboundPayload(text),
-				})
-				return err
-			})
+		err := runTailer(cctx, ag.SessionID, ag.Scope, m.interval, onStatus)
 		if err != nil {
 			log.Printf("cc-orchestrate: tailer for agent %s stopped: %v", ag.ID, err)
 		}

@@ -6,9 +6,12 @@ package orchestrate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/yasyf/cc-interact/cmd"
 	"github.com/yasyf/cc-interact/daemon"
@@ -26,7 +29,35 @@ const (
 // Version is the binary's build version, advertised in the channel handshake. It is
 // a var (not const) so the release build can inject the tag via
 // -ldflags "-X github.com/yasyf/cc-orchestrate/orchestrate.Version=<tag>".
-var Version = "0.2.0-dev"
+var Version = "dev"
+
+// buildVersion makes dev builds win daemon eviction against releases and orders
+// dev builds by binary mtime (nanoseconds, so same-second rebuilds still evict)
+// without re-statting a replaced executable.
+var buildVersion = sync.OnceValue(func() string {
+	if Version != "dev" {
+		return resolveBuildVersion(Version, time.Time{}, false)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return resolveBuildVersion(Version, time.Time{}, false)
+	}
+	info, err := os.Stat(executable)
+	if err != nil {
+		return resolveBuildVersion(Version, time.Time{}, false)
+	}
+	return resolveBuildVersion(Version, info.ModTime(), true)
+})
+
+func resolveBuildVersion(stamped string, mtime time.Time, ok bool) string {
+	if stamped != "dev" {
+		return stamped
+	}
+	if !ok {
+		return "dev"
+	}
+	return fmt.Sprintf("9999.%d.0-dev", mtime.UnixNano())
+}
 
 // Domain event types appended to a subject's cc-interact event log.
 const (
@@ -35,7 +66,6 @@ const (
 	EventStatus  = "orchestrate.status"  // transcript-derived status update
 	EventMessage = "orchestrate.message" // orchestrator → agent message
 	EventReport  = "orchestrate.report"  // agent → orchestrator report
-	EventInbound = "orchestrate.inbound" // an inbound user turn observed on the transcript (audit; the child ignores it)
 
 	EventRestarted  = "orchestrate.restarted"  // supervisor/manual re-spawn of a vanished terminal (non-terminal)
 	EventAbandoned  = "orchestrate.abandoned"  // restart budget exhausted; precedes the terminal EventExited (non-terminal)
@@ -64,7 +94,7 @@ func worktreesBase() string { return filepath.Join(appPaths().StateDir(), "workt
 func newClient() *daemon.Client { return daemon.NewClient(appPaths().SocketPath()) }
 
 func launcher() daemon.Launcher {
-	return daemon.Launcher{Paths: appPaths(), Version: Version, Args: []string{"daemon"}}
+	return daemon.Launcher{Paths: appPaths(), Version: buildVersion(), Args: []string{"daemon"}}
 }
 
 // deps builds the substrate wiring every cc-interact command shares: the state
@@ -73,7 +103,7 @@ func launcher() daemon.Launcher {
 func deps() cmd.Deps {
 	return cmd.Deps{
 		Paths:                  appPaths(),
-		Version:                Version,
+		Version:                buildVersion(),
 		NewClient:              newClient,
 		EnsureCurrent:          func(context.Context) error { return launcher().EnsureCurrent(daemon.UpgradeTimeout) },
 		EnsureCurrentIfRunning: func() error { return launcher().EnsureCurrentIfRunning() },

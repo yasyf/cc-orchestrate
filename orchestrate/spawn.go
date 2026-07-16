@@ -19,6 +19,7 @@ import (
 
 	"github.com/yasyf/cc-orchestrate/backend"
 	"github.com/yasyf/cc-orchestrate/ccnotes"
+	"github.com/yasyf/cc-orchestrate/channelsetup"
 )
 
 // lifecycle is the subject lifecycle the orchestrator writes: a spawned agent's
@@ -33,13 +34,6 @@ var lookupPath = exec.LookPath
 // compensation path deterministically. A no-op in production.
 var spawnAfterInsert = func() {}
 
-// mcpServer is one entry of the child's --mcp-config: the orchestrate binary
-// re-invoked as the child's channel MCP server, scoped to its session and cwd.
-type mcpServer struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args"`
-}
-
 // hookCommand is one command hook in the child's --settings.
 type hookCommand struct {
 	Type    string `json:"type"`
@@ -52,23 +46,17 @@ type hookMatcher struct {
 	Hooks   []hookCommand `json:"hooks"`
 }
 
-// childMCPConfig is the child's --mcp-config: a single cc-orchestrate channel
-// server, this binary re-invoked with the child's session and scope.
-func childMCPConfig(self, sid, scope string) string {
-	b, _ := json.Marshal(map[string]map[string]mcpServer{
-		"mcpServers": {"cc-orchestrate": {Command: self, Args: []string{"channel", "--session", sid, "--cwd", scope}}},
-	})
-	return string(b)
-}
-
 // childSettings is the child's --settings: a SessionStart hook that records the
 // child's window for session-rotation rebind, and a PreToolUse edit gate over
-// the file-mutating tools. Both hooks re-invoke this binary, POSIX-shell-quoted
-// so any metacharacter in its path survives the hook runner's shell split.
+// the file-mutating tools. It also opts the child into the plugin-riding channel.
 func childSettings(self string) string {
 	q := backend.ShellQuote(self)
-	b, _ := json.Marshal(map[string]map[string][]hookMatcher{
-		"hooks": {
+	b, _ := json.Marshal(struct {
+		Channels []string                 `json:"channels"`
+		Hooks    map[string][]hookMatcher `json:"hooks"`
+	}{
+		Channels: []string{channelsetup.ChannelID},
+		Hooks: map[string][]hookMatcher{
 			"SessionStart": {{Hooks: []hookCommand{{Type: "command", Command: q + " session-record"}}}},
 			"PreToolUse":   {{Matcher: "Edit|Write|NotebookEdit", Hooks: []hookCommand{{Type: "command", Command: q + " guard-edit"}}}},
 		},
@@ -83,8 +71,6 @@ func childSettings(self string) string {
 func claudeCommand(self, sid, scope, prompt string) []string {
 	argv := append(claudeInvocation(),
 		"--session-id", sid,
-		"--mcp-config", childMCPConfig(self, sid, scope),
-		"--strict-mcp-config",
 		"--settings", childSettings(self),
 		"--append-system-prompt", spawnBrief(self, sid, scope),
 	)
@@ -103,8 +89,6 @@ func claudeCommand(self, sid, scope, prompt string) []string {
 func resumeCommand(self, sid, scope string) []string {
 	return append(claudeInvocation(),
 		"--resume", sid,
-		"--mcp-config", childMCPConfig(self, sid, scope),
-		"--strict-mcp-config",
 		"--settings", childSettings(self),
 		"--append-system-prompt", spawnBrief(self, sid, scope),
 	)
@@ -125,13 +109,23 @@ func claudeInvocation() []string {
 func spawnBrief(self, sid, scope string) string {
 	return fmt.Sprintf(`You are a cc-orchestrate agent: a Claude Code instance spawned and supervised by an orchestrator. Two channels connect you to it.
 
-RECEIVE: immediately, before doing anything else, arm a persistent Monitor running exactly this command and keep it running for your whole session:
+RECEIVE:
+1. Immediately, before doing anything else, arm a persistent Monitor running exactly this command:
 
     %s watch --session %s --cwd %s
 
-Each line it prints is one JSON event. An event whose type is "orchestrate.message" carries a new instruction from your orchestrator in its "text" field; treat that text as a directive and act on it.
+2. Messages may also arrive as <channel source="cc-orchestrate"> tags. On the FIRST such tag, run this command exactly once:
+
+    %s channel-ack --session %s --cwd %s
+
+Then stop the watch Monitor with TaskStop and rely on channel tags from then on.
+
+3. Delivery is at-least-once, and the watch and channel have independent cursors. Deduplicate by the message's "id" field: the same message may arrive on both paths around the switchover.
+
+4. Only "orchestrate.message" events are directives to act on. Their "text" field is an instruction from your orchestrator. The channel also pushes other event types, such as status frames; ignore them.
 
 REPORT: to send progress, a result, or a question back to your orchestrator, call the "report" tool from the cc-orchestrate MCP server with a short "text" and an optional "state" of "working", "blocked", or "done". Report when you start, when you finish, and whenever you are blocked or need a decision.`,
+		backend.ShellQuote(self), sid, backend.ShellQuote(scope),
 		backend.ShellQuote(self), sid, backend.ShellQuote(scope))
 }
 

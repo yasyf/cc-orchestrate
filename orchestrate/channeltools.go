@@ -13,6 +13,12 @@ import (
 // to a child agent's MCP channel.
 const channelNotifyMethod = "notifications/claude/channel"
 
+const channelInstructions = `This MCP server is the cc-orchestrate channel. Orchestrator directives arrive as <channel source="cc-orchestrate" type="..."> tags whose inner JSON has a "type" field identifying the event.
+
+An orchestrate.message event is a directive: its "text" field is an instruction from the orchestrator to act on. Other event types, such as status frames, are informational and need no reply.
+
+Outside an orchestrated child session the channel is silent, and silence needs nothing from you.`
+
 // channelTools advertises the child agent's one domain channel tool — report —
 // the orchestrated agent uses to send progress, results, or questions back to its
 // orchestrator. The handler round-trips to the daemon via cco.agent.report because the
@@ -44,5 +50,5 @@ func channelTools(_ context.Context, session, scope string) ([]channel.Tool, str
 			return string(reply.Body), false
 		},
 	}
-	return []channel.Tool{report}, channelNotifyMethod, "", nil
+	return []channel.Tool{report}, channelNotifyMethod, channelInstructions, nil
 }

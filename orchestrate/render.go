@@ -301,8 +301,6 @@ func formatEventLine(data string) string {
 		label, detail = "message", e.Text
 	case EventReport:
 		label, detail = "report", strings.TrimSpace(e.Text+kvState(e.State))
-	case EventInbound:
-		label, detail = "inbound", e.Text
 	case EventExited:
 		label = "exited"
 	case EventSpawned:

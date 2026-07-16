@@ -68,20 +68,17 @@ func findTranscript(sessionID string) (string, bool, error) {
 
 // runTailer waits for the session's transcript to appear, then tails it, calling
 // onStatus with the derived Status whenever it changes (identical consecutive
-// statuses are deduped) and onInbound with each user instruction turn observed
-// while live. It returns nil when ctx is cancelled and propagates a callback
-// error. scope is currently informational; interval is the poll cadence. The
-// baseline status is the empty accumulator's StateUnknown, which matches the
-// agents table default, so the first emission is the first meaningful change
-// rather than a redundant unknown.
+// statuses are deduped). It returns nil when ctx is cancelled and propagates a
+// callback error. scope is currently informational; interval is the poll cadence.
+// The baseline status is the empty accumulator's StateUnknown, which matches the
+// agents table default, so the first emission is the first meaningful change rather
+// than a redundant unknown.
 //
-// The transcript is replayed from the start on every (re)start to rebuild status,
-// so onInbound fires only for turns seen after the first read catches up to the
-// end — replayed historical turns are not re-emitted, which would otherwise
-// duplicate audit frames on every daemon restart. onStatus carries that same live
-// flag: false while replaying history, true once the first read has caught up, so a
-// consumer can tell a genuinely-new status from a replayed one.
-func runTailer(ctx context.Context, sessionID, _ string, interval time.Duration, onStatus func(Status, bool) error, onInbound func(string) error) error {
+// The transcript is replayed from the start on every (re)start to rebuild status.
+// onStatus carries a live flag: false while replaying history, true once the first
+// read has caught up, so a consumer can tell a genuinely-new status from a replayed
+// one.
+func runTailer(ctx context.Context, sessionID, _ string, interval time.Duration, onStatus func(Status, bool) error) error {
 	path, ok, err := waitForTranscript(ctx, sessionID, interval)
 	if err != nil {
 		return err
@@ -109,13 +106,8 @@ func runTailer(ctx context.Context, sessionID, _ string, interval time.Duration,
 			if i < 0 {
 				break
 			}
-			inbound := acc.feed(buf[:i])
+			acc.feed(buf[:i])
 			buf = buf[i+1:]
-			if live && inbound != "" {
-				if err := onInbound(inbound); err != nil {
-					return err
-				}
-			}
 		}
 		if cur := acc.status(); cur != last {
 			if err := onStatus(cur, live); err != nil {

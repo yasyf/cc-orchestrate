@@ -3,10 +3,8 @@ package backend
 import "testing"
 
 // TestCapsMatchSenderInterface enforces the invariant that a backend advertises
-// CanSendText exactly when it implements Sender. Without this, a capability could
-// promise a native path the driver cannot take (or a driver could grow a SendText
-// method nobody dispatches to), and the send dispatcher's
-// `Has(CanSendText) && bk.(Sender)` gate would silently fall back to the LCD.
+// CanSendText exactly when it implements Sender, so the startup prober never asks
+// a backend to answer a blocked prompt through a path its driver cannot take.
 func TestCapsMatchSenderInterface(t *testing.T) {
 	for name, b := range registry {
 		_, isSender := b.(Sender)

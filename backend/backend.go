@@ -74,7 +74,8 @@ type AgentHandle struct {
 type Capability uint
 
 const (
-	// CanSendText delivers a message by typing it into the agent's terminal.
+	// CanSendText lets the startup prober answer a blocking prompt by typing into
+	// the agent's terminal.
 	CanSendText Capability = 1 << iota
 	// CanCapture reads the agent terminal's screen/scrollback natively. A backend
 	// implements Capturer exactly when its Caps has CanCapture; the registry
@@ -122,11 +123,9 @@ type Backend interface {
 	Caps() Caps
 }
 
-// Sender is a Backend that can deliver a message by typing it into a running
-// agent's terminal, instead of routing it over the cc-interact event plane (the
-// LCD). A backend implements Sender exactly when its Caps has CanSendText; the
-// registry invariant test enforces that correspondence, so a capability never
-// advertises a path the driver cannot take.
+// Sender is a Backend whose startup prober can answer a blocking terminal prompt.
+// Messages to running agents travel over the cc-interact event plane. A backend
+// implements Sender exactly when its Caps has CanSendText.
 type Sender interface {
 	SendText(ctx context.Context, agent AgentHandle, text string) error
 }

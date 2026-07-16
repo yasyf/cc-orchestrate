@@ -6,6 +6,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Channel delivery: spawned agents receive orchestrator messages as
+  `<channel source="cc-orchestrate">` tags pushed by the plugin-loaded `cco channel`
+  MCP server, with the watch Monitor as the fallback until the agent's first
+  channel ack.
+- Hidden `cco setup-channels` (`--check`/`--apply`/`--decline`): one-time approval
+  that adds the plugin to Claude's managed channel allowlist via a macOS admin prompt.
+- The Claude Code plugin manifest now ships the channel MCP server (`mcpServers` +
+  `channels` entries), so children load the channel from the installed plugin.
+
+### Changed
+- `agent send-message` always appends to the event log; the reply is `{seq}` — the
+  `transport` field is gone from the CLI output, the MCP tool, and the XRPC
+  `cco.agent.sendMessage` result.
+- Spawned children run with the full user environment: `--mcp-config` and
+  `--strict-mcp-config` are dropped, and children opt into the channel via a
+  `channels` key in their `--settings`.
+
+### Removed
+- The native terminal-typing send path; backend `SendText` now serves only the
+  startup prober.
+- The `orchestrate.inbound` transcript-audit event.
+
+### Fixed
+- A rebuilt dev binary now evicts a stale running daemon: unstamped builds report
+  `9999.<binary-mtime>.0-dev`, which wins cc-interact's newest-wins eviction
+  (previously `0.2.0-dev` lost to any installed release, so the old daemon kept
+  serving old code until a manual `cco stop`).
+
 ## [0.3.0] - 2026-07-17
 
 ### Added

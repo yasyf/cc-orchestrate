@@ -98,8 +98,8 @@ func TestXRPCCatalog(t *testing.T) {
 	if cat.App != AppName {
 		t.Errorf("app = %q, want %q", cat.App, AppName)
 	}
-	if cat.Version == "" || cat.Version != Version {
-		t.Errorf("version = %q, want %q", cat.Version, Version)
+	if cat.Version == "" || cat.Version != buildVersion() {
+		t.Errorf("version = %q, want %q", cat.Version, buildVersion())
 	}
 	if cat.Events.Stream != "/events?session=fleet" {
 		t.Errorf("events.stream = %q, want /events?session=fleet", cat.Events.Stream)

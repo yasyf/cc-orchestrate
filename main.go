@@ -11,7 +11,6 @@ import (
 
 func main() {
 	root := orchestrate.Root()
-	root.Version = orchestrate.Version
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

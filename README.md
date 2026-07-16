@@ -162,7 +162,10 @@ cc-orchestrate adds repos, workstreams, sprints, agents, and the five backend dr
 on top. The one-worktree-per-workstream invariant holds no matter how a backend
 behaves. cc-orchestrate adopts the path superset reports or runs `git worktree add` itself under
 `~/.cc-orchestrate/worktrees/`, and colocates an independent jj repo on Jujutsu
-checkouts. The mechanics live in [AGENTS.md](AGENTS.md).
+checkouts. Messages ride the same event log: `agent send-message` appends an event
+that reaches the child as a Claude Code channel tag, with the child's watch Monitor
+as the fallback until its channel acks. A one-time `cco setup-channels --apply`
+approves the plugin channel. The mechanics live in [AGENTS.md](AGENTS.md).
 
 ## cc-notes integration
 

@@ -3,7 +3,9 @@ package orchestrate
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -110,14 +112,18 @@ func jsonStatus(st Status) json.RawMessage {
 }
 
 // messageEvent is the EventMessage body delivered over the LCD; Type discriminates
-// the frame for a stream consumer reading the SSE payload alone.
+// the frame. ID is the child's dedupe key — neither delivery path surfaces the
+// event-log seq, so the key rides inside the payload.
 type messageEvent struct {
 	Type string `json:"type"`
+	ID   string `json:"id"`
 	Text string `json:"text"`
 }
 
 func messagePayload(text string) json.RawMessage {
-	b, _ := json.Marshal(messageEvent{Type: EventMessage, Text: text})
+	var id [8]byte
+	_, _ = rand.Read(id[:]) // never fails as of go 1.24
+	b, _ := json.Marshal(messageEvent{Type: EventMessage, ID: hex.EncodeToString(id[:]), Text: text})
 	return b
 }
 
@@ -128,18 +134,6 @@ type exitedEvent struct {
 
 func exitedPayload() json.RawMessage {
 	b, _ := json.Marshal(exitedEvent{Type: EventExited})
-	return b
-}
-
-// inboundEvent is the EventInbound audit body the transcript tailer appends when a
-// typed turn lands; Type discriminates the frame.
-type inboundEvent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-func inboundPayload(text string) json.RawMessage {
-	b, _ := json.Marshal(inboundEvent{Type: EventInbound, Text: text})
 	return b
 }
 
@@ -248,24 +242,17 @@ func handleList(hc daemon.HandlerCtx, req agentListRequest) ([]agentView, error)
 	return views, nil
 }
 
-// handleSendMessage answers cco.agent.sendMessage: it delivers the text to the agent
-// natively when the backend can type into its terminal (CanSendText), else by
-// appending an OriginHuman EventMessage the agent's watch Monitor consumes (the
-// LCD). The native path writes no event-plane frame; the transcript tailer emits
-// an EventInbound audit frame when the typed turn lands.
-// agentSendMessageRequest delivers text to a running agent.
 type agentSendMessageRequest struct {
 	AgentID string `json:"agent_id"`
 	Text    string `json:"text"`
 }
 
-// agentSendMessageResult reports the delivery: the event-log seq on the LCD path (0
-// on the native path) and which transport carried it.
 type agentSendMessageResult struct {
-	Seq       int64  `json:"seq"`
-	Transport string `json:"transport"`
+	Seq int64 `json:"seq"`
 }
 
+// handleSendMessage answers cco.agent.sendMessage by appending the text to the
+// event log; the child receives it through its channel or watch.
 func handleSendMessage(hc daemon.HandlerCtx, req agentSendMessageRequest) (agentSendMessageResult, error) {
 	ag, err := getAgent(hc.Ctx, hc.DB, req.AgentID)
 	if err != nil {
@@ -274,56 +261,16 @@ func handleSendMessage(hc daemon.HandlerCtx, req agentSendMessageRequest) (agent
 	if ag.SubjectID == "" {
 		return agentSendMessageResult{}, opErr(codeConflict, fmt.Errorf("agent has no subject: %s", req.AgentID))
 	}
-	bk, ok := backend.Get(ag.Backend)
-	if !ok {
-		return agentSendMessageResult{}, opErr(codeUnsupported, fmt.Errorf("unknown backend: %s", ag.Backend))
-	}
-	native, seq, err := deliverMessage(hc, bk, ag, req.Text)
+	seq, err := hc.Append(hc.Ctx, &event.Event{
+		SubjectID: ag.SubjectID, Origin: event.OriginHuman, Type: EventMessage, Payload: messagePayload(req.Text),
+	})
 	if err != nil {
-		return agentSendMessageResult{}, err
+		return agentSendMessageResult{}, fmt.Errorf("appending agent message: %w", err)
 	}
 	fleetLog.emit(hc.Ctx, messageFrame(ag.ID))
-	return agentSendMessageResult{Seq: seq, Transport: transportLabel(native)}, nil
+	return agentSendMessageResult{Seq: seq}, nil
 }
 
-// deliverMessage routes a message to a running agent: natively when the backend is
-// a Sender advertising CanSendText (typing into the agent's terminal), else by
-// appending an OriginHuman EventMessage the agent's watch Monitor consumes (the
-// LCD). seq is the event-log sequence on the LCD path and 0 on the native path,
-// which writes no event-plane frame.
-//
-// A message containing a newline is always delivered over the LCD, even to a
-// native backend: typing it into a terminal would submit each line as its own
-// turn (and cmux reinterprets \t too), fragmenting the message. The LCD delivers
-// it whole as a single EventMessage.
-func deliverMessage(hc daemon.HandlerCtx, bk backend.Backend, ag agentRow, text string) (native bool, seq int64, err error) {
-	if s, ok := bk.(backend.Sender); ok && bk.Caps().Has(backend.CanSendText) && !strings.ContainsAny(text, "\n\r") {
-		handle, err := backendAgentHandle(hc.Ctx, hc.DB, ag)
-		if err != nil {
-			return true, 0, err
-		}
-		if err := s.SendText(hc.Ctx, handle, text); err != nil {
-			return true, 0, err
-		}
-		return true, 0, nil
-	}
-	seq, err = hc.Append(hc.Ctx, &event.Event{
-		SubjectID: ag.SubjectID, Origin: event.OriginHuman, Type: EventMessage, Payload: messagePayload(text),
-	})
-	return false, seq, err
-}
-
-// transportLabel names the delivery path on the send-message reply, so a caller
-// (and the tests) can tell native typing from an event-plane append.
-func transportLabel(native bool) string {
-	if native {
-		return "native"
-	}
-	return "event"
-}
-
-// reportRequest is the agent-report inbound request body an agent's report tool
-// sends: the agent's message and its optional run state.
 type reportRequest struct {
 	Text  string `json:"text"`
 	State string `json:"state,omitempty"`

@@ -13,6 +13,23 @@ From source, use `go run .` or `./cc-orchestrate`. This skill uses `cco`.
 For the exhaustive command/flag table and the full MCP tool list, read
 `reference.md` beside this file.
 
+## First-time setup
+
+Before the first agent spawn, check whether channel delivery needs approval:
+
+```bash
+cco setup-channels
+```
+
+If it prints `"offer": true`, ask the user via **AskUserQuestion** whether to enable
+cc-orchestrate channel delivery. Explain that enabling it triggers a one-time admin
+prompt to add the plugin to Claude's managed channel allowlist.
+
+- If yes, run `cco setup-channels --apply`.
+- If no, run `cco setup-channels --decline`.
+
+If `offer` is false, skip the question silently.
+
 ## The model
 
 A four-level tree; each level nests in the one above:
@@ -88,8 +105,10 @@ Everything rides an event plane, not the terminal:
 
 - **Status** is derived by tailing each agent's transcript
   (`~/.claude/projects/**/<session-id>.jsonl`); `agent status` / `agent list` read it.
-- **Orchestrator to agent** rides the agent's watch Monitor: `agent send-message`
-  reaches the child as a new instruction.
+- **Orchestrator to agent**: `agent send-message` appends the instruction to the
+  agent's event log. The agent receives it as a `<channel source="cc-orchestrate">`
+  tag (approved once in First-time setup), and over its `watch` Monitor as the
+  fallback until its first channel ack.
 - **Agent to orchestrator** rides the `report` MCP tool wired into every spawned agent;
   the child calls it to report progress, a result, or a question.
 

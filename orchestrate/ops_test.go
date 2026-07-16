@@ -123,46 +123,6 @@ func (b opBackend) KillWorkstream(_ context.Context, project backend.WorkstreamH
 }
 func (opBackend) Caps() backend.Caps { return backend.Caps{} }
 
-// sendBackend is a registered test backend that advertises CanSendText and
-// implements Sender, recording the native SendText call so the dispatcher's
-// native path can be exercised without a live CLI. Its name is outside
-// backend.Precedence.
-type sendBackend struct {
-	sentTo   *backend.AgentHandle
-	sentText *string
-}
-
-func (sendBackend) Name() backend.Name                { return "sendtest" }
-func (sendBackend) Available() bool                   { return true }
-func (sendBackend) EnsureReady(context.Context) error { return nil }
-func (sendBackend) ListWorkstreams(context.Context) ([]backend.WorkstreamHandle, error) {
-	return nil, nil
-}
-
-func (sendBackend) CreateWorkstream(context.Context, backend.WorkstreamSpec) (backend.WorkstreamHandle, error) {
-	return backend.WorkstreamHandle{}, nil
-}
-
-func (sendBackend) Spawn(context.Context, backend.SpawnSpec) (backend.AgentHandle, error) {
-	return backend.AgentHandle{}, nil
-}
-
-func (sendBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
-	return nil, nil
-}
-func (sendBackend) Kill(context.Context, backend.AgentHandle) error                { return nil }
-func (sendBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error { return nil }
-func (sendBackend) Caps() backend.Caps                                             { return backend.Capabilities(backend.CanSendText) }
-func (b sendBackend) SendText(_ context.Context, agent backend.AgentHandle, text string) error {
-	if b.sentTo != nil {
-		*b.sentTo = agent
-	}
-	if b.sentText != nil {
-		*b.sentText = text
-	}
-	return nil
-}
-
 // TestResolveBackend covers the explicit, persisted-selection, and unknown-name
 // branches; the no-selection backend.Select() fallback depends on which runtimes
 // are installed, so it is exercised by the spawn-smoke and integration paths.
@@ -224,11 +184,9 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
-// TestHandleSendMessage covers the LCD path: a backend without CanSendText
-// (optest) delivers by appending an OriginHuman EventMessage to the subject log.
+// TestHandleSendMessage covers event-plane delivery to the subject log.
 func TestHandleSendMessage(t *testing.T) {
 	ctx := context.Background()
-	backend.Register(opBackend{}) // "optest": no Sender, no CanSendText → LCD
 	db := newTestDB(ctx, t)
 	mustInsertAgent(ctx, t, db, agentRow{
 		ID: "a1", SprintID: "s1", Backend: "optest", Scope: "/s",
@@ -259,119 +217,24 @@ func TestHandleSendMessage(t *testing.T) {
 	}
 	var pl struct {
 		Type string `json:"type"`
+		ID   string `json:"id"`
 		Text string `json:"text"`
 	}
 	if err := json.Unmarshal(captured.Payload, &pl); err != nil || pl.Type != EventMessage || pl.Text != "hello" {
 		t.Errorf("payload = %s, want type=%s text=hello (err %v)", captured.Payload, EventMessage, err)
 	}
-	var rb struct {
-		Seq int64 `json:"seq"`
+	if pl.ID == "" {
+		t.Errorf("payload = %s, want a non-empty dedupe id", captured.Payload)
 	}
-	if err := json.Unmarshal(reply.Body, &rb); err != nil || rb.Seq != 7 {
-		t.Errorf("reply body = %s, want seq=7 (err %v)", reply.Body, err)
-	}
-}
-
-// TestHandleSendMessageNative covers the native path: a Sender advertising
-// CanSendText delivers by typing into the agent's terminal, writes no event-plane
-// frame, and reports transport=native. The handle carries the workstream's backend
-// WorkspaceHandle, not the orchestrate workstream id.
-func TestHandleSendMessageNative(t *testing.T) {
-	ctx := context.Background()
-	var sentTo backend.AgentHandle
-	var sentText string
-	backend.Register(sendBackend{sentTo: &sentTo, sentText: &sentText})
-
-	db := newTestDB(ctx, t)
-	if err := insertWorkstream(ctx, db, workstreamRow{
-		ID: "w1", RepoID: "p1", Name: "main", Backend: "sendtest", WorkspaceHandle: "ws-1",
-		Branch: "main", Worktree: "/s", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
-	}); err != nil {
-		t.Fatalf("insertWorkstream: %v", err)
-	}
-	if err := insertSprint(ctx, db, sprintRow{
-		ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0",
-	}); err != nil {
-		t.Fatalf("insertSprint: %v", err)
-	}
-	mustInsertAgent(ctx, t, db, agentRow{
-		ID: "a1", SprintID: "s1", Backend: "sendtest", TerminalHandle: "term-1",
-		SessionID: "sess-1", Scope: "/s", Name: "worker", SubjectID: "subj-1",
-		Status: StatusActive, State: StateUnknown, CreatedAt: "t0",
-	})
-
-	appendFn := func(context.Context, *event.Event) (int64, error) {
-		t.Fatal("native send must not append to the event plane")
-		return 0, nil
-	}
-	body := mustJSON(t, map[string]string{"agent_id": "a1", "text": "hello"})
-	reply := runTyped(handleSendMessage, opCtx(db, body, appendFn))
-	if !reply.OK {
-		t.Fatalf("reply not ok: %s", reply.Error)
-	}
-
-	wantHandle := backend.AgentHandle{Backend: "sendtest", ID: "term-1", WorkstreamID: "ws-1", Name: "worker", SessionID: "sess-1"}
-	if sentTo != wantHandle {
-		t.Fatalf("SendText handle = %+v, want %+v", sentTo, wantHandle)
-	}
-	if sentText != "hello" {
-		t.Fatalf("SendText text = %q, want hello", sentText)
-	}
-
-	var rb struct {
-		Seq       int64  `json:"seq"`
-		Transport string `json:"transport"`
-	}
+	var rb map[string]any
 	if err := json.Unmarshal(reply.Body, &rb); err != nil {
 		t.Fatal(err)
 	}
-	if rb.Transport != "native" || rb.Seq != 0 {
-		t.Fatalf("reply = %+v, want transport=native seq=0", rb)
+	if rb["seq"] != float64(7) {
+		t.Errorf("reply body = %s, want seq=7", reply.Body)
 	}
-}
-
-// TestHandleSendMessageMultilineUsesLCD proves a multi-line message is delivered
-// over the event plane even when the backend can send natively: typing it would
-// submit each line as its own turn.
-func TestHandleSendMessageMultilineUsesLCD(t *testing.T) {
-	ctx := context.Background()
-	var sentText string
-	backend.Register(sendBackend{sentText: &sentText})
-
-	db := newTestDB(ctx, t)
-	if err := insertWorkstream(ctx, db, workstreamRow{
-		ID: "w1", RepoID: "p1", Name: "main", Backend: "sendtest", WorkspaceHandle: "ws-1",
-		Branch: "main", Worktree: "/s", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
-	}); err != nil {
-		t.Fatalf("insertWorkstream: %v", err)
-	}
-	mustInsertAgent(ctx, t, db, agentRow{
-		ID: "a1", SprintID: "s1", Backend: "sendtest", TerminalHandle: "term-1",
-		SessionID: "sess-1", Scope: "/s", SubjectID: "subj-1",
-		Status: StatusActive, State: StateUnknown, CreatedAt: "t0",
-	})
-
-	var captured *event.Event
-	appendFn := func(_ context.Context, e *event.Event) (int64, error) {
-		captured = e
-		return 3, nil
-	}
-	body := mustJSON(t, map[string]string{"agent_id": "a1", "text": "line one\nline two"})
-	reply := runTyped(handleSendMessage, opCtx(db, body, appendFn))
-	if !reply.OK {
-		t.Fatalf("reply not ok: %s", reply.Error)
-	}
-	if sentText != "" {
-		t.Fatalf("SendText was called with %q; multi-line must not go native", sentText)
-	}
-	if captured == nil || captured.Type != EventMessage {
-		t.Fatalf("multi-line message was not appended as an EventMessage: %+v", captured)
-	}
-	var rb struct {
-		Transport string `json:"transport"`
-	}
-	if err := json.Unmarshal(reply.Body, &rb); err != nil || rb.Transport != "event" {
-		t.Fatalf("reply = %s, want transport=event (err %v)", reply.Body, err)
+	if _, ok := rb["transport"]; ok {
+		t.Errorf("reply body = %s, want no transport key", reply.Body)
 	}
 }
 

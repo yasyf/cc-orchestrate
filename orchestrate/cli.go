@@ -39,6 +39,7 @@ func Root() *cobra.Command {
 	r := &cobra.Command{
 		Use:           AppName,
 		Short:         "Orchestrate fleets of Claude Code agents across pluggable backends",
+		Version:       buildVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -51,7 +52,7 @@ func Root() *cobra.Command {
 		cmd.SessionRecordCmd(d),
 		cmd.GuardEditCmd(d),
 		withSessionDefault(cmd.ChannelAckCmd(d)),
-		withSessionDefault(cmd.ChannelCmd(d)),
+		cmd.ChannelCmd(d),
 		ptyHostCmd(),
 		scrubExecCmd(),
 		backendsCmd(),
@@ -64,6 +65,7 @@ func Root() *cobra.Command {
 		serializeCmd(),
 		restoreCmd(),
 		mcpCmd(),
+		setupChannelsCmd(),
 	)
 	return r
 }
@@ -742,10 +744,6 @@ func agentCmd() *cobra.Command {
 		RunE: func(c *cobra.Command, args []string) error {
 			return runRender(c, mAgentSendMessage, map[string]string{"agent_id": args[0], "text": args[1]},
 				func(w io.Writer, out agentSendMessageResult) error {
-					if out.Transport == "native" {
-						_, err := fmt.Fprintf(w, "sent to %s (native)\n", args[0])
-						return err
-					}
 					_, err := fmt.Fprintf(w, "sent to %s (seq %d)\n", args[0], out.Seq)
 					return err
 				})

@@ -191,7 +191,7 @@ var (
 	mAgentSpawn       = procedure("cco.agent.spawn", "Spawn a child Claude Code agent into a sprint, a workstream's or repo's default sprint, or the active sprint. An empty prompt starts the agent idle and interactive; API callers normally pass one.", full, handleSpawn)
 	mAgentList        = query("cco.agent.list", "List agents and their derived status, optionally filtered by repo.", full, handleList)
 	mAgentShow        = query("cco.agent.show", "Show one agent's derived status.", full, handleStatus)
-	mAgentSendMessage = procedure("cco.agent.sendMessage", "Send a message (a new instruction) to a running agent.", full, handleSendMessage)
+	mAgentSendMessage = procedure("cco.agent.sendMessage", "Append a message to an agent's event log for delivery through its channel or watch.", full, handleSendMessage)
 	mAgentKill        = procedure("cco.agent.kill", "Kill a running agent.", full, handleAgentKill)
 	mAgentRespawn     = procedure("cco.agent.respawn", "Respawn one exited agent, or every eligible exited agent when dead is set, back into its existing session.", full, handleAgentRespawn)
 	mAgentCapture     = query("cco.agent.capture", "Capture an active agent's current terminal screen.", full, handleAgentCapture)

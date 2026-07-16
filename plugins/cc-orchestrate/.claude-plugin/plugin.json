@@ -10,5 +10,17 @@
   "homepage": "https://github.com/yasyf/cc-orchestrate",
   "repository": "https://github.com/yasyf/cc-orchestrate",
   "license": "PolyForm-Noncommercial-1.0.0",
+  "mcpServers": {
+    "cc-orchestrate": {
+      "command": "cco",
+      "args": ["channel"]
+    }
+  },
+  "channels": [
+    {
+      "server": "cc-orchestrate",
+      "displayName": "cc-orchestrate"
+    }
+  ],
   "keywords": ["cc-orchestrate", "claude-code", "agents", "orchestration", "fleet"]
 }
