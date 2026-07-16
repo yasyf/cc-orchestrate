@@ -57,7 +57,3 @@ See STYLEGUIDE.md § Error Handling.
 **Testing.** Go tests live next to the code as `*_test.go`; run `go test -race ./...` from the repo root. Use table-driven tests with `t.Run` subtests and strict assertions. Stub `os/exec` for backend-driver tests so a driver asserts the argv it builds without the real binary; store and tailer tests run against a real ephemeral on-disk SQLite, not a mock. The full spawn → status → message → kill loop gets a real-`tmux` integration test.
 
 **Writing docs.** When writing or revising docs, a README, a tutorial, a how-to, or reference, use the `writing-docs` skill (Diataxis modes, voice rules, and runnable code-sample rules) and run `slop-cop check <file> --lang=markdown` before you finish.
-
-**Git.** Commits should be atomic and scoped. One logical change per commit.
-
-**Releases.** Tagging `v*` triggers the GoReleaser release workflow in `.github/`, which builds the cross-platform binaries (darwin/linux × arm64/amd64), publishes a GitHub release, and updates the Homebrew tap. The version comes from the tag, and the release runs only against a merged commit on `main` — tag `origin/main`, not a feature branch.

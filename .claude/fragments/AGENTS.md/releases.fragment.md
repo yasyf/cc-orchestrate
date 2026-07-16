@@ -1,0 +1,1 @@
+**Releases.** Tagging `v*` triggers the GoReleaser release workflow in `.github/`, which builds the cross-platform binaries (darwin/linux × arm64/amd64), publishes a GitHub release, and updates the Homebrew tap. The version comes from the tag, and the release runs only against a merged commit on `main` — tag `origin/main`, not a feature branch.
