@@ -123,6 +123,57 @@ func TestCurrentBranch(t *testing.T) {
 	})
 }
 
+func TestRemoveDirIfEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		setup      func(t *testing.T, dir string)
+		wantExists bool
+	}{
+		{
+			name: "removes parent after its last child is removed",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				child := filepath.Join(dir, "last-worktree")
+				if err := os.MkdirAll(child, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(child); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "leaves a non-empty parent alone",
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(dir, "remaining-worktree"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantExists: true,
+		},
+		{
+			name:  "absent parent is a no-op",
+			setup: func(*testing.T, string) {},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "repo-worktrees")
+			tc.setup(t, dir)
+			if err := RemoveDirIfEmpty(dir); err != nil {
+				t.Fatalf("RemoveDirIfEmpty: %v", err)
+			}
+			_, err := os.Stat(dir)
+			if tc.wantExists && err != nil {
+				t.Fatalf("worktree parent should remain: %v", err)
+			}
+			if !tc.wantExists && !os.IsNotExist(err) {
+				t.Fatalf("worktree parent should be absent: %v", err)
+			}
+		})
+	}
+}
+
 func initGitRepo(ctx context.Context, t *testing.T, dir string) {
 	t.Helper()
 	mustRun(ctx, t, dir, "git", "init")

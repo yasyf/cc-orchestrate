@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 )
@@ -130,11 +131,6 @@ func TestZellijArgv(t *testing.T) {
 			},
 			want: []string{"zellij", "--session", "proj-1", "action", "dump-screen", "--pane-id", "terminal_1"},
 		},
-		{
-			name: "KillWorkstream",
-			call: func(b zellij) error { return b.KillWorkstream(ctx, project) },
-			want: []string{"zellij", "kill-session", "proj-1"},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -243,6 +239,85 @@ func TestZellijAgentAlive(t *testing.T) {
 			got := append([]string{(*calls)[0].name}, (*calls)[0].args...)
 			if !slices.Equal(got, want) {
 				t.Fatalf("argv = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// seqRecorder replays per-call output and error in order, so a method issuing several
+// zellij calls can be asserted call by call.
+func seqRecorder(outs []string, errs []error) (*[]recordedCall, runner) {
+	calls := &[]recordedCall{}
+	r := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		i := len(*calls)
+		*calls = append(*calls, recordedCall{name: name, args: args})
+		out := ""
+		if i < len(outs) {
+			out = outs[i]
+		}
+		var err error
+		if i < len(errs) {
+			err = errs[i]
+		}
+		return []byte(out), err
+	}
+	return calls, r
+}
+
+// TestZellijKillWorkstream asserts the conditional cleanup: kill-session always runs,
+// then delete-session --force runs only when the session still appears in an
+// exact-name list-sessions match — a fresh session that kill-session dropped is left
+// alone, while a lingering EXITED stub is force-deleted.
+func TestZellijKillWorkstream(t *testing.T) {
+	ctx := context.Background()
+	killCall := []string{"zellij", "kill-session", "proj-1"}
+	listCall := []string{"zellij", "list-sessions", "--no-formatting", "--short"}
+	for _, tc := range []struct {
+		name    string
+		outs    []string
+		errs    []error
+		wantErr bool
+		want    [][]string
+	}{
+		{
+			name: "fresh session vanishes so no delete-session",
+			// list after kill has near-miss names but not the exact session.
+			outs: []string{"", "proj-10\nproj-1-sub\nother\n"},
+			want: [][]string{killCall, listCall},
+		},
+		{
+			name: "lingering stub still listed gets delete-session --force",
+			outs: []string{"", "other\nproj-1\n"},
+			want: [][]string{killCall, listCall, {"zellij", "delete-session", "--force", "proj-1"}},
+		},
+		{
+			name:    "kill-session failure aborts before listing",
+			errs:    []error{errors.New("no such session")},
+			wantErr: true,
+			want:    [][]string{killCall},
+		},
+		{
+			name:    "list failure after kill surfaces as an error",
+			outs:    []string{"", ""},
+			errs:    []error{nil, errors.New("daemon unreachable")},
+			wantErr: true,
+			want:    [][]string{killCall, listCall},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls, r := seqRecorder(tc.outs, tc.errs)
+			err := zellij{run: r}.KillWorkstream(ctx, WorkstreamHandle{Backend: "zellij", ID: "proj-1", Name: "Proj 1"})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %t", err, tc.wantErr)
+			}
+			if len(*calls) != len(tc.want) {
+				t.Fatalf("calls = %v, want %v", *calls, tc.want)
+			}
+			for i := range tc.want {
+				got := append([]string{(*calls)[i].name}, (*calls)[i].args...)
+				if !slices.Equal(got, tc.want[i]) {
+					t.Fatalf("call %d = %v, want %v", i, got, tc.want[i])
+				}
 			}
 		})
 	}

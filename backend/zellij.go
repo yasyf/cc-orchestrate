@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -108,8 +109,23 @@ func (b zellij) Kill(ctx context.Context, agent AgentHandle) error {
 	return err
 }
 
+// KillWorkstream ends the zellij session. kill-session terminates a live session and,
+// for a fresh never-resurrected session, drops it entirely, so it vanishes from
+// list-sessions and needs no delete-session. A session with saved state instead leaves
+// an EXITED stub that lingers in list-sessions; a delete-session --force clears that
+// stub, but only when the session still appears after kill-session.
 func (b zellij) KillWorkstream(ctx context.Context, workstream WorkstreamHandle) error {
-	_, err := b.run(ctx, zellijBin, "kill-session", workstream.ID)
+	if _, err := b.run(ctx, zellijBin, "kill-session", workstream.ID); err != nil {
+		return err
+	}
+	out, err := b.run(ctx, zellijBin, "list-sessions", "--no-formatting", "--short")
+	if err != nil {
+		return fmt.Errorf("zellij: list sessions after kill %q: %w", workstream.ID, err)
+	}
+	if !slices.Contains(nonEmptyLines(out), workstream.ID) {
+		return nil
+	}
+	_, err = b.run(ctx, zellijBin, "delete-session", "--force", workstream.ID)
 	return err
 }
 

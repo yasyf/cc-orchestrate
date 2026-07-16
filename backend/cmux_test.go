@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,33 +19,58 @@ type cmuxCall struct {
 	args []string
 }
 
-// cmuxFakeRunner is a runner stub: it records every call and returns the next
-// queued (real, captured) output in order.
+// cmuxFakeRunner is a runner stub: it records every call and replays per-call
+// (real, captured) output and error in order. A short outputs/errs slice yields nil
+// for the trailing calls, so a success run needs no error entries.
 type cmuxFakeRunner struct {
 	calls   []cmuxCall
 	outputs [][]byte
+	errs    []error
 }
 
 func (f *cmuxFakeRunner) run(_ context.Context, name string, args ...string) ([]byte, error) {
-	out := f.outputs[len(f.calls)]
+	i := len(f.calls)
 	f.calls = append(f.calls, cmuxCall{name: name, args: args})
-	return out, nil
+	var out []byte
+	if i < len(f.outputs) {
+		out = f.outputs[i]
+	}
+	var err error
+	if i < len(f.errs) {
+		err = f.errs[i]
+	}
+	return out, err
 }
 
-// Real captured `cmux list-workspaces --json` output (default ref id-format).
-const cmuxWorkspacesJSON = `{
+// The workspace and surface UUIDs below are captured live from cmux (workspace
+// create + new-pane under --id-format uuids); the throwaway probe workspace was
+// closed afterward, and bioqa is a pre-existing workspace left untouched.
+const (
+	cmuxWSUUID    = "6C9AFD15-F200-4AF9-A655-F2FA55848728"
+	cmuxBioqaUUID = "54A8AD1A-E06C-48B9-813D-93456A339D32"
+	cmuxSurfShell = "016506FB-AEBE-418A-A77B-FD5CAA3AAFC3"
+	cmuxSurfAgent = "8710BE32-E5AB-41F2-B376-8B3A7124CF5B"
+)
+
+// Real captured `cmux --id-format both list-workspaces --json`: each workspace
+// carries both its short ref and its stable UUID id — the shape CreateWorkstream's
+// ref-to-UUID lookup reads.
+const cmuxWorkspacesBothJSON = `{
+  "window_id" : "C2697DBC-DEDF-4975-B04D-5C067A8FD3E1",
   "window_ref" : "window:1",
   "workspaces" : [
     {
-      "current_directory" : "/tmp/ccorch-fix",
+      "current_directory" : "/tmp/ccorch-cmux-probe",
+      "id" : "6C9AFD15-F200-4AF9-A655-F2FA55848728",
       "index" : 0,
       "pinned" : false,
-      "ref" : "workspace:7",
+      "ref" : "workspace:2",
       "selected" : false,
-      "title" : "ccorch-fixture"
+      "title" : "ccorch-probe"
     },
     {
       "current_directory" : "/Users/yasyf/Code/bioqa",
+      "id" : "54A8AD1A-E06C-48B9-813D-93456A339D32",
       "index" : 1,
       "pinned" : false,
       "ref" : "workspace:1",
@@ -54,28 +80,76 @@ const cmuxWorkspacesJSON = `{
   ]
 }`
 
-// Real captured `cmux list-panes --workspace workspace:7 --json` output.
+// Real captured `cmux --id-format uuids list-workspaces --json`: id is the UUID and
+// there is no ref field — the shape ListWorkstreams reads.
+const cmuxWorkspacesJSON = `{
+  "window_id" : "C2697DBC-DEDF-4975-B04D-5C067A8FD3E1",
+  "workspaces" : [
+    {
+      "current_directory" : "/tmp/ccorch-cmux-probe",
+      "id" : "6C9AFD15-F200-4AF9-A655-F2FA55848728",
+      "index" : 0,
+      "pinned" : false,
+      "selected" : false,
+      "title" : "ccorch-probe"
+    },
+    {
+      "current_directory" : "/Users/yasyf/Code/bioqa",
+      "id" : "54A8AD1A-E06C-48B9-813D-93456A339D32",
+      "index" : 1,
+      "pinned" : false,
+      "selected" : true,
+      "title" : "~/C/bioqa"
+    }
+  ]
+}`
+
+// cmuxWorkspacesAfterCloseJSON is the uuids list once the probe workspace is closed:
+// only the untouched bioqa workspace remains — a successful KillWorkstream verification.
+const cmuxWorkspacesAfterCloseJSON = `{
+  "window_id" : "C2697DBC-DEDF-4975-B04D-5C067A8FD3E1",
+  "workspaces" : [
+    {
+      "current_directory" : "/Users/yasyf/Code/bioqa",
+      "id" : "54A8AD1A-E06C-48B9-813D-93456A339D32",
+      "index" : 0,
+      "pinned" : false,
+      "selected" : true,
+      "title" : "~/C/bioqa"
+    }
+  ]
+}`
+
+// cmuxWorkspacesEmptyJSON is the uuids list when closing the last workspace emptied
+// the window; the killed workspace is absent, so KillWorkstream still succeeds.
+const cmuxWorkspacesEmptyJSON = `{
+  "window_id" : "C2697DBC-DEDF-4975-B04D-5C067A8FD3E1",
+  "workspaces" : []
+}`
+
+// Real captured `cmux --id-format uuids list-panes --workspace <uuid> --json`:
+// panes carry a selected_surface_id UUID scoped by the top-level workspace_id.
 const cmuxPanesJSON = `{
   "panes" : [
     {
       "focused" : true,
+      "id" : "5AA87959-362C-488B-B0E9-29337A256183",
       "index" : 0,
-      "ref" : "pane:9",
-      "selected_surface_ref" : "surface:10",
+      "selected_surface_id" : "016506FB-AEBE-418A-A77B-FD5CAA3AAFC3",
       "surface_count" : 1,
-      "surface_refs" : [ "surface:10" ]
+      "surface_ids" : [ "016506FB-AEBE-418A-A77B-FD5CAA3AAFC3" ]
     },
     {
       "focused" : false,
+      "id" : "0598EE26-478D-4C0E-88ED-D7BF5C4316E6",
       "index" : 1,
-      "ref" : "pane:10",
-      "selected_surface_ref" : "surface:11",
+      "selected_surface_id" : "8710BE32-E5AB-41F2-B376-8B3A7124CF5B",
       "surface_count" : 1,
-      "surface_refs" : [ "surface:11" ]
+      "surface_ids" : [ "8710BE32-E5AB-41F2-B376-8B3A7124CF5B" ]
     }
   ],
-  "window_ref" : "window:1",
-  "workspace_ref" : "workspace:7"
+  "window_id" : "C2697DBC-DEDF-4975-B04D-5C067A8FD3E1",
+  "workspace_id" : "6C9AFD15-F200-4AF9-A655-F2FA55848728"
 }`
 
 func TestCmux(t *testing.T) {
@@ -87,75 +161,69 @@ func TestCmux(t *testing.T) {
 		calls   []cmuxCall
 	}{
 		{
-			name:    "CreateWorkstream parses the workspace ref from the OK line",
-			outputs: [][]byte{[]byte("OK workspace:7\n")},
+			name:    "CreateWorkstream resolves the short ref to the workspace UUID",
+			outputs: [][]byte{[]byte("OK workspace:2\n"), []byte(cmuxWorkspacesBothJSON)},
 			invoke: func(b cmux) (any, error) {
-				return b.CreateWorkstream(context.Background(), WorkstreamSpec{Name: "ccorch-fixture", Cwd: "/tmp/ccorch-fix"})
+				return b.CreateWorkstream(context.Background(), WorkstreamSpec{Name: "ccorch-probe", Cwd: "/tmp/ccorch-cmux-probe"})
 			},
-			want:  WorkstreamHandle{Backend: "cmux", ID: "workspace:7", Name: "ccorch-fixture", Cwd: "/tmp/ccorch-fix", Worktree: "/tmp/ccorch-fix"},
-			calls: []cmuxCall{{name: "cmux", args: []string{"new-workspace", "--cwd", "/tmp/ccorch-fix", "--name", "ccorch-fixture"}}},
+			want: WorkstreamHandle{Backend: "cmux", ID: cmuxWSUUID, Name: "ccorch-probe", Cwd: "/tmp/ccorch-cmux-probe", Worktree: "/tmp/ccorch-cmux-probe"},
+			calls: []cmuxCall{
+				{name: "cmux", args: []string{"new-workspace", "--cwd", "/tmp/ccorch-cmux-probe", "--name", "ccorch-probe"}},
+				{name: "cmux", args: []string{"--id-format", "both", "list-workspaces", "--json"}},
+			},
 		},
 		{
-			name:    "ListWorkstreams maps ref/title/current_directory from JSON",
+			name:    "ListWorkstreams maps id/title/current_directory from uuids JSON",
 			outputs: [][]byte{[]byte(cmuxWorkspacesJSON)},
 			invoke: func(b cmux) (any, error) {
 				return b.ListWorkstreams(context.Background())
 			},
 			want: []WorkstreamHandle{
-				{Backend: "cmux", ID: "workspace:7", Name: "ccorch-fixture", Cwd: "/tmp/ccorch-fix"},
-				{Backend: "cmux", ID: "workspace:1", Name: "~/C/bioqa", Cwd: "/Users/yasyf/Code/bioqa"},
+				{Backend: "cmux", ID: cmuxWSUUID, Name: "ccorch-probe", Cwd: "/tmp/ccorch-cmux-probe"},
+				{Backend: "cmux", ID: cmuxBioqaUUID, Name: "~/C/bioqa", Cwd: "/Users/yasyf/Code/bioqa"},
 			},
-			calls: []cmuxCall{{name: "cmux", args: []string{"list-workspaces", "--json"}}},
+			calls: []cmuxCall{{name: "cmux", args: []string{"--id-format", "uuids", "list-workspaces", "--json"}}},
 		},
 		{
-			name:    "ListAgents maps selected_surface_ref to agent ids scoped by workspace_ref",
+			name:    "ListAgents maps selected_surface_id to agent ids scoped by workspace_id",
 			outputs: [][]byte{[]byte(cmuxPanesJSON)},
 			invoke: func(b cmux) (any, error) {
-				return b.ListAgents(context.Background(), WorkstreamHandle{Backend: "cmux", ID: "workspace:7"})
+				return b.ListAgents(context.Background(), WorkstreamHandle{Backend: "cmux", ID: cmuxWSUUID})
 			},
 			want: []AgentHandle{
-				{Backend: "cmux", ID: "surface:10", WorkstreamID: "workspace:7"},
-				{Backend: "cmux", ID: "surface:11", WorkstreamID: "workspace:7"},
+				{Backend: "cmux", ID: cmuxSurfShell, WorkstreamID: cmuxWSUUID},
+				{Backend: "cmux", ID: cmuxSurfAgent, WorkstreamID: cmuxWSUUID},
 			},
-			calls: []cmuxCall{{name: "cmux", args: []string{"list-panes", "--workspace", "workspace:7", "--json"}}},
+			calls: []cmuxCall{{name: "cmux", args: []string{"--id-format", "uuids", "list-panes", "--workspace", cmuxWSUUID, "--json"}}},
 		},
 		{
 			name:    "Capture reads the surface screen as plain text",
-			outputs: [][]byte{[]byte("Do you trust the files in this folder?\n")},
+			outputs: [][]byte{[]byte("hello probe\n")},
 			invoke: func(b cmux) (any, error) {
-				return b.Capture(context.Background(), AgentHandle{Backend: "cmux", ID: "surface:10", WorkstreamID: "workspace:7"})
+				return b.Capture(context.Background(), AgentHandle{Backend: "cmux", ID: cmuxSurfAgent, WorkstreamID: cmuxWSUUID})
 			},
-			want:  "Do you trust the files in this folder?\n",
-			calls: []cmuxCall{{name: "cmux", args: []string{"read-screen", "--workspace", "workspace:7", "--surface", "surface:10"}}},
+			want:  "hello probe\n",
+			calls: []cmuxCall{{name: "cmux", args: []string{"--id-format", "uuids", "read-screen", "--workspace", cmuxWSUUID, "--surface", cmuxSurfAgent}}},
 		},
 		{
 			name:    "Kill closes the agent surface",
-			outputs: [][]byte{[]byte("OK surface:10 workspace:7\n")},
+			outputs: [][]byte{[]byte("OK " + cmuxSurfAgent + " " + cmuxWSUUID + "\n")},
 			invoke: func(b cmux) (any, error) {
-				return nil, b.Kill(context.Background(), AgentHandle{Backend: "cmux", ID: "surface:10", WorkstreamID: "workspace:7"})
+				return nil, b.Kill(context.Background(), AgentHandle{Backend: "cmux", ID: cmuxSurfAgent, WorkstreamID: cmuxWSUUID})
 			},
 			want:  nil,
-			calls: []cmuxCall{{name: "cmux", args: []string{"close-surface", "--workspace", "workspace:7", "--surface", "surface:10"}}},
-		},
-		{
-			name:    "KillWorkstream closes the workspace",
-			outputs: [][]byte{[]byte("OK workspace:7\n")},
-			invoke: func(b cmux) (any, error) {
-				return nil, b.KillWorkstream(context.Background(), WorkstreamHandle{Backend: "cmux", ID: "workspace:7"})
-			},
-			want:  nil,
-			calls: []cmuxCall{{name: "cmux", args: []string{"close-workspace", "--workspace", "workspace:7"}}},
+			calls: []cmuxCall{{name: "cmux", args: []string{"--id-format", "uuids", "close-surface", "--workspace", cmuxWSUUID, "--surface", cmuxSurfAgent}}},
 		},
 		{
 			name:    "SendText types the text then submits a separate enter key",
 			outputs: [][]byte{[]byte(""), []byte("")},
 			invoke: func(b cmux) (any, error) {
-				return nil, b.SendText(context.Background(), AgentHandle{Backend: "cmux", ID: "surface:10", WorkstreamID: "workspace:7"}, "hi -n there")
+				return nil, b.SendText(context.Background(), AgentHandle{Backend: "cmux", ID: cmuxSurfAgent, WorkstreamID: cmuxWSUUID}, "hi -n there")
 			},
 			want: nil,
 			calls: []cmuxCall{
-				{name: "cmux", args: []string{"send", "--workspace", "workspace:7", "--surface", "surface:10", "--", "hi -n there"}},
-				{name: "cmux", args: []string{"send-key", "--workspace", "workspace:7", "--surface", "surface:10", "enter"}},
+				{name: "cmux", args: []string{"--id-format", "uuids", "send", "--workspace", cmuxWSUUID, "--surface", cmuxSurfAgent, "--", "hi -n there"}},
+				{name: "cmux", args: []string{"--id-format", "uuids", "send-key", "--workspace", cmuxWSUUID, "--surface", cmuxSurfAgent, "enter"}},
 			},
 		},
 	}
@@ -201,11 +269,11 @@ func TestCmuxSpawn(t *testing.T) {
 	}
 
 	f := &cmuxFakeRunner{outputs: [][]byte{
-		[]byte("OK surface:10 pane:9 workspace:7\n"),
-		[]byte("OK surface:10 workspace:7\n"),
+		[]byte("OK " + cmuxSurfAgent + " 0598EE26-478D-4C0E-88ED-D7BF5C4316E6 " + cmuxWSUUID + "\n"),
+		[]byte("OK " + cmuxSurfAgent + " " + cmuxWSUUID + "\n"),
 	}}
 	got, err := cmux{run: f.run}.Spawn(context.Background(), SpawnSpec{
-		Workstream: WorkstreamHandle{Backend: "cmux", ID: "workspace:7"},
+		Workstream: WorkstreamHandle{Backend: "cmux", ID: cmuxWSUUID},
 		Name:       "agent-1",
 		Command:    command,
 		SessionID:  "sess-abc",
@@ -214,19 +282,19 @@ func TestCmuxSpawn(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	want := AgentHandle{Backend: "cmux", ID: "surface:10", WorkstreamID: "workspace:7", Name: "agent-1", SessionID: "sess-abc"}
+	want := AgentHandle{Backend: "cmux", ID: cmuxSurfAgent, WorkstreamID: cmuxWSUUID, Name: "agent-1", SessionID: "sess-abc"}
 	if got != want {
 		t.Errorf("handle = %#v, want %#v", got, want)
 	}
 	if len(f.calls) != 2 {
 		t.Fatalf("calls = %#v, want a new-pane then a respawn-pane", f.calls)
 	}
-	if wantPane := []string{"new-pane", "--workspace", "workspace:7"}; !reflect.DeepEqual(f.calls[0].args, wantPane) {
+	if wantPane := []string{"--id-format", "uuids", "new-pane", "--workspace", cmuxWSUUID}; !reflect.DeepEqual(f.calls[0].args, wantPane) {
 		t.Errorf("pane args = %#v, want %#v", f.calls[0].args, wantPane)
 	}
 
 	respawn := f.calls[1].args
-	if pre := []string{"respawn-pane", "--workspace", "workspace:7", "--surface", "surface:10", "--command"}; !reflect.DeepEqual(respawn[:len(pre)], pre) {
+	if pre := []string{"--id-format", "uuids", "respawn-pane", "--workspace", cmuxWSUUID, "--surface", cmuxSurfAgent, "--command"}; !reflect.DeepEqual(respawn[:len(pre)], pre) {
 		t.Errorf("respawn-pane prefix = %#v, want %#v", respawn[:len(pre)], pre)
 	}
 	sent := respawn[len(respawn)-1]
@@ -251,10 +319,11 @@ func TestCmuxSpawn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launch script: %v", err)
 	}
-	// Self-remove first, then exec the agent so it replaces bash as the surface's
-	// top-level process.
-	if !strings.HasPrefix(string(script), "rm -f -- \"$0\"\nexec ") {
-		t.Errorf("script does not self-remove then exec: %q", script)
+	// Restore PATH, self-remove, then exec the agent so it replaces bash as the
+	// surface's top-level process.
+	wantPrefix := "export PATH=" + ShellQuote(os.Getenv("PATH")) + "\nrm -f -- \"$0\"\nexec "
+	if !strings.HasPrefix(string(script), wantPrefix) {
+		t.Errorf("script does not restore PATH then self-remove then exec: %q", script)
 	}
 	// The metacharacters are carried in the file (quoted), never on the command line.
 	if !strings.Contains(string(script), "$(touch "+subst+")") {
@@ -288,6 +357,107 @@ func TestCmuxSpawn(t *testing.T) {
 		if string(gotArgs[i]) != a {
 			t.Errorf("arg[%d] = %q, want %q", i, gotArgs[i], a)
 		}
+	}
+}
+
+// TestCmuxKillWorkstream asserts the two-step close-then-verify path: close-workspace
+// followed by a uuids list that confirms the workspace is gone. Because cmux declines
+// to close the last workspace in a window, the driver treats a workspace still present
+// after close as an error rather than a silent success.
+func TestCmuxKillWorkstream(t *testing.T) {
+	const okClose = "OK workspace:2\n"
+	closeCall := cmuxCall{name: "cmux", args: []string{"--id-format", "uuids", "close-workspace", "--workspace", cmuxWSUUID}}
+	listCall := cmuxCall{name: "cmux", args: []string{"--id-format", "uuids", "list-workspaces", "--json"}}
+	cases := []struct {
+		name    string
+		outputs [][]byte
+		errs    []error
+		wantErr string
+		calls   []cmuxCall
+	}{
+		{
+			name:    "close then verify gone with other workspaces remaining",
+			outputs: [][]byte{[]byte(okClose), []byte(cmuxWorkspacesAfterCloseJSON)},
+			calls:   []cmuxCall{closeCall, listCall},
+		},
+		{
+			name:    "closing the last workspace empties the window and still succeeds",
+			outputs: [][]byte{[]byte(okClose), []byte(cmuxWorkspacesEmptyJSON)},
+			calls:   []cmuxCall{closeCall, listCall},
+		},
+		{
+			name:    "a refused close-workspace propagates its error",
+			errs:    []error{errors.New("cmux: cannot close the last workspace in a window")},
+			wantErr: "cannot close the last workspace",
+			calls:   []cmuxCall{closeCall},
+		},
+		{
+			name:    "a failed verification list surfaces as an error",
+			outputs: [][]byte{[]byte(okClose), nil},
+			errs:    []error{nil, errors.New("socket not found")},
+			wantErr: "verify workspace",
+			calls:   []cmuxCall{closeCall, listCall},
+		},
+		{
+			name:    "a workspace still present after close is reported",
+			outputs: [][]byte{[]byte(okClose), []byte(cmuxWorkspacesJSON)},
+			wantErr: "still present after close-workspace",
+			calls:   []cmuxCall{closeCall, listCall},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &cmuxFakeRunner{outputs: tc.outputs, errs: tc.errs}
+			err := cmux{run: f.run}.KillWorkstream(context.Background(), WorkstreamHandle{Backend: "cmux", ID: cmuxWSUUID})
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("KillWorkstream: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("KillWorkstream error = %v, want containing %q", err, tc.wantErr)
+			}
+			if !reflect.DeepEqual(f.calls, tc.calls) {
+				t.Errorf("calls = %#v, want %#v", f.calls, tc.calls)
+			}
+		})
+	}
+}
+
+// TestCmuxLaunchScriptRestoresHostilePath proves the export-PATH line round-trips a
+// PATH holding spaces, single quotes, or nothing: the script restores exactly the
+// daemon's PATH before exec, whatever characters it carries.
+func TestCmuxLaunchScriptRestoresHostilePath(t *testing.T) {
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skipf("bash not found: %v", err)
+	}
+	for _, tc := range []struct{ name, path string }{
+		{"spaces", "/opt/my bin:/usr/bin"},
+		{"single quotes", "/opt/o'brien/bin:/usr/bin"},
+		{"empty", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PATH", tc.path)
+			out := filepath.Join(t.TempDir(), "path.out")
+			// Absolute argv so the exec resolves under a hostile or empty PATH; it
+			// writes back the PATH the script restored before the exec.
+			launch, err := cmuxLaunchScript([]string{"/bin/sh", "-c", `printf '%s' "$PATH" > ` + ShellQuote(out)})
+			if err != nil {
+				t.Fatalf("cmuxLaunchScript: %v", err)
+			}
+			script := strings.TrimPrefix(launch, "bash ")
+			t.Cleanup(func() { _ = os.Remove(script) })
+			if runOut, err := exec.CommandContext(context.Background(), bashPath, script).CombinedOutput(); err != nil { //nolint:gosec // G204: test runs the temp launch script it just generated
+				t.Fatalf("run launch script: %v: %s", err, runOut)
+			}
+			got, err := os.ReadFile(out) //nolint:gosec // G304: test reads a file under its own temp dir
+			if err != nil {
+				t.Fatalf("read restored PATH: %v", err)
+			}
+			if string(got) != tc.path {
+				t.Errorf("restored PATH = %q, want %q", got, tc.path)
+			}
+		})
 	}
 }
 

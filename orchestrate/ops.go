@@ -579,6 +579,11 @@ func handleRepoCreate(hc daemon.HandlerCtx) daemon.Reply {
 	if !filepath.IsAbs(cwd) {
 		cwd = filepath.Join(hc.Scope, cwd)
 	}
+	canonical, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return daemon.Reply{OK: false, Error: fmt.Errorf("canonicalizing repo cwd %q: %w", cwd, err).Error()}
+	}
+	cwd = canonical
 	branch, err := worktree.CurrentBranch(hc.Ctx, cwd)
 	if err != nil {
 		return daemon.Reply{OK: false, Error: err.Error()}
@@ -851,7 +856,11 @@ func tearDownWorkstream(ctx context.Context, bk backend.Backend, repo repoRow, w
 	})
 	var removeErr error
 	if !bk.Caps().Has(backend.ManagesWorktree) && !ws.IsPrimary {
-		removeErr = worktree.Remove(ctx, repo.Cwd, ws.Worktree)
+		if removeErr = worktree.Remove(ctx, repo.Cwd, ws.Worktree); removeErr == nil {
+			// Drop the now-empty per-repo worktrees dir (…/worktrees/<repoId>)
+			// once its last child worktree is gone.
+			removeErr = worktree.RemoveDirIfEmpty(filepath.Dir(ws.Worktree))
+		}
 	}
 	if killErr != nil {
 		return fmt.Errorf("kill workstream %q: %w", ws.ID, killErr)

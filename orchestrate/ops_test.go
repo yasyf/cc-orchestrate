@@ -56,6 +56,17 @@ func gitRepo(ctx context.Context, t *testing.T, branch string) string {
 	return dir
 }
 
+// canonPath resolves symlinks in p (macOS /var → /private/var) so a test compares
+// against the canonical cwd handleRepoCreate derives.
+func canonPath(t *testing.T, p string) string {
+	t.Helper()
+	c, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatalf("eval symlinks %s: %v", p, err)
+	}
+	return c
+}
+
 // opBackend is a registered test backend that records the CreateWorkstream and Kill
 // calls it receives, so the repo/kill ops can be exercised without a live CLI.
 // Its Name is outside backend.Precedence, so it never interferes with the default
@@ -625,7 +636,7 @@ func TestHandleRepoCreate(t *testing.T) {
 	var gotSpec backend.WorkstreamSpec
 	backend.Register(opBackend{createdSpec: &gotSpec})
 
-	cwd := gitRepo(ctx, t, "feature/login")
+	cwd := canonPath(t, gitRepo(ctx, t, "feature/login"))
 	body := mustJSON(t, map[string]string{"name": "demo", "backend": "optest", "cwd": cwd})
 	reply := handleRepoCreate(opCtx(db, body, nil))
 	if !reply.OK {
@@ -701,7 +712,7 @@ func TestHandleRepoCreateResolvesCwdAgainstScope(t *testing.T) {
 	}
 
 	t.Run("empty cwd uses caller scope", func(t *testing.T) {
-		scope := gitRepo(ctx, t, "main")
+		scope := canonPath(t, gitRepo(ctx, t, "main"))
 		if got := runRepoCreate(t, "", scope).Cwd; got != scope {
 			t.Fatalf("CreateWorkstream cwd = %q, want %q", got, scope)
 		}
@@ -710,12 +721,12 @@ func TestHandleRepoCreateResolvesCwdAgainstScope(t *testing.T) {
 		scope := t.TempDir()
 		want := filepath.Join(scope, "sub", "dir")
 		gitInitAt(ctx, t, want, "main")
-		if got := runRepoCreate(t, "sub/dir", scope).Cwd; got != want {
-			t.Fatalf("CreateWorkstream cwd = %q, want %q", got, want)
+		if got := runRepoCreate(t, "sub/dir", scope).Cwd; got != canonPath(t, want) {
+			t.Fatalf("CreateWorkstream cwd = %q, want %q", got, canonPath(t, want))
 		}
 	})
 	t.Run("absolute cwd is kept", func(t *testing.T) {
-		repo := gitRepo(ctx, t, "main")
+		repo := canonPath(t, gitRepo(ctx, t, "main"))
 		if got := runRepoCreate(t, repo, "/caller/here").Cwd; got != repo {
 			t.Fatalf("CreateWorkstream cwd = %q, want %q", got, repo)
 		}

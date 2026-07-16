@@ -14,15 +14,17 @@ const (
 )
 
 // cmux places workspaces and spawns agents through the cmux CLI, which talks to a
-// local socket daemon. Mutating commands print an "OK <ref> ..." status line of
-// short refs (workspace:N / surface:N), while list commands emit JSON under --json.
+// local socket daemon. Handles are UUIDs because short refs (workspace:N / surface:N)
+// renumber as resources open and close.
 type cmux struct{ run runner }
 
 func init() { Register(cmux{run: execRunner}) }
 
-// cmuxWorkspace is a workspace entry in `list-workspaces --json`; ref is the
-// addressable handle and current_directory is the workspace cwd.
+// cmuxWorkspace is a workspace entry in `list-workspaces --json`; ID is the stable
+// addressable handle, while Ref is populated only under `--id-format both` during
+// creation's short-ref-to-UUID lookup.
 type cmuxWorkspace struct {
+	ID               string `json:"id"`
 	Ref              string `json:"ref"`
 	Title            string `json:"title"`
 	CurrentDirectory string `json:"current_directory"`
@@ -32,15 +34,15 @@ type cmuxWorkspaceList struct {
 	Workspaces []cmuxWorkspace `json:"workspaces"`
 }
 
-// cmuxPane is a pane entry in `list-panes --json`; selected_surface_ref is the
+// cmuxPane is a pane entry in `list-panes --json`; selected_surface_id is the
 // terminal surface that send and close-surface address.
 type cmuxPane struct {
-	SelectedSurfaceRef string `json:"selected_surface_ref"`
+	SelectedSurfaceID string `json:"selected_surface_id"`
 }
 
 type cmuxPaneList struct {
-	WorkspaceRef string     `json:"workspace_ref"`
-	Panes        []cmuxPane `json:"panes"`
+	WorkspaceID string     `json:"workspace_id"`
+	Panes       []cmuxPane `json:"panes"`
 }
 
 // cmuxRef returns the first whitespace-separated token of an "OK ..." status line
@@ -54,9 +56,18 @@ func cmuxRef(out []byte, prefix string) (string, error) {
 	return "", fmt.Errorf("cmux: no %s ref in output: %q", prefix, out)
 }
 
+func cmuxID(out []byte) (string, error) {
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 || fields[0] != "OK" {
+		return "", fmt.Errorf("cmux: no id in output: %q", out)
+	}
+	return fields[1], nil
+}
+
 // cmuxLaunchScript writes command as a self-removing POSIX script under a temp path
 // and returns the `bash <temp-path>` command line respawn-pane runs as the surface's
-// program. The script execs the argv, so the agent replaces bash and becomes the
+// program. The script restores the daemon's PATH because cmux replaces it in the
+// surface's login shell. It then execs the argv, so the agent replaces bash and becomes the
 // surface's top-level process: when the agent exits, cmux auto-closes the surface, which
 // the keep-alive supervisor's ListAgents diff sees as a vanished terminal and resumes —
 // the same liveness path every other backend rides. Running the agent under the surface's
@@ -72,7 +83,7 @@ func cmuxLaunchScript(command []string) (string, error) {
 		return "", fmt.Errorf("cmux: create launch script: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	script := "rm -f -- \"$0\"\nexec " + strings.Join(quoted, " ") + "\n"
+	script := "export PATH=" + ShellQuote(os.Getenv("PATH")) + "\nrm -f -- \"$0\"\nexec " + strings.Join(quoted, " ") + "\n"
 	if _, err := f.WriteString(script); err != nil {
 		return "", fmt.Errorf("cmux: write launch script %s: %w", f.Name(), err)
 	}
@@ -94,15 +105,29 @@ func (b cmux) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (Workst
 	if err != nil {
 		return WorkstreamHandle{}, err
 	}
-	id, err := cmuxRef(out, "workspace:")
+	ref, err := cmuxRef(out, "workspace:")
 	if err != nil {
 		return WorkstreamHandle{}, err
 	}
-	return WorkstreamHandle{Backend: b.Name(), ID: id, Name: spec.Name, Cwd: spec.Cwd, Worktree: spec.Cwd}, nil
+	// new-workspace's OK line reports only the short ref even under --id-format uuids; a both-format list resolves it to the stable UUID.
+	out, err = b.run(ctx, cmuxBin, "--id-format", "both", "list-workspaces", "--json")
+	if err != nil {
+		return WorkstreamHandle{}, err
+	}
+	res, err := decodeJSON[cmuxWorkspaceList](out, "cmux", "workspaces")
+	if err != nil {
+		return WorkstreamHandle{}, err
+	}
+	for _, workspace := range res.Workspaces {
+		if workspace.Ref == ref {
+			return WorkstreamHandle{Backend: b.Name(), ID: workspace.ID, Name: spec.Name, Cwd: spec.Cwd, Worktree: spec.Cwd}, nil
+		}
+	}
+	return WorkstreamHandle{}, fmt.Errorf("cmux: workspace %s not found after creation", ref)
 }
 
 func (b cmux) ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error) {
-	out, err := b.run(ctx, cmuxBin, "list-workspaces", "--json")
+	out, err := b.run(ctx, cmuxBin, "--id-format", "uuids", "list-workspaces", "--json")
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +137,7 @@ func (b cmux) ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error) {
 	}
 	workstreams := make([]WorkstreamHandle, len(res.Workspaces))
 	for i, w := range res.Workspaces {
-		workstreams[i] = WorkstreamHandle{Backend: b.Name(), ID: w.Ref, Name: w.Title, Cwd: w.CurrentDirectory}
+		workstreams[i] = WorkstreamHandle{Backend: b.Name(), ID: w.ID, Name: w.Title, Cwd: w.CurrentDirectory}
 	}
 	return workstreams, nil
 }
@@ -125,11 +150,11 @@ func (b cmux) ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error) {
 // The argv rides a self-removing temp script (cmuxLaunchScript) that respawn-pane runs as
 // `bash <path>`, keeping an arbitrary prompt off the command line.
 func (b cmux) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
-	out, err := b.run(ctx, cmuxBin, "new-pane", "--workspace", spec.Workstream.ID)
+	out, err := b.run(ctx, cmuxBin, "--id-format", "uuids", "new-pane", "--workspace", spec.Workstream.ID)
 	if err != nil {
 		return AgentHandle{}, err
 	}
-	surface, err := cmuxRef(out, "surface:")
+	surface, err := cmuxID(out)
 	if err != nil {
 		return AgentHandle{}, err
 	}
@@ -137,7 +162,7 @@ func (b cmux) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
 	if err != nil {
 		return AgentHandle{}, err
 	}
-	if _, err := b.run(ctx, cmuxBin, "respawn-pane", "--workspace", spec.Workstream.ID, "--surface", surface, "--command", launch); err != nil {
+	if _, err := b.run(ctx, cmuxBin, "--id-format", "uuids", "respawn-pane", "--workspace", spec.Workstream.ID, "--surface", surface, "--command", launch); err != nil {
 		return AgentHandle{}, err
 	}
 	return AgentHandle{
@@ -150,7 +175,7 @@ func (b cmux) Spawn(ctx context.Context, spec SpawnSpec) (AgentHandle, error) {
 }
 
 func (b cmux) ListAgents(ctx context.Context, workstream WorkstreamHandle) ([]AgentHandle, error) {
-	out, err := b.run(ctx, cmuxBin, "list-panes", "--workspace", workstream.ID, "--json")
+	out, err := b.run(ctx, cmuxBin, "--id-format", "uuids", "list-panes", "--workspace", workstream.ID, "--json")
 	if err != nil {
 		return nil, err
 	}
@@ -160,29 +185,40 @@ func (b cmux) ListAgents(ctx context.Context, workstream WorkstreamHandle) ([]Ag
 	}
 	agents := make([]AgentHandle, len(res.Panes))
 	for i, p := range res.Panes {
-		agents[i] = AgentHandle{Backend: b.Name(), ID: p.SelectedSurfaceRef, WorkstreamID: res.WorkspaceRef}
+		agents[i] = AgentHandle{Backend: b.Name(), ID: p.SelectedSurfaceID, WorkstreamID: res.WorkspaceID}
 	}
 	return agents, nil
 }
 
 func (b cmux) Kill(ctx context.Context, agent AgentHandle) error {
-	_, err := b.run(ctx, cmuxBin, "close-surface", "--workspace", agent.WorkstreamID, "--surface", agent.ID)
+	_, err := b.run(ctx, cmuxBin, "--id-format", "uuids", "close-surface", "--workspace", agent.WorkstreamID, "--surface", agent.ID)
 	return err
 }
 
 func (b cmux) KillWorkstream(ctx context.Context, workstream WorkstreamHandle) error {
-	_, err := b.run(ctx, cmuxBin, "close-workspace", "--workspace", workstream.ID)
-	return err
+	if _, err := b.run(ctx, cmuxBin, "--id-format", "uuids", "close-workspace", "--workspace", workstream.ID); err != nil {
+		return err
+	}
+	workstreams, err := b.ListWorkstreams(ctx)
+	if err != nil {
+		return fmt.Errorf("cmux: verify workspace %q closed: %w", workstream.ID, err)
+	}
+	for _, candidate := range workstreams {
+		if candidate.ID == workstream.ID {
+			return fmt.Errorf("cmux: workspace %q still present after close-workspace; the known cause is cmux declining to close the last remaining workspace in a window", workstream.ID)
+		}
+	}
+	return nil
 }
 
 // SendText types text into the agent's surface, then submits it with a separate
 // enter key event rather than an embedded "\n" — cmux send reinterprets \n/\r/\t,
 // which would split a multi-line message into partial commands.
 func (b cmux) SendText(ctx context.Context, agent AgentHandle, text string) error {
-	if _, err := b.run(ctx, cmuxBin, "send", "--workspace", agent.WorkstreamID, "--surface", agent.ID, "--", text); err != nil {
+	if _, err := b.run(ctx, cmuxBin, "--id-format", "uuids", "send", "--workspace", agent.WorkstreamID, "--surface", agent.ID, "--", text); err != nil {
 		return err
 	}
-	_, err := b.run(ctx, cmuxBin, "send-key", "--workspace", agent.WorkstreamID, "--surface", agent.ID, "enter")
+	_, err := b.run(ctx, cmuxBin, "--id-format", "uuids", "send-key", "--workspace", agent.WorkstreamID, "--surface", agent.ID, "enter")
 	return err
 }
 
@@ -190,7 +226,7 @@ func (b cmux) SendText(ctx context.Context, agent AgentHandle, text string) erro
 // writes the viewport to stdout; agent.WorkstreamID is the workspace and agent.ID
 // the surface.
 func (b cmux) Capture(ctx context.Context, agent AgentHandle) (string, error) {
-	out, err := b.run(ctx, cmuxBin, "read-screen", "--workspace", agent.WorkstreamID, "--surface", agent.ID)
+	out, err := b.run(ctx, cmuxBin, "--id-format", "uuids", "read-screen", "--workspace", agent.WorkstreamID, "--surface", agent.ID)
 	if err != nil {
 		return "", err
 	}

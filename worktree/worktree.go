@@ -40,6 +40,24 @@ func Remove(ctx context.Context, repoRoot, dest string) error {
 	return err
 }
 
+// RemoveDirIfEmpty removes dir when it exists and has no entries.
+func RemoveDirIfEmpty(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read worktree directory %s: %w", dir, err)
+	}
+	if len(entries) != 0 {
+		return nil
+	}
+	if err := os.Remove(dir); err != nil {
+		return fmt.Errorf("remove empty worktree directory %s: %w", dir, err)
+	}
+	return nil
+}
+
 // CurrentBranch returns the branch checked out at repoRoot, via
 // git -C <repoRoot> symbolic-ref --short HEAD. symbolic-ref resolves the branch
 // even on an unborn HEAD — a freshly initialized repo with no commits — where
