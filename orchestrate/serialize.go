@@ -150,6 +150,7 @@ func handleSerialize(hc daemon.HandlerCtx, req fleetSerializeRequest) (fleetSeri
 			return fleetSerializeResult{}, err
 		}
 	}
+	fleetLog.emit(hc.Ctx, bundleFrame(FrameSerialized, path, len(bundle.Agents)))
 	return fleetSerializeResult{Path: path, Count: len(bundle.Agents)}, nil
 }
 
@@ -218,6 +219,7 @@ func handleRestore(hc daemon.HandlerCtx, req fleetRestoreRequest) (fleetRestoreR
 			return fleetRestoreResult{}, err
 		}
 	}
+	fleetLog.emit(hc.Ctx, bundleFrame(FrameRestored, req.Path, len(bundle.Agents)))
 	return fleetRestoreResult{Count: len(bundle.Agents)}, nil
 }
 
@@ -331,8 +333,11 @@ func restoreAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, s
 	if err != nil {
 		return err
 	}
-	_, err = appendFn(ctx, &event.Event{
+	if _, err := appendFn(ctx, &event.Event{
 		SubjectID: cur.SubjectID, Origin: event.OriginSystem, Type: EventRestored, Payload: restoredPayload(cur.ID, handle.ID),
-	})
-	return err
+	}); err != nil {
+		return err
+	}
+	fleetLog.emit(ctx, spawnedFrame(cur))
+	return nil
 }

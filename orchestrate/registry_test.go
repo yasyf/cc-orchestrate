@@ -172,7 +172,7 @@ func TestMCPToolParity(t *testing.T) {
 		"sprint_create": true, "sprint_list": true, "sprint_activate": true, "sprint_kill": true,
 		"agent_spawn": true, "agent_list": true, "agent_show": true, "agent_send_message": true, "agent_kill": true,
 		"agent_respawn": true, "agent_capture": true,
-		"fleet_serialize": true, "fleet_restore": true,
+		"fleet_status": true, "fleet_serialize": true, "fleet_restore": true,
 	}
 	got := map[string]bool{}
 	for _, tool := range mcpTools() {

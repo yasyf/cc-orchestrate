@@ -66,7 +66,7 @@ func TestMCPServer(t *testing.T) {
 		"sprint_create", "sprint_list", "sprint_activate", "sprint_kill",
 		"agent_spawn", "agent_list", "agent_show", "agent_send_message", "agent_kill",
 		"agent_respawn", "agent_capture",
-		"fleet_serialize", "fleet_restore",
+		"fleet_status", "fleet_serialize", "fleet_restore",
 	}
 	if len(listReply.Result.Tools) != len(want) {
 		t.Fatalf("advertised %d tools, want %d: %v", len(listReply.Result.Tools), len(want), got)

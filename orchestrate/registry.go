@@ -202,6 +202,7 @@ var (
 	mConfigList  = query("cco.config.list", "List the persisted config key-value pairs.", rpc, handleConfigList)
 	mConfigUnset = procedure("cco.config.unset", "Delete one persisted config key.", rpc, handleConfigUnset)
 
+	mFleetStatus    = query("cco.fleet.status", "The atomic fleet bootstrap: the fleet subject and its resume seq, the HTTP port, and every repo, workstream, sprint, and agent view.", full, handleFleetStatus)
 	mFleetSerialize = procedure("cco.fleet.serialize", "Snapshot every active agent into a restorable bundle.", full, handleSerialize)
 	mFleetRestore   = procedure("cco.fleet.restore", "Restore agents from a serialized bundle.", full, handleRestore)
 
@@ -211,6 +212,6 @@ var (
 		mSprintCreate, mSprintList, mSprintShow, mSprintActivate, mSprintKill,
 		mAgentSpawn, mAgentList, mAgentShow, mAgentSendMessage, mAgentKill, mAgentRespawn, mAgentCapture, mAgentReport,
 		mConfigGet, mConfigSet, mConfigList, mConfigUnset,
-		mFleetSerialize, mFleetRestore,
+		mFleetStatus, mFleetSerialize, mFleetRestore,
 	}
 )

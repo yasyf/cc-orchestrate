@@ -104,8 +104,11 @@ func TestXRPCCatalog(t *testing.T) {
 	if cat.Events.Stream != "/events?session=fleet" {
 		t.Errorf("events.stream = %q, want /events?session=fleet", cat.Events.Stream)
 	}
-	if cat.Events.Types == nil {
-		t.Error("events.types is null, want an object (the Phase-3 fleet frame schemas)")
+	if len(cat.Events.Types) == 0 {
+		t.Error("events.types is empty, want the fleet frame schemas")
+	}
+	if _, ok := cat.Events.Types[FrameAgentSpawned]; !ok {
+		t.Errorf("events.types missing %q; the fleet taxonomy did not reach the catalog", FrameAgentSpawned)
 	}
 
 	byName := map[string]catalogMethod{}

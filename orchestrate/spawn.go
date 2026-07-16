@@ -334,6 +334,7 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 		return agentSpawnResult{}, err
 	}
 	tailers.start(hc.DB, hc.Append, ag)
+	fleetLog.emit(hc.Ctx, spawnedFrame(ag))
 
 	return agentSpawnResult{AgentID: sid, SubjectID: sub.ID, Terminal: handle.ID, Backend: string(bname)}, nil
 }
@@ -492,6 +493,7 @@ func respawnOneAgent(hc daemon.HandlerCtx, id string) (agentView, error) {
 	if err != nil {
 		return agentView{}, err
 	}
+	fleetLog.emit(hc.Ctx, restartedFrame(final.ID, final.RestartCount))
 	return newAgentView(final), nil
 }
 

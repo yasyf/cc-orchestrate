@@ -72,6 +72,7 @@ type agentView struct {
 	Tokens       int    `json:"tokens"`
 	UpdatedAt    string `json:"updated_at"`
 	SessionID    string `json:"session_id"`
+	SubjectID    string `json:"subject_id"`
 	Scope        string `json:"scope"`
 	RestartCount int    `json:"restart_count"`
 }
@@ -80,7 +81,7 @@ func newAgentView(a agentRow) agentView {
 	return agentView{
 		ID: a.ID, Name: a.Name, SprintID: a.SprintID, Backend: string(a.Backend),
 		Status: string(a.Status), State: string(a.State), Activity: a.Activity, Tokens: a.Tokens,
-		UpdatedAt: a.UpdatedAt, SessionID: a.SessionID, Scope: a.Scope, RestartCount: a.RestartCount,
+		UpdatedAt: a.UpdatedAt, SessionID: a.SessionID, SubjectID: a.SubjectID, Scope: a.Scope, RestartCount: a.RestartCount,
 	}
 }
 
@@ -275,6 +276,7 @@ func handleSendMessage(hc daemon.HandlerCtx, req agentSendMessageRequest) (agent
 	if err != nil {
 		return agentSendMessageResult{}, err
 	}
+	fleetLog.emit(hc.Ctx, messageFrame(ag.ID))
 	return agentSendMessageResult{Seq: seq, Transport: transportLabel(native)}, nil
 }
 
@@ -354,6 +356,7 @@ func handleReport(hc daemon.HandlerCtx, req reportRequest) (agentReportResult, e
 	if err != nil {
 		return agentReportResult{}, err
 	}
+	emitReport(hc.Ctx, hc.DB, sub.ID, req.State)
 	return agentReportResult{Seq: seq}, nil
 }
 
@@ -675,6 +678,9 @@ func handleRepoCreate(hc daemon.HandlerCtx, req repoCreateRequest) (repoCreateRe
 	if err := createDefaultSprint(hc.Ctx, hc.DB, w.ID, ccSprint); err != nil {
 		return repoCreateResult{}, err
 	}
+	fleetLog.emit(hc.Ctx, containerFrame(FrameRepoCreated, p.ID, p.Name))
+	fleetLog.emit(hc.Ctx, containerFrame(FrameWorkstreamCreated, w.ID, w.Name))
+	fleetLog.emit(hc.Ctx, containerFrame(FrameSprintCreated, sprintSlug(defaultSprintName), defaultSprintName))
 	return repoCreateResult{RepoID: p.ID, Workspace: handle.ID, Backend: string(bname)}, nil
 }
 
@@ -750,6 +756,7 @@ func handleRepoActivate(hc daemon.HandlerCtx, req repoActivateRequest) (repoLife
 	if err := clearConfig(hc.Ctx, hc.DB, configActiveSprint); err != nil {
 		return repoLifecycleResult{}, err
 	}
+	fleetLog.emit(hc.Ctx, containerFrame(FrameRepoActivated, repo.ID, repo.Name))
 	return repoLifecycleResult{RepoID: repo.ID, Status: string(StatusActive)}, nil
 }
 
@@ -820,6 +827,7 @@ func handleAgentKill(hc daemon.HandlerCtx, req agentKillRequest) (agentKillResul
 	if err := killAgentTerminal(hc.Ctx, hc.DB, ag); err != nil {
 		return agentKillResult{}, err
 	}
+	fleetLog.emit(hc.Ctx, exitedFrame(ag.ID, reasonKilled))
 	return agentKillResult{AgentID: ag.ID, Status: string(StatusExited)}, nil
 }
 
@@ -1073,9 +1081,19 @@ func handleRepoKill(hc daemon.HandlerCtx, req repoKillRequest) (repoLifecycleRes
 	if err != nil {
 		return repoLifecycleResult{}, err
 	}
+	// Snapshot the agents active before the cascade exits them, so their fleet frames
+	// carry the ids the kill is about to terminate.
+	killed, err := listRepoAgents(hc.Ctx, hc.DB, repo.ID, StatusActive)
+	if err != nil {
+		return repoLifecycleResult{}, err
+	}
 	if err := killRepo(hc.Ctx, hc.DB, hc.Append, repo); err != nil {
 		return repoLifecycleResult{}, err
 	}
+	for _, ag := range killed {
+		fleetLog.emit(hc.Ctx, exitedFrame(ag.ID, reasonKilled))
+	}
+	fleetLog.emit(hc.Ctx, containerFrame(FrameRepoKilled, repo.ID, repo.Name))
 	return repoLifecycleResult{RepoID: repo.ID, Status: string(StatusKilled)}, nil
 }
 
@@ -1160,6 +1178,8 @@ func handleWorkstreamCreate(hc daemon.HandlerCtx, req workstreamCreateRequest) (
 	if err := createDefaultSprint(hc.Ctx, hc.DB, w.ID, ccSprint); err != nil {
 		return workstreamCreateResult{}, err
 	}
+	fleetLog.emit(hc.Ctx, containerFrame(FrameWorkstreamCreated, w.ID, w.Name))
+	fleetLog.emit(hc.Ctx, containerFrame(FrameSprintCreated, sprintSlug(defaultSprintName), defaultSprintName))
 	return workstreamCreateResult{
 		WorkstreamID: w.ID, RepoID: repo.ID, Workspace: workspaceHandle, Branch: branch, Worktree: path,
 	}, nil
@@ -1251,6 +1271,7 @@ func handleWorkstreamActivate(hc daemon.HandlerCtx, req workstreamActivateReques
 	if err := clearConfig(hc.Ctx, hc.DB, configActiveSprint); err != nil {
 		return workstreamLifecycleResult{}, err
 	}
+	fleetLog.emit(hc.Ctx, containerFrame(FrameWorkstreamActivated, ws.ID, ws.Name))
 	return workstreamLifecycleResult{WorkstreamID: ws.ID, Status: string(StatusActive)}, nil
 }
 
@@ -1283,6 +1304,12 @@ func handleWorkstreamKill(hc daemon.HandlerCtx, req workstreamKillRequest) (work
 	if err != nil {
 		return workstreamLifecycleResult{}, err
 	}
+	// Snapshot the agents active before the cascade exits them, so their fleet frames
+	// carry the ids the kill is about to terminate.
+	killed, err := listWorkstreamAgents(hc.Ctx, hc.DB, ws.ID)
+	if err != nil {
+		return workstreamLifecycleResult{}, err
+	}
 	teardownErr := tearDownWorkstream(hc.Ctx, bk, repo, ws)
 	if err := markWorkstreamKilled(hc.Ctx, hc.DB, hc.Append, ws); err != nil {
 		return workstreamLifecycleResult{}, err
@@ -1290,6 +1317,12 @@ func handleWorkstreamKill(hc daemon.HandlerCtx, req workstreamKillRequest) (work
 	if teardownErr != nil {
 		return workstreamLifecycleResult{}, teardownErr
 	}
+	for _, ag := range killed {
+		if ag.Status == StatusActive {
+			fleetLog.emit(hc.Ctx, exitedFrame(ag.ID, reasonKilled))
+		}
+	}
+	fleetLog.emit(hc.Ctx, containerFrame(FrameWorkstreamKilled, ws.ID, ws.Name))
 	return workstreamLifecycleResult{WorkstreamID: ws.ID, Status: string(StatusKilled)}, nil
 }
 
@@ -1331,6 +1364,7 @@ func handleSprintCreate(hc daemon.HandlerCtx, req sprintCreateRequest) (sprintCr
 	if err := insertSprint(hc.Ctx, hc.DB, sp); err != nil {
 		return sprintCreateResult{}, err
 	}
+	fleetLog.emit(hc.Ctx, containerFrame(FrameSprintCreated, sp.ID, sp.Name))
 	return sprintCreateResult{SprintID: sp.ID, WorkstreamID: ws.ID, Name: sp.Name}, nil
 }
 
@@ -1441,6 +1475,7 @@ func handleSprintActivate(hc daemon.HandlerCtx, req sprintActivateRequest) (spri
 	if err := setConfig(hc.Ctx, hc.DB, configActiveRepo, ws.RepoID); err != nil {
 		return sprintActivateResult{}, err
 	}
+	fleetLog.emit(hc.Ctx, containerFrame(FrameSprintActivated, sp.ID, sp.Name))
 	return sprintActivateResult{SprintID: sp.ID, Status: string(StatusActive)}, nil
 }
 
@@ -1476,9 +1511,19 @@ func handleSprintKill(hc daemon.HandlerCtx, req sprintKillRequest) (sprintKillRe
 	if sp.Status != StatusActive {
 		return sprintKillResult{}, opErr(codeConflict, fmt.Errorf("sprint %s is %s, not active", sp.ID, sp.Status))
 	}
+	// Snapshot the agents active before the cascade exits them, so their fleet frames
+	// carry the ids the kill is about to terminate.
+	killed, err := listAgents(hc.Ctx, hc.DB, sp.ID, StatusActive)
+	if err != nil {
+		return sprintKillResult{}, err
+	}
 	if err := killSprint(hc.Ctx, hc.DB, hc.Append, sp); err != nil {
 		return sprintKillResult{}, err
 	}
+	for _, ag := range killed {
+		fleetLog.emit(hc.Ctx, exitedFrame(ag.ID, reasonKilled))
+	}
+	fleetLog.emit(hc.Ctx, containerFrame(FrameSprintKilled, sp.ID, sp.Name))
 	return sprintKillResult{SprintID: sp.ID, Status: string(StatusKilled)}, nil
 }
 

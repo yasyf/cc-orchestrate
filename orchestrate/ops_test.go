@@ -513,7 +513,7 @@ func TestHandleStatus(t *testing.T) {
 	want := agentView{
 		ID: "a1", Name: "worker", SprintID: "s1", Backend: "tmux", Status: "active",
 		State: string(StateWorking), Activity: "Bash: ls", Tokens: 10,
-		UpdatedAt: "2026-06-16T00:00:00Z", SessionID: "sess-1", Scope: "/s",
+		UpdatedAt: "2026-06-16T00:00:00Z", SessionID: "sess-1", SubjectID: "subj-1", Scope: "/s",
 	}
 	if got != want {
 		t.Fatalf("status view = %+v, want %+v", got, want)

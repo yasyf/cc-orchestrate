@@ -63,6 +63,13 @@ func serve(ctx context.Context) error {
 		// active set).
 		BootReconcile: func(ctx context.Context, s *daemon.Server) error {
 			tailers = newTailerManager(ctx, s.Background)
+			// Resolve (or resume, seq-preserving) the fleet subject before the resumed
+			// tailers start, so their first statuses already mirror onto the fleet stream.
+			fleet, err := startFleetStream(ctx, s)
+			if err != nil {
+				return err
+			}
+			fleetLog = fleet
 			if err := c.BootReconcile(ctx, s); err != nil {
 				return err
 			}
@@ -146,10 +153,13 @@ func (m *tailerManager) start(db *sql.DB, appendFn daemon.AppendFunc, ag agentRo
 			if err := applyStatus(cctx, db, ag.ID, st); err != nil {
 				return err
 			}
-			_, err := appendFn(cctx, &event.Event{
+			if _, err := appendFn(cctx, &event.Event{
 				SubjectID: ag.SubjectID, Origin: event.OriginSystem, Type: EventStatus, Payload: jsonStatus(st),
-			})
-			return err
+			}); err != nil {
+				return err
+			}
+			fleetLog.emit(cctx, agentStatusFrame(ag.ID, st))
+			return nil
 		}
 		// onStatus is the tailer's status sink. It resets the restart budget only on a
 		// genuinely-new healthy state (live) — never on the pre-crash state the tailer

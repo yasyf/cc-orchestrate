@@ -495,6 +495,20 @@ func getAgent(ctx context.Context, db *sql.DB, id string) (agentRow, error) {
 	return a, nil
 }
 
+// getAgentBySubject returns the agent bound to a subject id — the report handler's way
+// back from the subject it resolves to the agent id its fleet frame carries. A subject
+// is 1:1 with an agent, so at most one row matches.
+func getAgentBySubject(ctx context.Context, db *sql.DB, subjectID string) (agentRow, error) {
+	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM agents WHERE agents.subject_id = ?`, subjectID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return agentRow{}, notFoundf("agent not found for subject: %s", subjectID)
+	}
+	if err != nil {
+		return agentRow{}, fmt.Errorf("get agent by subject %q: %w", subjectID, err)
+	}
+	return a, nil
+}
+
 // agentExists reports whether an agent row is present, the absent-vs-present branch
 // restore needs: an absent agent is re-inserted from its bundle, a present one only
 // has its terminal recreated.

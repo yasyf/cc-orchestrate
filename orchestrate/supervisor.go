@@ -216,7 +216,12 @@ func respawnUnderBudget(ctx context.Context, db *sql.DB, appendFn daemon.AppendF
 		}); err != nil {
 			return err
 		}
-		return softExitAgent(ctx, db, appendFn, cur)
+		fleetLog.emit(ctx, abandonedFrame(cur.ID, cur.RestartCount))
+		if err := softExitAgent(ctx, db, appendFn, cur); err != nil {
+			return err
+		}
+		fleetLog.emit(ctx, exitedFrame(cur.ID, reasonExited))
+		return nil
 	}
 	attempt := cur.RestartCount + 1
 	stamp := nowStamp()
@@ -234,10 +239,13 @@ func respawnUnderBudget(ctx context.Context, db *sql.DB, appendFn daemon.AppendF
 	if err != nil {
 		return err
 	}
-	_, err = appendFn(ctx, &event.Event{
+	if _, err := appendFn(ctx, &event.Event{
 		SubjectID: cur.SubjectID, Origin: event.OriginSystem, Type: EventRestarted, Payload: restartedPayload(cur, handle.ID, attempt),
-	})
-	return err
+	}); err != nil {
+		return err
+	}
+	fleetLog.emit(ctx, restartedFrame(cur.ID, attempt))
+	return nil
 }
 
 // transcriptStale reports whether an agent's transcript file has gone unwritten past
