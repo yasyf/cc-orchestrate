@@ -535,6 +535,9 @@ func respawnOneAgent(hc daemon.HandlerCtx, id string) (agentView, error) {
 	if err != nil {
 		return agentView{}, err
 	}
+	// Announce from the committed row state (active, reset budget), before respawnAgent
+	// starts the tailer, so a fast status frame can't precede the restarted announcement.
+	fleetLog.emit(hc.Ctx, restartedFrame(cur.ID, cur.RestartCount))
 	handle, err := respawnAgent(hc.Ctx, hc.DB, hc.Append, cur)
 	if err != nil {
 		return agentView{}, err
@@ -548,7 +551,6 @@ func respawnOneAgent(hc daemon.HandlerCtx, id string) (agentView, error) {
 	if err != nil {
 		return agentView{}, err
 	}
-	fleetLog.emit(hc.Ctx, restartedFrame(final.ID, final.RestartCount))
 	return newAgentView(final), nil
 }
 

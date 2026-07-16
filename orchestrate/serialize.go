@@ -329,6 +329,9 @@ func restoreAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, s
 	if err != nil {
 		return err
 	}
+	// Announce from the committed (revived) row state, before respawnAgent starts the
+	// tailer, so a fast status frame can't precede the spawned announcement.
+	fleetLog.emit(ctx, spawnedFrame(cur))
 	handle, err := respawnAgent(ctx, db, appendFn, cur)
 	if err != nil {
 		return err
@@ -338,6 +341,5 @@ func restoreAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, s
 	}); err != nil {
 		return err
 	}
-	fleetLog.emit(ctx, spawnedFrame(cur))
 	return nil
 }
