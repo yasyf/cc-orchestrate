@@ -388,7 +388,7 @@ func TestHandleSpawn(t *testing.T) {
 		Scope:  "/parent", Subjects: subjects, DB: db, Append: appendFn,
 	}
 
-	reply := runTyped(handleSpawn,hc)
+	reply := runTyped(handleSpawn, hc)
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
@@ -523,7 +523,7 @@ func TestHandleSpawnDefaultsEmptyName(t *testing.T) {
 		Scope:  "/parent", Subjects: subjects, DB: db, Append: appendFn,
 	}
 
-	reply := runTyped(handleSpawn,hc)
+	reply := runTyped(handleSpawn, hc)
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
@@ -618,7 +618,7 @@ func TestHandleSpawnPooling(t *testing.T) {
 				Scope:  "/parent", Subjects: subjects, DB: db, Append: appendFn,
 			}
 
-			reply := runTyped(handleSpawn,hc)
+			reply := runTyped(handleSpawn, hc)
 			if !reply.OK {
 				t.Fatalf("reply not ok: %s", reply.Error)
 			}
@@ -753,7 +753,7 @@ func TestHandleSpawnRejectsKilledHierarchy(t *testing.T) {
 				return 0, nil
 			}
 			//nolint:contextcheck // handleSpawn's tailer derives from the daemon-lifetime base ctx by design (see tailerManager doc)
-			reply := runTyped(handleSpawn,opCtx(db, mustJSON(t, map[string]string{"sprint": "s1"}), appendFn))
+			reply := runTyped(handleSpawn, opCtx(db, mustJSON(t, map[string]string{"sprint": "s1"}), appendFn))
 			if reply.OK || reply.Error == "" {
 				t.Fatalf("reply = %+v, want ok=false for a non-active hierarchy", reply)
 			}

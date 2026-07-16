@@ -97,7 +97,7 @@ func TestSerializeRestoreRoundTrip(t *testing.T) {
 
 	out := filepath.Join(t.TempDir(), "bundle.json")
 	serLog := &eventLog{}
-	reply := runTyped(handleSerialize,opCtx(db, mustJSON(t, map[string]string{"out": out}), serLog.append))
+	reply := runTyped(handleSerialize, opCtx(db, mustJSON(t, map[string]string{"out": out}), serLog.append))
 	if !reply.OK {
 		t.Fatalf("serialize failed: %s", reply.Error)
 	}
@@ -148,7 +148,7 @@ func TestSerializeRestoreRoundTrip(t *testing.T) {
 	}
 
 	resLog := &eventLog{}
-	rReply := runTyped(handleRestore,opCtx(db, mustJSON(t, map[string]string{"path": out}), resLog.append))
+	rReply := runTyped(handleRestore, opCtx(db, mustJSON(t, map[string]string{"path": out}), resLog.append))
 	if !rReply.OK {
 		t.Fatalf("restore failed: %s", rReply.Error)
 	}
@@ -210,7 +210,7 @@ func TestRestoreIntoWipedDB(t *testing.T) {
 	})
 
 	out := filepath.Join(t.TempDir(), "bundle.json")
-	if reply := runTyped(handleSerialize,opCtx(db, mustJSON(t, map[string]string{"out": out}), (&eventLog{}).append)); !reply.OK {
+	if reply := runTyped(handleSerialize, opCtx(db, mustJSON(t, map[string]string{"out": out}), (&eventLog{}).append)); !reply.OK {
 		t.Fatalf("serialize failed: %s", reply.Error)
 	}
 
@@ -222,7 +222,7 @@ func TestRestoreIntoWipedDB(t *testing.T) {
 	}
 
 	log := &eventLog{}
-	reply := runTyped(handleRestore,opCtx(db, mustJSON(t, map[string]string{"path": out}), log.append))
+	reply := runTyped(handleRestore, opCtx(db, mustJSON(t, map[string]string{"path": out}), log.append))
 	if !reply.OK {
 		t.Fatalf("restore into a wiped DB failed: %s", reply.Error)
 	}
@@ -279,7 +279,7 @@ func TestSerializeWriteFailureAppendsNoEvent(t *testing.T) {
 	}
 
 	log := &eventLog{}
-	reply := runTyped(handleSerialize,opCtx(db, mustJSON(t, map[string]string{"out": out}), log.append))
+	reply := runTyped(handleSerialize, opCtx(db, mustJSON(t, map[string]string{"out": out}), log.append))
 	if reply.OK {
 		t.Fatalf("serialize to a directory path returned OK, want failure")
 	}
@@ -321,7 +321,7 @@ func TestRestoreStrictParseFailsLoud(t *testing.T) {
 			}
 
 			log := &eventLog{}
-			reply := runTyped(handleRestore,opCtx(db, mustJSON(t, map[string]string{"path": path}), log.append))
+			reply := runTyped(handleRestore, opCtx(db, mustJSON(t, map[string]string{"path": path}), log.append))
 			if reply.OK {
 				t.Fatalf("restore of a %s bundle returned OK, want failure", tc.name)
 			}
@@ -365,7 +365,7 @@ func TestRestorePresentRowRewritesHandle(t *testing.T) {
 	})
 
 	log := &eventLog{}
-	reply := runTyped(handleRestore,opCtx(db, mustJSON(t, map[string]string{"path": path}), log.append))
+	reply := runTyped(handleRestore, opCtx(db, mustJSON(t, map[string]string{"path": path}), log.append))
 	if !reply.OK {
 		t.Fatalf("restore failed: %s", reply.Error)
 	}
@@ -427,7 +427,7 @@ func TestRestorePresentExitedRowReactivates(t *testing.T) {
 	})
 
 	log := &eventLog{}
-	reply := runTyped(handleRestore,opCtx(db, mustJSON(t, map[string]string{"path": path}), log.append))
+	reply := runTyped(handleRestore, opCtx(db, mustJSON(t, map[string]string{"path": path}), log.append))
 	if !reply.OK {
 		t.Fatalf("restore failed: %s", reply.Error)
 	}
