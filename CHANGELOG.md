@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- XRPC-style HTTP API: every op is callable as `GET`/`POST /xrpc/cco.<noun>.<verb>`,
+  with a self-describing catalog at `/xrpc/cco.server.describe` (JSON schemas per
+  method, ready for client type generation) and typed error envelopes mapped to
+  HTTP statuses. Documented in `docs/xrpc.md`.
+- Fleet event stream: `GET /events?session=fleet` mirrors every lifecycle change
+  as compact typed frames (`fleet.agent.spawned`, `fleet.agent.status`, …) with
+  gap-free `Last-Event-ID` resume; `cco.fleet.status` returns the whole tree plus
+  the resume cursor in one call.
+- `--json` on every data command, printing the daemon's reply verbatim.
+- New verbs: `config set` / `unset` / `list`; `repo`/`workstream`/`sprint show`;
+  `sprint kill`; `agent respawn [--dead]` to revive exited agents into their old
+  sessions; `agent capture` for on-demand terminal screenshots as text;
+  `fleet status [--watch]` and `fleet watch`; `--status` filters on the list verbs.
+- MCP tools generated from the method registry — `agent_capture`, `agent_respawn`,
+  `sprint_kill`, `fleet_status`, `fleet_serialize`, `fleet_restore`, and
+  `config_set` join the set, and the tool list can no longer drift from the ops.
 - `projects` command group (`list`, `create`, `activate`) for managing backend
   workspaces, and `backends select` to pin the default placement backend.
 - `agent` command group (`spawn`, `list`, `send-message`, `status`, `watch`,
@@ -17,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mcp` parent-facing control server exposing the orchestration ops as MCP tools.
 
 ### Changed
+- One method registry now drives the socket ops, the HTTP routes, the MCP tool
+  list, and the CLI; daemon op strings are the `cco.<noun>.<verb>` method names.
+- `agent status` is now `agent show` (MCP: `agent_show`); `status` remains a CLI
+  alias.
 - Rewritten from Python to a single pure-Go CLI built on the
   [cc-interact](https://github.com/yasyf/cc-interact) framework. Distribution
   moves from PyPI wheels to prebuilt binaries and a Homebrew tap.

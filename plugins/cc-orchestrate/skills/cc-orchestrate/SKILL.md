@@ -59,16 +59,22 @@ cco agent spawn --workstream feat-x --name a1 --prompt "summarize the repo and w
 # → prints: agent id, backend, terminal
 
 # 4. Observe the fleet
+cco fleet status                 # one joined table across every repo/workstream/sprint
 cco agent list                   # point-in-time snapshot of every agent
-cco agent status a1f3c2          # one agent's derived status (state, tokens, activity)
-cco agent watch --id a1f3c2      # stream that agent's events as line-delimited JSON
-cco agent watch --all            # stream every agent (each line tagged with agent_id)
+cco agent show a1f3c2            # one agent's derived status (state, tokens, activity)
+cco agent capture a1f3c2         # the agent's current terminal screen as text
+cco agent watch --id a1f3c2      # stream that agent's events, one line each
+cco fleet watch                  # stream every fleet lifecycle frame
 
 # 5. Steer and stop
 cco agent send-message a1f3c2 "now open a PR with your summary"
 cco agent kill a1f3c2
+cco agent respawn a1f3c2                 # revive it later, same session
 cco workstream kill feat-x --repo demo   # tears down the worktree
 ```
+
+Every data command takes `--json` for the daemon's reply verbatim — the shape
+scripts and jq pipelines should consume.
 
 The active repo / workstream / sprint set the target for a bare `cco agent spawn`.
 `cco <entity> activate <id|name>` sets them; the most recent activation wins, and a
@@ -104,8 +110,10 @@ control server in the parent's `.mcp.json`:
 ```
 
 It exposes one tool per op, grouped by entity: `backends_list` / `backend_select`;
-`config_get` / `config_set`; `repo_*`; `workstream_*`; `sprint_*`; `agent_spawn` /
-`agent_list` / `agent_show` / `agent_send_message` / `agent_kill`; and
+`config_get` / `config_set`; `repo_*`; `workstream_*`; `sprint_*` (including
+`sprint_kill`); `agent_spawn` / `agent_list` / `agent_show` / `agent_send_message` /
+`agent_kill` / `agent_respawn` / `agent_capture`; and `fleet_status` /
 `fleet_serialize` / `fleet_restore`. The MCP surface is request/response only; for
-live status, run `cco agent watch` alongside it. See `reference.md` for the full
-tool list and every flag.
+live status, run `cco agent watch` or `cco fleet watch` alongside it. See
+`reference.md` for the full tool list and every flag. The same ops are also an HTTP
+API with a fleet-wide event stream — `docs/xrpc.md` in the repo covers it.

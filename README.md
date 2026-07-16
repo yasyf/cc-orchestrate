@@ -1,6 +1,6 @@
 # ![cc-orchestrate](docs/assets/readme-banner.webp)
 
-**Stop letting your Claude agents fight over one working copy.** cc-orchestrate cuts a fresh worktree per workstream and spawns Claude agents across five backends, all driven from one CLI or 19 MCP tools.
+**Stop letting your Claude agents fight over one working copy.** cc-orchestrate cuts a fresh worktree per workstream and spawns Claude agents across five backends, all driven from one CLI, a fleet of MCP tools, or a typed HTTP API.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/yasyf/cc-orchestrate/ci.yml?branch=main&label=CI)](https://github.com/yasyf/cc-orchestrate/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/yasyf/cc-orchestrate)](https://github.com/yasyf/cc-orchestrate/releases)
@@ -67,6 +67,23 @@ Orchestrating by hand makes you the router between terminal tabs. Register the c
 
 The server exposes one request/response tool per orchestration op, named by entity from `backends_list` and `repo_create` through `agent_spawn` and `fleet_restore`. `agent_list` and `agent_show` return point-in-time snapshots, so run `cco agent watch` under a monitor alongside the MCP session for live status.
 
+### Build a live dashboard without shelling out
+
+A TUI polling `cco agent list` in a loop is a dashboard held together with tape.
+The daemon serves the same ops as a typed HTTP API — a self-describing method
+catalog plus one resumable event stream for the whole fleet:
+
+```bash
+curl "http://127.0.0.1:$(jq .port ~/.cc-orchestrate/http.json)/xrpc/cco.fleet.status"
+curl -N "http://127.0.0.1:$(jq .port ~/.cc-orchestrate/http.json)/events?session=fleet"
+```
+
+The first call returns the full tree plus a resume cursor; the second streams
+typed frames (`fleet.agent.spawned`, `fleet.agent.status`, …) from that cursor
+on, gap-free across reconnects. The catalog at `/xrpc/cco.server.describe`
+carries JSON schemas for every method, ready for TypeScript type generation.
+The full protocol lives in [docs/xrpc.md](docs/xrpc.md).
+
 ### Snapshot tonight's running fleet and restore it tomorrow
 
 Closing your laptop at 6pm shouldn't cost you the fleet. Serialize every active agent into a bundle, then rehydrate from it:
@@ -115,18 +132,23 @@ its flags.
 | Command | What it does |
 | --- | --- |
 | `backends list` / `select <backend>` | Show installed runners; pin the default. |
-| `config get <key>` | Read `backend`, `active-repo`, `active-workstream`, or `active-sprint` from the persisted config. |
-| `repo list` / `create` / `activate` / `kill` | Manage repos; kill cascades to the repo's workstreams, sprints, and agents. |
-| `workstream list` / `create` / `activate` / `kill` | Manage worktrees (alias `ws`); kill removes the worktree and its backend workspace. |
-| `sprint list` / `create` / `activate` | Slice a workstream's agents into named batches. |
+| `config get` / `set` / `unset` / `list` | Read and write the persisted config: `backend` and the `active-*` selections. |
+| `repo list` / `show` / `create` / `activate` / `kill` | Manage repos; kill cascades to the repo's workstreams, sprints, and agents. |
+| `workstream list` / `show` / `create` / `activate` / `kill` | Manage worktrees (alias `ws`); kill removes the worktree and its backend workspace. |
+| `sprint list` / `show` / `create` / `activate` / `kill` | Slice a workstream's agents into named batches; kill exits the sprint's agents. |
 | `agent spawn` | Spawn a Claude agent into the targeted repo, workstream, or sprint. |
-| `agent list` / `status <id>` | Point-in-time snapshot of the fleet or one agent. |
+| `agent list` / `show <id>` | Point-in-time snapshot of the fleet or one agent (`status` still works as an alias). |
 | `agent send-message <id> "text"` / `kill <id>` | Push an instruction to a running agent, or stop it. |
-| `agent watch --all` / `--id <id>` | Stream agent events as line-delimited JSON. |
+| `agent respawn <id>` / `--dead` | Revive an exited agent into its old session, or sweep every eligible one. |
+| `agent capture <id>` | Grab the agent's current terminal screen as text. |
+| `agent watch --all` / `--id <id>` | Stream agent events, one formatted line per event (`--json` for NDJSON). |
+| `fleet status [--watch]` / `fleet watch` | One fleet-wide snapshot table, live-repainting under `--watch`; or the raw frame stream. |
 | `serialize` / `restore <bundle>` | Snapshot every active agent into a bundle; rehydrate the fleet from one. |
 | `mcp` | Run the parent-facing MCP control server over stdio. |
 
-The active repo, workstream, and sprint target a bare `agent spawn`; each `activate`
+Every data command takes `--json` and prints the daemon's reply verbatim, so
+`cco agent list --json | jq` sees exactly what the HTTP API serves. The active
+repo, workstream, and sprint target a bare `agent spawn`; each `activate`
 resets the more-specific selections, and killing an active entity clears its selection.
 Beneath the domain commands, cco re-exposes cc-interact's `status`, `stop`, and
 `watch`, plus hidden plumbing; the daemon auto-starts, so you rarely touch any of it.
@@ -134,7 +156,8 @@ Beneath the domain commands, cco re-exposes cc-interact's `status`, `stop`, and
 ## How it works
 
 cc-orchestrate builds on [cc-interact](https://github.com/yasyf/cc-interact), which
-supplies the lazy daemon, the append-only SQLite event log, and the MCP channel;
+supplies the lazy daemon, the append-only SQLite event log, the HTTP/SSE plane, and
+the MCP channel;
 cc-orchestrate adds repos, workstreams, sprints, agents, and the five backend drivers
 on top. The one-worktree-per-workstream invariant holds no matter how a backend
 behaves. cc-orchestrate adopts the path superset reports or runs `git worktree add` itself under
