@@ -3,6 +3,7 @@ package orchestrate
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -45,13 +46,16 @@ const (
 // scrubClaudeCodeEnv unsets CLAUDE_CODE_* and CLAUDECODE so a claude child spawned
 // by the daemon doesn't inherit them and skip persisting its transcript (see
 // cc-notes note daemon-scrubs-claude-code-env). CLAUDE_CONFIG_DIR is untouched.
-func scrubClaudeCodeEnv() {
+func scrubClaudeCodeEnv() error {
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		if name == "CLAUDECODE" || strings.HasPrefix(name, "CLAUDE_CODE_") {
-			os.Unsetenv(name)
+			if err := os.Unsetenv(name); err != nil {
+				return fmt.Errorf("unset %s: %w", name, err)
+			}
 		}
 	}
+	return nil
 }
 
 // tailers is the daemon-lifetime transcript-tailer manager, bound to the serve
@@ -67,7 +71,9 @@ var supervisorRunner *supervisor
 // orchestrate schema and the channel presence lifecycle, registers the domain
 // ops, then serves control RPCs until ctx is cancelled.
 func serve(ctx context.Context) error {
-	scrubClaudeCodeEnv()
+	if err := scrubClaudeCodeEnv(); err != nil {
+		return err
+	}
 	c := channel.Connectivity{}
 	s, err := daemon.New(daemon.Config{
 		AppName:        AppName,

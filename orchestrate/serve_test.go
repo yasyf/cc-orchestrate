@@ -13,7 +13,9 @@ func TestScrubClaudeCodeEnv(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
 	t.Setenv("CLAUDE_CONFIG_DIR", "/home/x/.claude")
 
-	scrubClaudeCodeEnv()
+	if err := scrubClaudeCodeEnv(); err != nil {
+		t.Fatalf("scrubClaudeCodeEnv: %v", err)
+	}
 
 	for _, name := range []string{"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ENTRYPOINT"} {
 		if v, ok := os.LookupEnv(name); ok {
