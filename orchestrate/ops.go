@@ -183,7 +183,6 @@ func abandonedPayload(ag agentRow) json.RawMessage {
 	return b
 }
 
-// handleStatus answers agent-status with one agent's persisted snapshot.
 // parseStatusFilter validates an optional lifecycle-status filter from a list
 // request: "" means every status, otherwise it must name one of the three states.
 func parseStatusFilter(s string) (LifecycleStatus, error) {
@@ -242,7 +241,7 @@ func handleList(hc daemon.HandlerCtx, req agentListRequest) ([]agentView, error)
 	return views, nil
 }
 
-// handleSendMessage answers agent-send-message: it delivers the text to the agent
+// handleSendMessage answers cco.agent.sendMessage: it delivers the text to the agent
 // natively when the backend can type into its terminal (CanSendText), else by
 // appending an OriginHuman EventMessage the agent's watch Monitor consumes (the
 // LCD). The native path writes no event-plane frame; the transcript tailer emits
@@ -331,7 +330,7 @@ type reportPayload struct {
 	State string `json:"state,omitempty"`
 }
 
-// handleReport answers agent-report by appending an OriginAgent EventReport to the
+// handleReport answers cco.agent.report by appending an OriginAgent EventReport to the
 // reporting agent's subject log. The subject is resolved from the child's session
 // and scope (the channel server stamps both), so the agent never needs to know its
 // own subject id. An unresolvable subject is an error.
@@ -581,7 +580,7 @@ func resolveBackend(hc daemon.HandlerCtx, explicit string) (backend.Backend, bac
 	if name != "" {
 		b, ok := backend.Get(name)
 		if !ok {
-			return nil, "", fmt.Errorf("unknown backend: %s", name)
+			return nil, "", opErr(codeUnsupported, fmt.Errorf("unknown backend: %s", name))
 		}
 		return b, name, nil
 	}
@@ -591,12 +590,12 @@ func resolveBackend(hc daemon.HandlerCtx, explicit string) (backend.Backend, bac
 		for i, n := range backend.Precedence {
 			installable[i] = string(n)
 		}
-		return nil, "", fmt.Errorf("no available backend; install one of %s", strings.Join(installable, ", "))
+		return nil, "", opErr(codeUnsupported, fmt.Errorf("no available backend; install one of %s", strings.Join(installable, ", ")))
 	}
 	return b, b.Name(), nil
 }
 
-// handleRepoCreate answers repo-create: it resolves the backend, forks the repo's
+// handleRepoCreate answers cco.repo.create: it resolves the backend, forks the repo's
 // primary workstream backend workspace and provisions its cc-notes bindings, and only
 // once those succeed persists the repo row keyed by a slug of its name, the primary
 // workstream bound to that workspace, and the workstream's own default sprint — so a
@@ -713,7 +712,7 @@ func handleRepoShow(hc daemon.HandlerCtx, req repoShowRequest) (repoView, error)
 	return newRepoView(repo), nil
 }
 
-// handleRepoActivate answers repo-activate: it resolves the repo (by id
+// handleRepoActivate answers cco.repo.activate: it resolves the repo (by id
 // or name, erroring when missing), marks it active, and records it as the active
 // repo so an agent spawn with no repo or workstream falls back to its primary
 // workstream. Activating a repo resets the precedence chain — it clears the
@@ -774,7 +773,7 @@ func backendAgentHandle(ctx context.Context, db *sql.DB, ag agentRow) (backend.A
 	}, nil
 }
 
-// handleAgentKill answers agent-kill: it stops the agent's transcript tailer,
+// handleAgentKill answers cco.agent.kill: it stops the agent's transcript tailer,
 // terminates the backend terminal, marks the row exited, and appends a terminal
 // EventExited. A backend kill failure is surfaced after the row is already marked
 // exited, so a half-dead agent never lingers as active.
@@ -828,7 +827,7 @@ func handleAgentKill(hc daemon.HandlerCtx, req agentKillRequest) (agentKillResul
 func killAgentTerminal(ctx context.Context, db *sql.DB, ag agentRow) error {
 	bk, ok := backend.Get(ag.Backend)
 	if !ok {
-		return fmt.Errorf("unknown backend: %s", ag.Backend)
+		return opErr(codeUnsupported, fmt.Errorf("unknown backend: %s", ag.Backend))
 	}
 	handle, err := backendAgentHandle(ctx, db, ag)
 	if err != nil {
@@ -990,7 +989,7 @@ func killRepo(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, repo 
 	return teardownErr
 }
 
-// handleRepoKill answers repo-kill: a real teardown that tears down every workstream's
+// handleRepoKill answers cco.repo.kill: a real teardown that tears down every workstream's
 // backend workspace and non-primary worktree, cascades their sprints to killed and
 // agents to exited, then marks the repo killed. Teardown errors are surfaced after the
 // row mutations (mirroring handleAgentKill), so a half-dead repo never lingers active.
@@ -1010,7 +1009,7 @@ func handleRepoKill(hc daemon.HandlerCtx, req repoKillRequest) (repoLifecycleRes
 	return repoLifecycleResult{RepoID: repo.ID, Status: string(StatusKilled)}, nil
 }
 
-// handleWorkstreamCreate answers workstream-create: it resolves the repo, then
+// handleWorkstreamCreate answers cco.workstream.create: it resolves the repo, then
 // branches on whether the backend manages its own worktree. A ManagesWorktree
 // backend (superset) forks its own worktree off the branch and cc-orchestrate
 // adopts the path it returns; every other backend takes a worktree cc-orchestrate
@@ -1145,7 +1144,7 @@ func handleWorkstreamShow(hc daemon.HandlerCtx, req workstreamShowRequest) (work
 	return newWorkstreamView(ws), nil
 }
 
-// handleWorkstreamActivate answers workstream-activate: it resolves the workstream
+// handleWorkstreamActivate answers cco.workstream.activate: it resolves the workstream
 // (by id or name, scoped to a repo when given to disambiguate; erroring when
 // missing), marks it active, and records it as the active workstream so an agent
 // spawn with no explicit target lands in it. Activating a workstream resets the
@@ -1185,7 +1184,7 @@ func handleWorkstreamActivate(hc daemon.HandlerCtx, req workstreamActivateReques
 	return workstreamLifecycleResult{WorkstreamID: ws.ID, Status: string(StatusActive)}, nil
 }
 
-// handleWorkstreamKill answers workstream-kill: a real teardown. It tears down the
+// handleWorkstreamKill answers cco.workstream.kill: a real teardown. It tears down the
 // workstream's backend workspace and — for a backend that does not manage its own
 // worktree, and only for a non-primary workstream — removes its git worktree, then
 // cascades its agents to exited and marks the workstream killed. It never removes a
@@ -1224,7 +1223,7 @@ func handleWorkstreamKill(hc daemon.HandlerCtx, req workstreamKillRequest) (work
 	return workstreamLifecycleResult{WorkstreamID: ws.ID, Status: string(StatusKilled)}, nil
 }
 
-// handleSprintCreate answers sprint-create: it resolves the workstream (by id or
+// handleSprintCreate answers cco.sprint.create: it resolves the workstream (by id or
 // name, scoped to a repo when given to disambiguate), inserts a new sprint under it,
 // and reports the sprint id. A sprint shares its workstream's worktree — it has no
 // worktree of its own.
@@ -1323,7 +1322,7 @@ func handleSprintShow(hc daemon.HandlerCtx, req sprintShowRequest) (sprintView, 
 	return newSprintView(sp), nil
 }
 
-// handleSprintActivate answers sprint-activate: it resolves the sprint (by id or
+// handleSprintActivate answers cco.sprint.activate: it resolves the sprint (by id or
 // name, scoped to a workstream when given to disambiguate), marks it active, and
 // records it as the active sprint so an agent spawn with no explicit target lands in
 // it. Activating a sprint resets the precedence chain — it sets the active workstream

@@ -65,7 +65,7 @@ Orchestrating by hand makes you the router between terminal tabs. Register the c
 }
 ```
 
-The server exposes 19 request/response tools, one per orchestration op, named by entity from `backends_list` and `repo_create` through `agent_spawn` and `agent_status`. `agent_list` and `agent_status` return point-in-time snapshots, so run `cco agent watch` under a monitor alongside the MCP session for live status.
+The server exposes one request/response tool per orchestration op, named by entity from `backends_list` and `repo_create` through `agent_spawn` and `fleet_restore`. `agent_list` and `agent_show` return point-in-time snapshots, so run `cco agent watch` under a monitor alongside the MCP session for live status.
 
 ### Snapshot tonight's running fleet and restore it tomorrow
 

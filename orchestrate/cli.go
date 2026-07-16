@@ -52,6 +52,7 @@ func Root() *cobra.Command {
 		withSessionDefault(cmd.ChannelAckCmd(d)),
 		withSessionDefault(cmd.ChannelCmd(d)),
 		ptyHostCmd(),
+		scrubExecCmd(),
 		backendsCmd(),
 		configCmd(),
 		repoCmd(),

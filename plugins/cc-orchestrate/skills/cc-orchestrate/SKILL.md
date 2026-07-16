@@ -104,7 +104,8 @@ control server in the parent's `.mcp.json`:
 ```
 
 It exposes one tool per op, grouped by entity: `backends_list` / `backend_select`;
-`config_get`; `repo_*`; `workstream_*`; `sprint_*`; and `agent_spawn` / `agent_list` /
-`agent_status` / `agent_send_message` / `agent_kill`. The MCP surface is
-request/response only; for live status, run `cco agent watch` alongside it. See
-`reference.md` for the full tool list and every flag.
+`config_get` / `config_set`; `repo_*`; `workstream_*`; `sprint_*`; `agent_spawn` /
+`agent_list` / `agent_show` / `agent_send_message` / `agent_kill`; and
+`fleet_serialize` / `fleet_restore`. The MCP surface is request/response only; for
+live status, run `cco agent watch` alongside it. See `reference.md` for the full
+tool list and every flag.

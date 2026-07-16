@@ -90,12 +90,13 @@ The low-level event plane most workflows never touch directly. `--session` defau
 `cco mcp` exposes one tool per op, mirroring the CLI:
 
 - **backends**: `backends_list`, `backend_select`
-- **config**: `config_get`
+- **config**: `config_get`, `config_set`
 - **repo**: `repo_create`, `repo_list`, `repo_activate`, `repo_kill`
 - **workstream**: `workstream_create`, `workstream_list`, `workstream_activate`, `workstream_kill`
 - **sprint**: `sprint_create`, `sprint_list`, `sprint_activate`
-- **agent**: `agent_spawn`, `agent_list`, `agent_status`, `agent_send_message`, `agent_kill`
+- **agent**: `agent_spawn`, `agent_list`, `agent_show`, `agent_send_message`, `agent_kill`
+- **fleet**: `fleet_serialize`, `fleet_restore`
 
-The MCP surface is request/response only — `agent_list` and `agent_status` return a
+The MCP surface is request/response only — `agent_list` and `agent_show` return a
 point-in-time snapshot. For live status, run `cco agent watch` under a Monitor
-alongside the MCP session. (`agent watch`, `serialize`, and `restore` are CLI-only.)
+alongside the MCP session. (`agent watch` is CLI-only.)

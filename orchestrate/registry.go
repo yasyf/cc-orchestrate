@@ -187,7 +187,7 @@ var (
 	mSprintShow     = query("cco.sprint.show", "Show one sprint by id or name.", rpc, handleSprintShow)
 	mSprintActivate = procedure("cco.sprint.activate", "Mark a sprint active and record it as the default an agent spawn lands in.", full, handleSprintActivate)
 
-	mAgentSpawn       = procedure("cco.agent.spawn", "Spawn a child Claude Code agent into a sprint, a workstream's or repo's default sprint, or the active sprint.", full, handleSpawn)
+	mAgentSpawn       = procedure("cco.agent.spawn", "Spawn a child Claude Code agent into a sprint, a workstream's or repo's default sprint, or the active sprint. An empty prompt starts the agent idle and interactive; API callers normally pass one.", full, handleSpawn)
 	mAgentList        = query("cco.agent.list", "List agents and their derived status, optionally filtered by repo.", full, handleList)
 	mAgentShow        = query("cco.agent.show", "Show one agent's derived status.", full, handleStatus)
 	mAgentSendMessage = procedure("cco.agent.sendMessage", "Send a message (a new instruction) to a running agent.", full, handleSendMessage)

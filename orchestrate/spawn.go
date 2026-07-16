@@ -200,7 +200,7 @@ func resolveSpawnSprint(hc daemon.HandlerCtx, reqSprint, reqWorkstream, reqRepo 
 	return sprintRow{}, fmt.Errorf("no sprint specified and no active sprint, workstream, or repo")
 }
 
-// handleSpawn answers agent-spawn: it resolves the target sprint, derives its
+// handleSpawn answers cco.agent.spawn: it resolves the target sprint, derives its
 // workstream and backend, requires the whole resolved hierarchy (sprint, workstream,
 // repo) is still active so a bare spawn can never attach a live agent to a soft-killed
 // target, provisions the agent's cc-notes task, creates a subject keyed by the new
@@ -291,6 +291,7 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 	if err != nil {
 		return agentSpawnResult{}, err
 	}
+	command = wrapScrubExec(self, command)
 	handle, err := b.Spawn(hc.Ctx, backend.SpawnSpec{
 		Workstream: backend.WorkstreamHandle{Backend: ws.Backend, ID: ws.WorkspaceHandle, Name: ws.Name, Cwd: ws.Worktree},
 		Name:       name,
@@ -354,6 +355,7 @@ func respawnAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, a
 	if err != nil {
 		return backend.AgentHandle{}, err
 	}
+	command = wrapScrubExec(self, command)
 	handle, err := b.Spawn(ctx, backend.SpawnSpec{
 		Workstream: backend.WorkstreamHandle{Backend: ws.Backend, ID: ws.WorkspaceHandle, Name: ws.Name, Cwd: ws.Worktree},
 		Name:       ag.Name,
