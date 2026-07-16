@@ -74,6 +74,7 @@ func canonPath(t *testing.T, p string) string {
 type opBackend struct {
 	createdSpec       *backend.WorkstreamSpec
 	killedAgent       *backend.AgentHandle
+	killedAgents      *[]backend.AgentHandle
 	killedWorkstream  *backend.WorkstreamHandle
 	killedWorkstreams *[]backend.WorkstreamHandle
 	killErr           error
@@ -104,6 +105,9 @@ func (opBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backen
 func (b opBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
 	if b.killedAgent != nil {
 		*b.killedAgent = agent
+	}
+	if b.killedAgents != nil {
+		*b.killedAgents = append(*b.killedAgents, agent)
 	}
 	return b.killErr
 }
@@ -731,6 +735,16 @@ func TestHandleRepoCreateResolvesCwdAgainstScope(t *testing.T) {
 			t.Fatalf("CreateWorkstream cwd = %q, want %q", got, repo)
 		}
 	})
+	t.Run("relative cwd with no caller scope is an invalid request", func(t *testing.T) {
+		db := newTestDB(ctx, t)
+		backend.Register(opBackend{})
+		body := mustJSON(t, map[string]string{"name": "demo", "backend": "optest", "cwd": "sub/dir"})
+		hc := daemon.HandlerCtx{Ctx: context.Background(), Env: daemon.Envelope{Body: body}, DB: db}
+		reply := runTyped(handleRepoCreate, hc)
+		if reply.OK || !strings.HasPrefix(reply.Error, "InvalidRequest: ") {
+			t.Fatalf("reply = %+v, want InvalidRequest", reply)
+		}
+	})
 }
 
 func TestHandleRepoList(t *testing.T) {
@@ -908,6 +922,56 @@ func TestHandleAgentKill(t *testing.T) {
 		}
 		if (killed != backend.AgentHandle{}) {
 			t.Fatalf("bk.Kill was called for an already-exited agent: %+v", killed)
+		}
+	})
+}
+
+// TestHandleAgentCapture covers cco.agent.capture's error taxonomy and the round trip
+// through captureScreenText, reusing serialize_test.go's CanCapture stub backend.
+func TestHandleAgentCapture(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+
+	db := newTestDB(ctx, t)
+	backend.Register(serializeTestBackend{})
+	seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a1", SprintID: "w1-s", Backend: "sertest", TerminalHandle: "term-1",
+		SessionID: "sess-1", Scope: "/s", Name: "worker", SubjectID: "subj-1",
+		Status: StatusActive, State: StateWorking, CreatedAt: "t0",
+	})
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a2", SprintID: "w1-s", Backend: "sertest", TerminalHandle: "term-2",
+		SessionID: "sess-2", Scope: "/s", Name: "idle", SubjectID: "subj-2",
+		Status: StatusExited, State: StateIdle, CreatedAt: "t1",
+	})
+
+	t.Run("captures an active agent's screen", func(t *testing.T) {
+		reply := runTyped(handleAgentCapture, opCtx(db, mustJSON(t, map[string]string{"agent_id": "a1"}), nil))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		var out agentCaptureResult
+		if err := json.Unmarshal(reply.Body, &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.AgentID != "a1" || out.Content != "screen:sess-1" || out.CapturedAt == "" {
+			t.Fatalf("capture result = %+v, want agent_id=a1 content=screen:sess-1 non-empty captured_at", out)
+		}
+	})
+
+	t.Run("inactive agent is a conflict", func(t *testing.T) {
+		reply := runTyped(handleAgentCapture, opCtx(db, mustJSON(t, map[string]string{"agent_id": "a2"}), nil))
+		if reply.OK || !strings.HasPrefix(reply.Error, "Conflict: ") {
+			t.Fatalf("reply = %+v, want Conflict", reply)
+		}
+	})
+
+	t.Run("unknown agent is not found", func(t *testing.T) {
+		reply := runTyped(handleAgentCapture, opCtx(db, mustJSON(t, map[string]string{"agent_id": "ghost"}), nil))
+		if reply.OK || !strings.HasPrefix(reply.Error, "NotFound: ") {
+			t.Fatalf("reply = %+v, want NotFound", reply)
 		}
 	})
 }
@@ -1349,6 +1413,128 @@ func TestHandleWorkstreamKill(t *testing.T) {
 	})
 }
 
+// TestHandleSprintKill proves sprint-kill is a real teardown: it exits the sprint's
+// agents (markSprintKilled's row writes), tears down only the formerly-active agents'
+// backend terminals, clears the active-sprint config, and treats an already-killed or
+// unknown sprint as an error rather than an idempotent no-op.
+func TestHandleSprintKill(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+
+	db := newTestDB(ctx, t)
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "optest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/s", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertWorkstream: %v", err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
+	}
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a1", SprintID: "s1", Backend: "optest", TerminalHandle: "term-1",
+		SessionID: "sess-1", Scope: "/s", SubjectID: "subj-1", Status: StatusActive, State: StateWorking, CreatedAt: "t0",
+	})
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a2", SprintID: "s1", Backend: "optest", TerminalHandle: "term-2",
+		SessionID: "sess-2", Scope: "/s", SubjectID: "subj-2", Status: StatusActive, State: StateWorking, CreatedAt: "t1",
+	})
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a3", SprintID: "s1", Backend: "optest", TerminalHandle: "term-3",
+		SessionID: "sess-3", Scope: "/s", SubjectID: "subj-3", Status: StatusExited, State: StateIdle, CreatedAt: "t2",
+	})
+	if err := setConfig(ctx, db, configActiveSprint, "s1"); err != nil {
+		t.Fatal(err)
+	}
+
+	var killedAgents []backend.AgentHandle
+	backend.Register(opBackend{killedAgents: &killedAgents})
+
+	var exited []string
+	appendFn := func(_ context.Context, e *event.Event) (int64, error) {
+		if e.Type == EventExited {
+			exited = append(exited, e.SubjectID)
+		}
+		return 1, nil
+	}
+
+	reply := runTyped(handleSprintKill, opCtx(db, mustJSON(t, map[string]string{"id": "s1"}), appendFn))
+	if !reply.OK {
+		t.Fatalf("reply not ok: %s", reply.Error)
+	}
+
+	assertSprintStatus(ctx, t, db, "s1", StatusKilled)
+	assertAgentStatus(ctx, t, db, "a1", StatusExited)
+	assertAgentStatus(ctx, t, db, "a2", StatusExited)
+	assertAgentStatus(ctx, t, db, "a3", StatusExited)
+
+	// Only the two formerly-active agents' terminals were torn down; a3 was already
+	// exited and must never be handed to the backend.
+	gotTerminals := make([]string, len(killedAgents))
+	for i, h := range killedAgents {
+		gotTerminals[i] = h.ID
+	}
+	wantTerminals := []string{"term-1", "term-2"}
+	if len(gotTerminals) != len(wantTerminals) || gotTerminals[0] != wantTerminals[0] || gotTerminals[1] != wantTerminals[1] {
+		t.Fatalf("killed terminals = %v, want %v", gotTerminals, wantTerminals)
+	}
+
+	if len(exited) != 2 {
+		t.Fatalf("EventExited subjects = %v, want exactly 2 (a1, a2)", exited)
+	}
+
+	assertConfig(ctx, t, db, configActiveSprint, "", false)
+
+	t.Run("already-killed sprint is a conflict", func(t *testing.T) {
+		reply := runTyped(handleSprintKill, opCtx(db, mustJSON(t, map[string]string{"id": "s1"}), appendFn))
+		if reply.OK || !strings.HasPrefix(reply.Error, "Conflict: ") {
+			t.Fatalf("reply = %+v, want Conflict", reply)
+		}
+	})
+
+	t.Run("unknown sprint is not found", func(t *testing.T) {
+		reply := runTyped(handleSprintKill, opCtx(db, mustJSON(t, map[string]string{"id": "ghost"}), appendFn))
+		if reply.OK || !strings.HasPrefix(reply.Error, "NotFound: ") {
+			t.Fatalf("reply = %+v, want NotFound", reply)
+		}
+	})
+}
+
+// TestKillSprintSurfacesTeardownErrorAfterRowWrites proves killSprint mirrors
+// handleWorkstreamKill: a backend kill failure is returned only after every row
+// (sprint status, agent status) is already mutated, so a half-dead sprint never
+// lingers active.
+func TestKillSprintSurfacesTeardownErrorAfterRowWrites(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+
+	db := newTestDB(ctx, t)
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "optest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/s", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertWorkstream: %v", err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
+	}
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a1", SprintID: "s1", Backend: "optest", TerminalHandle: "term-1",
+		SessionID: "sess-1", Scope: "/s", SubjectID: "subj-1", Status: StatusActive, State: StateWorking, CreatedAt: "t0",
+	})
+	backend.Register(opBackend{killErr: errors.New("tmux: no such window")})
+	appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+
+	reply := runTyped(handleSprintKill, opCtx(db, mustJSON(t, map[string]string{"id": "s1"}), appendFn))
+	if reply.OK || reply.Error == "" {
+		t.Fatalf("reply = %+v, want ok=false with the kill error", reply)
+	}
+	assertSprintStatus(ctx, t, db, "s1", StatusKilled)
+	assertAgentStatus(ctx, t, db, "a1", StatusExited)
+}
+
 // assertConfig asserts a config key's value and presence.
 func assertConfig(ctx context.Context, t *testing.T, db *sql.DB, key, wantValue string, wantFound bool) {
 	t.Helper()
@@ -1433,6 +1619,9 @@ func TestKillClearsActiveSelection(t *testing.T) {
 
 	setup := func(t *testing.T) *sql.DB {
 		t.Helper()
+		// A clean, no-killErr "optest" — this test needs the kill to succeed, and must
+		// not depend on whatever an earlier test last left registered under that name.
+		backend.Register(opBackend{})
 		db := newTestDB(ctx, t)
 		if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "optest", Cwd: "/s", Status: StatusActive, CreatedAt: "t0"}); err != nil {
 			t.Fatalf("insertRepo: %v", err)

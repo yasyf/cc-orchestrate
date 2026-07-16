@@ -153,22 +153,33 @@ func handleSerialize(hc daemon.HandlerCtx, req fleetSerializeRequest) (fleetSeri
 	return fleetSerializeResult{Path: path, Count: len(bundle.Agents)}, nil
 }
 
-// captureAgent captures one active agent's terminal screen and copies its restorable
-// identity into a serializedAgent. It holds agentLock across the screen read because a
-// concurrent restart would swap the terminal handle the capture addresses. The
-// EventSerialized audit frame is appended by handleSerialize only after the bundle is
-// durably written, so a failed write leaves no event referencing an absent bundle.
-func captureAgent(ctx context.Context, db *sql.DB, ag agentRow) (serializedAgent, error) {
+// captureScreenText reads one active agent's terminal screen, holding agentLock so a
+// concurrent restart cannot swap the handle mid-read. An unresolvable screen is tagged
+// Unsupported; a resolved screen's capture failing is left untagged (InternalError).
+// Shared by captureAgent and the cco.agent.capture handler.
+func captureScreenText(ctx context.Context, db *sql.DB, ag agentRow) (string, error) {
 	mu := agentLock(ag.ID)
 	mu.Lock()
 	defer mu.Unlock()
 	screen, err := resolveScreen(ctx, db, ag)
 	if err != nil {
-		return serializedAgent{}, fmt.Errorf("resolve screen for agent %q: %w", ag.ID, err)
+		return "", opErr(codeUnsupported, fmt.Errorf("resolve screen for agent %q: %w", ag.ID, err))
 	}
 	text, err := captureWithTimeout(ctx, screen)
 	if err != nil {
-		return serializedAgent{}, fmt.Errorf("capture screen for agent %q: %w", ag.ID, err)
+		return "", fmt.Errorf("capture screen for agent %q: %w", ag.ID, err)
+	}
+	return text, nil
+}
+
+// captureAgent captures one active agent's terminal screen and copies its restorable
+// identity into a serializedAgent. The EventSerialized audit frame is appended by
+// handleSerialize only after the bundle is durably written, so a failed write leaves
+// no event referencing an absent bundle.
+func captureAgent(ctx context.Context, db *sql.DB, ag agentRow) (serializedAgent, error) {
+	text, err := captureScreenText(ctx, db, ag)
+	if err != nil {
+		return serializedAgent{}, err
 	}
 	return serializedAgent{
 		ID: ag.ID, SprintID: ag.SprintID, Backend: ag.Backend, TerminalHandle: ag.TerminalHandle,

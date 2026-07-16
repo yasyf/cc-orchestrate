@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -200,6 +201,31 @@ func resolveSpawnSprint(hc daemon.HandlerCtx, reqSprint, reqWorkstream, reqRepo 
 	return sprintRow{}, fmt.Errorf("no sprint specified and no active sprint, workstream, or repo")
 }
 
+// requireActiveHierarchy resolves sprint's workstream and repo and errors Conflict if
+// any of the three is not active — the gate a bare spawn enforces so it can never
+// attach a live agent to a soft-killed target, reused by respawn eligibility so an
+// exited agent is revived under the identical rule.
+func requireActiveHierarchy(hc daemon.HandlerCtx, sprint sprintRow) (workstreamRow, repoRow, error) {
+	ws, err := getWorkstream(hc.Ctx, hc.DB, sprint.WorkstreamID, "")
+	if err != nil {
+		return workstreamRow{}, repoRow{}, err
+	}
+	repo, err := getRepo(hc.Ctx, hc.DB, ws.RepoID)
+	if err != nil {
+		return workstreamRow{}, repoRow{}, err
+	}
+	if sprint.Status != StatusActive {
+		return workstreamRow{}, repoRow{}, opErr(codeConflict, fmt.Errorf("sprint %s is %s, not active", sprint.ID, sprint.Status))
+	}
+	if ws.Status != StatusActive {
+		return workstreamRow{}, repoRow{}, opErr(codeConflict, fmt.Errorf("workstream %s is %s, not active", ws.ID, ws.Status))
+	}
+	if repo.Status != StatusActive {
+		return workstreamRow{}, repoRow{}, opErr(codeConflict, fmt.Errorf("repo %s is %s, not active", repo.ID, repo.Status))
+	}
+	return ws, repo, nil
+}
+
 // handleSpawn answers cco.agent.spawn: it resolves the target sprint, derives its
 // workstream and backend, requires the whole resolved hierarchy (sprint, workstream,
 // repo) is still active so a bare spawn can never attach a live agent to a soft-killed
@@ -233,22 +259,9 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 	if err != nil {
 		return agentSpawnResult{}, err
 	}
-	ws, err := getWorkstream(hc.Ctx, hc.DB, sprint.WorkstreamID, "")
+	ws, _, err := requireActiveHierarchy(hc, sprint)
 	if err != nil {
 		return agentSpawnResult{}, err
-	}
-	repo, err := getRepo(hc.Ctx, hc.DB, ws.RepoID)
-	if err != nil {
-		return agentSpawnResult{}, err
-	}
-	if sprint.Status != StatusActive {
-		return agentSpawnResult{}, opErr(codeConflict, fmt.Errorf("sprint %s is %s, not active", sprint.ID, sprint.Status))
-	}
-	if ws.Status != StatusActive {
-		return agentSpawnResult{}, opErr(codeConflict, fmt.Errorf("workstream %s is %s, not active", ws.ID, ws.Status))
-	}
-	if repo.Status != StatusActive {
-		return agentSpawnResult{}, opErr(codeConflict, fmt.Errorf("repo %s is %s, not active", repo.ID, repo.Status))
 	}
 	bname := ws.Backend
 	b, ok := backend.Get(bname)
@@ -260,6 +273,9 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 	}
 	scope := cmp.Or(req.Cwd, ws.Worktree)
 	if !filepath.IsAbs(scope) {
+		if hc.Scope == "" {
+			return agentSpawnResult{}, opErr(codeInvalidRequest, fmt.Errorf("relative cwd %q requires an absolute path when called with no scope", scope))
+		}
 		scope = filepath.Join(hc.Scope, scope)
 	}
 	self, err := os.Executable()
@@ -374,4 +390,113 @@ func respawnAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, a
 	//nolint:contextcheck // tailer intentionally derives from the daemon-lifetime base ctx, not this caller's ctx (see tailerManager doc)
 	tailers.start(db, appendFn, fresh)
 	return handle, nil
+}
+
+// agentRespawnRequest respawns one exited agent by id, or every eligible exited agent
+// when Dead is set. Exactly one of AgentID or Dead must be given.
+type agentRespawnRequest struct {
+	AgentID string `json:"agent_id,omitempty"`
+	Dead    bool   `json:"dead,omitempty"`
+}
+
+// agentRespawnResult reports the agents actually respawned.
+type agentRespawnResult struct {
+	Respawned []agentView `json:"respawned"`
+}
+
+// handleAgentRespawn answers cco.agent.respawn. {agent_id} respawns one eligible
+// agent, erroring Conflict if it is not; {dead:true} sweeps every StatusExited agent
+// and silently skips the ineligible ones, returning the views of those revived (an
+// empty list is a valid success).
+func handleAgentRespawn(hc daemon.HandlerCtx, req agentRespawnRequest) (agentRespawnResult, error) {
+	hasID := req.AgentID != ""
+	if hasID == req.Dead {
+		return agentRespawnResult{}, opErr(codeInvalidRequest, fmt.Errorf("respawn requires exactly one of agent_id or dead"))
+	}
+	if hasID {
+		view, err := respawnOneAgent(hc, req.AgentID)
+		if err != nil {
+			return agentRespawnResult{}, err
+		}
+		return agentRespawnResult{Respawned: []agentView{view}}, nil
+	}
+	exited, err := listAgents(hc.Ctx, hc.DB, "", StatusExited)
+	if err != nil {
+		return agentRespawnResult{}, err
+	}
+	respawned := make([]agentView, 0, len(exited))
+	for _, ag := range exited {
+		view, err := respawnOneAgent(hc, ag.ID)
+		switch {
+		case isConflict(err):
+			continue // not eligible under the dead chain; the sweep skips it
+		case err != nil:
+			return agentRespawnResult{}, err
+		}
+		respawned = append(respawned, view)
+	}
+	return agentRespawnResult{Respawned: respawned}, nil
+}
+
+// checkRespawnEligible gates a respawn on the same rule a bare spawn enforces: the
+// agent must be StatusExited and its sprint/workstream/repo chain still active.
+func checkRespawnEligible(hc daemon.HandlerCtx, ag agentRow) error {
+	if ag.Status != StatusExited {
+		return opErr(codeConflict, fmt.Errorf("agent %s is %s, not exited", ag.ID, ag.Status))
+	}
+	sprint, err := getSprint(hc.Ctx, hc.DB, ag.SprintID, "")
+	if err != nil {
+		return err
+	}
+	_, _, err = requireActiveHierarchy(hc, sprint)
+	return err
+}
+
+// respawnOneAgent re-reads and respawns one agent under agentLock. It resets the
+// restart budget with a fresh stamp (markRestartAttempt(id, 0, now), never
+// resetRestart — that drops the stamp and the staleness prober would kill the fresh
+// resume), flips the row active before the spawn (mirroring restoreAgent; a failed
+// spawn self-heals via the supervisor), respawns via respawnAgent verbatim, and
+// appends EventRestored.
+func respawnOneAgent(hc daemon.HandlerCtx, id string) (agentView, error) {
+	mu := agentLock(id)
+	mu.Lock()
+	defer mu.Unlock()
+	ag, err := getAgent(hc.Ctx, hc.DB, id)
+	if err != nil {
+		return agentView{}, err
+	}
+	if err := checkRespawnEligible(hc, ag); err != nil {
+		return agentView{}, err
+	}
+	if err := markRestartAttempt(hc.Ctx, hc.DB, ag.ID, 0, nowStamp()); err != nil {
+		return agentView{}, err
+	}
+	if err := setAgentLifecycle(hc.Ctx, hc.DB, ag.ID, StatusActive); err != nil {
+		return agentView{}, err
+	}
+	cur, err := getAgent(hc.Ctx, hc.DB, ag.ID)
+	if err != nil {
+		return agentView{}, err
+	}
+	handle, err := respawnAgent(hc.Ctx, hc.DB, hc.Append, cur)
+	if err != nil {
+		return agentView{}, err
+	}
+	if _, err := hc.Append(hc.Ctx, &event.Event{
+		SubjectID: cur.SubjectID, Origin: event.OriginSystem, Type: EventRestored, Payload: restoredPayload(cur.ID, handle.ID),
+	}); err != nil {
+		return agentView{}, err
+	}
+	final, err := getAgent(hc.Ctx, hc.DB, ag.ID)
+	if err != nil {
+		return agentView{}, err
+	}
+	return newAgentView(final), nil
+}
+
+// isConflict reports whether err is opErr-tagged Conflict.
+func isConflict(err error) bool {
+	var oe *opError
+	return errors.As(err, &oe) && oe.Code == codeConflict
 }

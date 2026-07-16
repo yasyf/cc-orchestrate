@@ -629,6 +629,9 @@ func handleRepoCreate(hc daemon.HandlerCtx, req repoCreateRequest) (repoCreateRe
 	}
 	cwd := cmp.Or(req.Cwd, ".")
 	if !filepath.IsAbs(cwd) {
+		if hc.Scope == "" {
+			return repoCreateResult{}, opErr(codeInvalidRequest, fmt.Errorf("relative cwd %q requires an absolute path when called with no scope", cwd))
+		}
 		cwd = filepath.Join(hc.Scope, cwd)
 	}
 	canonical, err := filepath.EvalSymlinks(cwd)
@@ -820,6 +823,37 @@ func handleAgentKill(hc daemon.HandlerCtx, req agentKillRequest) (agentKillResul
 	return agentKillResult{AgentID: ag.ID, Status: string(StatusExited)}, nil
 }
 
+// agentCaptureRequest addresses one active agent by id.
+type agentCaptureRequest struct {
+	AgentID string `json:"agent_id"`
+}
+
+// agentCaptureResult reports an agent's captured terminal screen.
+type agentCaptureResult struct {
+	AgentID    string `json:"agent_id"`
+	Content    string `json:"content"`
+	CapturedAt string `json:"captured_at"`
+}
+
+// handleAgentCapture answers cco.agent.capture: it reads an active agent's current
+// terminal screen via captureScreenText, the same codepath handleSerialize snapshots
+// through — capture is universal via the pty-host wrapper, so this never gates on a
+// backend's CanCapture.
+func handleAgentCapture(hc daemon.HandlerCtx, req agentCaptureRequest) (agentCaptureResult, error) {
+	ag, err := getAgent(hc.Ctx, hc.DB, req.AgentID)
+	if err != nil {
+		return agentCaptureResult{}, err
+	}
+	if ag.Status != StatusActive {
+		return agentCaptureResult{}, opErr(codeConflict, fmt.Errorf("agent %s is %s, not active", ag.ID, ag.Status))
+	}
+	text, err := captureScreenText(hc.Ctx, hc.DB, ag)
+	if err != nil {
+		return agentCaptureResult{}, err
+	}
+	return agentCaptureResult{AgentID: ag.ID, Content: text, CapturedAt: nowStamp()}, nil
+}
+
 // killAgentTerminal terminates an agent's backend terminal, resolving the backend and
 // the kill target from the row's current terminal handle. It is the terminal-teardown
 // half handleAgentKill and restore share; callers hold agentLock so the handle it
@@ -894,6 +928,42 @@ func markSprintKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFun
 		return err
 	}
 	return clearActiveSelection(ctx, db, configActiveSprint, sp.ID)
+}
+
+// killSprint kills a sprint for real: it snapshots the ids of agents active before the
+// kill, runs markSprintKilled (the sole row-write path, unchanged), then tears down
+// each formerly-active agent's backend terminal under agentLock, surfacing the first
+// teardown error only after every row is mutated — the handleWorkstreamKill pattern.
+func killSprint(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, sp sprintRow) error {
+	agents, err := listAgents(ctx, db, sp.ID, "")
+	if err != nil {
+		return err
+	}
+	wasActive := make([]string, 0, len(agents))
+	for _, ag := range agents {
+		if ag.Status == StatusActive {
+			wasActive = append(wasActive, ag.ID)
+		}
+	}
+	if err := markSprintKilled(ctx, db, appendFn, sp); err != nil {
+		return err
+	}
+	var teardownErr error
+	for _, id := range wasActive {
+		if err := func() error {
+			mu := agentLock(id)
+			mu.Lock()
+			defer mu.Unlock()
+			ag, err := getAgent(ctx, db, id)
+			if err != nil {
+				return err
+			}
+			return killAgentTerminal(ctx, db, ag)
+		}(); err != nil && teardownErr == nil {
+			teardownErr = err
+		}
+	}
+	return teardownErr
 }
 
 // markWorkstreamKilled cascades a workstream to killed: every active sprint is marked
@@ -1372,6 +1442,44 @@ func handleSprintActivate(hc daemon.HandlerCtx, req sprintActivateRequest) (spri
 		return sprintActivateResult{}, err
 	}
 	return sprintActivateResult{SprintID: sp.ID, Status: string(StatusActive)}, nil
+}
+
+// sprintKillRequest addresses one sprint by id or name, scoped to a workstream when
+// given to disambiguate the name.
+type sprintKillRequest struct {
+	ID         string `json:"id"`
+	Workstream string `json:"workstream,omitempty"`
+	Repo       string `json:"repo,omitempty"`
+}
+
+// sprintKillResult reports a sprint's id and its post-op lifecycle status.
+type sprintKillResult struct {
+	SprintID string `json:"sprint_id"`
+	Status   string `json:"status"`
+}
+
+// handleSprintKill answers cco.sprint.kill: a real teardown via killSprint. Unlike
+// agent-kill, killing an already-killed sprint is a Conflict, not an idempotent no-op.
+func handleSprintKill(hc daemon.HandlerCtx, req sprintKillRequest) (sprintKillResult, error) {
+	workstreamID := ""
+	if req.Workstream != "" {
+		ws, err := resolveWorkstreamRef(hc, req.Workstream, req.Repo)
+		if err != nil {
+			return sprintKillResult{}, err
+		}
+		workstreamID = ws.ID
+	}
+	sp, err := getSprint(hc.Ctx, hc.DB, req.ID, workstreamID)
+	if err != nil {
+		return sprintKillResult{}, err
+	}
+	if sp.Status != StatusActive {
+		return sprintKillResult{}, opErr(codeConflict, fmt.Errorf("sprint %s is %s, not active", sp.ID, sp.Status))
+	}
+	if err := killSprint(hc.Ctx, hc.DB, hc.Append, sp); err != nil {
+		return sprintKillResult{}, err
+	}
+	return sprintKillResult{SprintID: sp.ID, Status: string(StatusKilled)}, nil
 }
 
 // configGetRequest reads one config key.

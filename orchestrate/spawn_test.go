@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -461,12 +462,18 @@ func TestHandleSpawn(t *testing.T) {
 		t.Fatalf("spawned payload = %+v, want agent %s backend spawntest terminal term-1", spl, out.AgentID)
 	}
 
-	// The backend received the assembled claude argv keyed to the same session.
+	// The backend received the assembled claude argv keyed to the same session,
+	// wrapped outermost by scrub-exec so the child sheds the host's Claude markers.
 	if gotSpec.SessionID != out.AgentID {
 		t.Errorf("spawn spec session = %q, want %s", gotSpec.SessionID, out.AgentID)
 	}
-	if len(gotSpec.Command) == 0 || gotSpec.Command[0] != "claude" {
-		t.Errorf("spawn command = %v, want it to start with claude", gotSpec.Command)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	wantPrefix := []string{self, scrubExecCmdName, "--", "claude"}
+	if len(gotSpec.Command) < len(wantPrefix) || !slices.Equal(gotSpec.Command[:len(wantPrefix)], wantPrefix) {
+		t.Errorf("spawn command = %v, want prefix %v", gotSpec.Command, wantPrefix)
 	}
 	if last := gotSpec.Command[len(gotSpec.Command)-1]; last != "fix it" {
 		t.Errorf("spawn command trailing arg = %q, want the prompt", last)
@@ -609,8 +616,13 @@ func TestHandleSpawnPooling(t *testing.T) {
 			if !reply.OK {
 				t.Fatalf("reply not ok: %s", reply.Error)
 			}
-			if len(gotSpec.Command) < len(tc.wantHead) || !slices.Equal(gotSpec.Command[:len(tc.wantHead)], tc.wantHead) {
-				t.Fatalf("spawn command head = %v, want %v", gotSpec.Command, tc.wantHead)
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatalf("os.Executable: %v", err)
+			}
+			wantHead := append([]string{self, scrubExecCmdName, "--"}, tc.wantHead...)
+			if len(gotSpec.Command) < len(wantHead) || !slices.Equal(gotSpec.Command[:len(wantHead)], wantHead) {
+				t.Fatalf("spawn command head = %v, want %v", gotSpec.Command, wantHead)
 			}
 		})
 	}
@@ -650,8 +662,13 @@ func TestRespawnAgentPooling(t *testing.T) {
 			if _, err := respawnAgent(ctx, db, appendFn, ag); err != nil {
 				t.Fatalf("respawnAgent: %v", err)
 			}
-			if len(gotSpec.Command) < len(tc.wantHead) || !slices.Equal(gotSpec.Command[:len(tc.wantHead)], tc.wantHead) {
-				t.Fatalf("respawn command head = %v, want %v", gotSpec.Command, tc.wantHead)
+			self, err := os.Executable()
+			if err != nil {
+				t.Fatalf("os.Executable: %v", err)
+			}
+			wantHead := append([]string{self, scrubExecCmdName, "--"}, tc.wantHead...)
+			if len(gotSpec.Command) < len(wantHead) || !slices.Equal(gotSpec.Command[:len(wantHead)], wantHead) {
+				t.Fatalf("respawn command head = %v, want %v", gotSpec.Command, wantHead)
 			}
 		})
 	}
@@ -736,4 +753,159 @@ func TestHandleSpawnRejectsKilledHierarchy(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHandleSpawnRejectsRelativeCwdWithNoScope proves a relative --cwd fails loud
+// over a scopeless (HTTP) envelope instead of silently resolving against "" (the
+// long-lived daemon's own cwd, never the caller's).
+func TestHandleSpawnRejectsRelativeCwdWithNoScope(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(ctx, t)
+	backend.Register(spawnBackend{spec: &backend.SpawnSpec{}})
+	spawnPoolingHierarchy(ctx, t, db)
+
+	body := mustJSON(t, map[string]string{"repo": "p1", "cwd": "sub/dir"})
+	reply := runTyped(handleSpawn, opCtx(db, body, func(context.Context, *event.Event) (int64, error) {
+		t.Fatal("Append must not be called when cwd cannot be resolved")
+		return 0, nil
+	}))
+	if reply.OK || !strings.HasPrefix(reply.Error, "InvalidRequest: ") {
+		t.Fatalf("reply = %+v, want InvalidRequest", reply)
+	}
+}
+
+// TestHandleAgentRespawn covers cco.agent.respawn's eligibility matrix: the
+// agent_id/dead XOR validation, an active or chain-killed agent rejected as a
+// Conflict, an eligible exited agent revived into its same session with a fresh
+// restart budget (not resetRestart's semantics) and an EventRestored, and the dead
+// sweep silently skipping ineligible agents.
+func TestHandleAgentRespawn(t *testing.T) {
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+
+	db := newTestDB(ctx, t)
+	var gotSpec backend.SpawnSpec
+	backend.Register(spawnBackend{spec: &gotSpec})
+
+	if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "spawntest", Cwd: "/tmp/a", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatalf("insertRepo: %v", err)
+	}
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "spawntest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/tmp/a", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertWorkstream: %v", err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{ID: "s2", WorkstreamID: "w1", Name: "dead", Status: StatusKilled, CreatedAt: "t0"}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
+	}
+
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a-active", SprintID: "s1", Backend: "spawntest", TerminalHandle: "term-old",
+		SessionID: "sess-active", Scope: "/tmp/a", Name: "active", SubjectID: "subj-active",
+		Status: StatusActive, State: StateWorking, CreatedAt: "t0",
+	})
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a-chain-dead", SprintID: "s2", Backend: "spawntest", TerminalHandle: "term-old2",
+		SessionID: "sess-chain-dead", Scope: "/tmp/a", Name: "chain-dead", SubjectID: "subj-chain-dead",
+		Status: StatusExited, State: StateIdle, CreatedAt: "t0", RestartCount: 2, LastRestartAt: "t0",
+	})
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a-eligible", SprintID: "s1", Backend: "spawntest", TerminalHandle: "term-old3",
+		SessionID: "sess-eligible", Scope: "/tmp/a", Name: "eligible", SubjectID: "subj-eligible",
+		Status: StatusExited, State: StateIdle, CreatedAt: "t0", RestartCount: 3, LastRestartAt: "2026-06-01T00:00:00Z",
+	})
+
+	t.Run("both agent_id and dead set is invalid", func(t *testing.T) {
+		log := &eventLog{}
+		reply := runTyped(handleAgentRespawn, opCtx(db, mustJSON(t, map[string]any{"agent_id": "a-eligible", "dead": true}), log.append))
+		if reply.OK || !strings.HasPrefix(reply.Error, "InvalidRequest: ") {
+			t.Fatalf("reply = %+v, want InvalidRequest", reply)
+		}
+	})
+
+	t.Run("neither agent_id nor dead set is invalid", func(t *testing.T) {
+		log := &eventLog{}
+		reply := runTyped(handleAgentRespawn, opCtx(db, mustJSON(t, map[string]any{}), log.append))
+		if reply.OK || !strings.HasPrefix(reply.Error, "InvalidRequest: ") {
+			t.Fatalf("reply = %+v, want InvalidRequest", reply)
+		}
+	})
+
+	t.Run("an active agent is a conflict", func(t *testing.T) {
+		log := &eventLog{}
+		reply := runTyped(handleAgentRespawn, opCtx(db, mustJSON(t, map[string]any{"agent_id": "a-active"}), log.append))
+		if reply.OK || !strings.HasPrefix(reply.Error, "Conflict: ") {
+			t.Fatalf("reply = %+v, want Conflict", reply)
+		}
+	})
+
+	t.Run("an exited agent whose sprint is killed is a conflict", func(t *testing.T) {
+		log := &eventLog{}
+		reply := runTyped(handleAgentRespawn, opCtx(db, mustJSON(t, map[string]any{"agent_id": "a-chain-dead"}), log.append))
+		if reply.OK || !strings.HasPrefix(reply.Error, "Conflict: ") {
+			t.Fatalf("reply = %+v, want Conflict", reply)
+		}
+	})
+
+	t.Run("an eligible exited agent respawns into the same session", func(t *testing.T) {
+		log := &eventLog{}
+		reply := runTyped(handleAgentRespawn, opCtx(db, mustJSON(t, map[string]any{"agent_id": "a-eligible"}), log.append))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		var out agentRespawnResult
+		if err := json.Unmarshal(reply.Body, &out); err != nil {
+			t.Fatal(err)
+		}
+		if len(out.Respawned) != 1 || out.Respawned[0].ID != "a-eligible" || out.Respawned[0].SessionID != "sess-eligible" {
+			t.Fatalf("respawned = %+v, want [{ID:a-eligible SessionID:sess-eligible ...}]", out.Respawned)
+		}
+		if out.Respawned[0].Status != string(StatusActive) {
+			t.Fatalf("respawned status = %q, want active", out.Respawned[0].Status)
+		}
+
+		ag, err := getAgent(ctx, db, "a-eligible")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ag.RestartCount != 0 {
+			t.Fatalf("RestartCount = %d, want 0 (a fresh budget, not resetRestart's semantics)", ag.RestartCount)
+		}
+		if ag.LastRestartAt == "" || ag.LastRestartAt == "2026-06-01T00:00:00Z" {
+			t.Fatalf("LastRestartAt = %q, want a fresh stamp (resetRestart would blank it instead)", ag.LastRestartAt)
+		}
+		if log.count(EventRestored) != 1 {
+			t.Fatalf("EventRestored count = %d, want 1; events=%v", log.count(EventRestored), log.types())
+		}
+	})
+
+	t.Run("dead sweep respawns eligible agents and silently skips ineligible ones", func(t *testing.T) {
+		// a-eligible is active from the prior subtest; re-exit it so the sweep has an
+		// eligible candidate alongside the still-ineligible a-chain-dead.
+		if err := setAgentLifecycle(ctx, db, "a-eligible", StatusExited); err != nil {
+			t.Fatal(err)
+		}
+		log := &eventLog{}
+		reply := runTyped(handleAgentRespawn, opCtx(db, mustJSON(t, map[string]any{"dead": true}), log.append))
+		if !reply.OK {
+			t.Fatalf("reply not ok: %s", reply.Error)
+		}
+		var out agentRespawnResult
+		if err := json.Unmarshal(reply.Body, &out); err != nil {
+			t.Fatal(err)
+		}
+		if len(out.Respawned) != 1 || out.Respawned[0].ID != "a-eligible" {
+			t.Fatalf("respawned = %+v, want exactly [a-eligible] (a-chain-dead skipped, a-active not exited)", out.Respawned)
+		}
+	})
 }

@@ -63,8 +63,9 @@ func TestMCPServer(t *testing.T) {
 		"backends_list", "backend_select", "config_get", "config_set",
 		"repo_create", "repo_list", "repo_activate", "repo_kill",
 		"workstream_create", "workstream_list", "workstream_activate", "workstream_kill",
-		"sprint_create", "sprint_list", "sprint_activate",
+		"sprint_create", "sprint_list", "sprint_activate", "sprint_kill",
 		"agent_spawn", "agent_list", "agent_show", "agent_send_message", "agent_kill",
+		"agent_respawn", "agent_capture",
 		"fleet_serialize", "fleet_restore",
 	}
 	if len(listReply.Result.Tools) != len(want) {

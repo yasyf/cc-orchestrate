@@ -351,6 +351,45 @@ func TestSprintCRUD(t *testing.T) {
 	})
 }
 
+// TestGetDefaultSprintSkipsKilled proves getDefaultSprint never returns a killed
+// sprint: after killing the earliest-created (default) sprint, the next-earliest
+// active one takes over, and once every sprint is killed it errors not-found rather
+// than falling back to a dead default.
+func TestGetDefaultSprintSkipsKilled(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(ctx, t)
+
+	first := sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "2026-06-16T00:00:00Z"}
+	second := sprintRow{ID: "s2", WorkstreamID: "w1", Name: "feat", Status: StatusActive, CreatedAt: "2026-06-16T01:00:00Z"}
+	for _, sp := range []sprintRow{first, second} {
+		if err := insertSprint(ctx, db, sp); err != nil {
+			t.Fatalf("insertSprint %s: %v", sp.ID, err)
+		}
+	}
+
+	t.Run("kills the earlier default, the later sprint takes over", func(t *testing.T) {
+		if err := setSprintStatus(ctx, db, "s1", StatusKilled); err != nil {
+			t.Fatal(err)
+		}
+		got, err := getDefaultSprint(ctx, db, "w1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ID != "s2" {
+			t.Fatalf("getDefaultSprint(w1).ID = %q, want s2 (the only remaining active sprint)", got.ID)
+		}
+	})
+
+	t.Run("no active sprint left is a not-found error", func(t *testing.T) {
+		if err := setSprintStatus(ctx, db, "s2", StatusKilled); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := getDefaultSprint(ctx, db, "w1"); err == nil {
+			t.Fatal("getDefaultSprint(w1) = nil error, want not-found once every sprint is killed")
+		}
+	})
+}
+
 // TestListRepoAgents proves the repo-level aggregation joins agents through their
 // sprints and workstreams, returning every agent of a repo across its streams.
 func TestListRepoAgents(t *testing.T) {

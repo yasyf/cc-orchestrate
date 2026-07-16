@@ -186,12 +186,15 @@ var (
 	mSprintList     = query("cco.sprint.list", "List the sprints, optionally filtered by workstream.", full, handleSprintList)
 	mSprintShow     = query("cco.sprint.show", "Show one sprint by id or name.", rpc, handleSprintShow)
 	mSprintActivate = procedure("cco.sprint.activate", "Mark a sprint active and record it as the default an agent spawn lands in.", full, handleSprintActivate)
+	mSprintKill     = procedure("cco.sprint.kill", "Kill a sprint: exit its active agents and tear down their terminals.", full, handleSprintKill)
 
 	mAgentSpawn       = procedure("cco.agent.spawn", "Spawn a child Claude Code agent into a sprint, a workstream's or repo's default sprint, or the active sprint. An empty prompt starts the agent idle and interactive; API callers normally pass one.", full, handleSpawn)
 	mAgentList        = query("cco.agent.list", "List agents and their derived status, optionally filtered by repo.", full, handleList)
 	mAgentShow        = query("cco.agent.show", "Show one agent's derived status.", full, handleStatus)
 	mAgentSendMessage = procedure("cco.agent.sendMessage", "Send a message (a new instruction) to a running agent.", full, handleSendMessage)
 	mAgentKill        = procedure("cco.agent.kill", "Kill a running agent.", full, handleAgentKill)
+	mAgentRespawn     = procedure("cco.agent.respawn", "Respawn one exited agent, or every eligible exited agent when dead is set, back into its existing session.", full, handleAgentRespawn)
+	mAgentCapture     = query("cco.agent.capture", "Capture an active agent's current terminal screen.", full, handleAgentCapture)
 	mAgentReport      = procedure("cco.agent.report", "Append a child agent's report to its subject log (the child channel's tool).", sock, handleReport)
 
 	mConfigGet   = query("cco.config.get", "Read one persisted config key's value.", full, handleConfigGet)
@@ -205,8 +208,8 @@ var (
 	methods = []method{
 		mRepoCreate, mRepoList, mRepoShow, mRepoActivate, mRepoKill,
 		mWorkstreamCreate, mWorkstreamList, mWorkstreamShow, mWorkstreamActivate, mWorkstreamKill,
-		mSprintCreate, mSprintList, mSprintShow, mSprintActivate,
-		mAgentSpawn, mAgentList, mAgentShow, mAgentSendMessage, mAgentKill, mAgentReport,
+		mSprintCreate, mSprintList, mSprintShow, mSprintActivate, mSprintKill,
+		mAgentSpawn, mAgentList, mAgentShow, mAgentSendMessage, mAgentKill, mAgentRespawn, mAgentCapture, mAgentReport,
 		mConfigGet, mConfigSet, mConfigList, mConfigUnset,
 		mFleetSerialize, mFleetRestore,
 	}

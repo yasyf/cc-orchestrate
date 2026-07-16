@@ -122,7 +122,7 @@ var errNotFound = errors.New("not found")
 // matching.
 type lookupError struct{ msg string }
 
-func (e *lookupError) Error() string { return e.msg }
+func (e *lookupError) Error() string        { return e.msg }
 func (e *lookupError) Is(target error) bool { return target == errNotFound }
 
 func notFoundf(format string, args ...any) error {
@@ -376,15 +376,16 @@ func getSprint(ctx context.Context, db *sql.DB, ref, workstreamID string) (sprin
 	return sp, nil
 }
 
-// getDefaultSprint returns a workstream's default sprint: the one auto-created with
-// the workstream, the single-group default an agent spawns into when no sprint is
-// named. It is the workstream's first sprint — ordered by creation, then rowid to
-// break a same-second tie deterministically in favour of the earlier insert.
+// getDefaultSprint returns a workstream's default sprint: its earliest-created active
+// sprint, ordered by creation then rowid to break a same-second tie in favour of the
+// earlier insert. A killed sprint is never a default — an agent spawn that names no
+// sprint falls back through this, and a killed sprint must never be the fallback.
 func getDefaultSprint(ctx context.Context, db *sql.DB, workstreamID string) (sprintRow, error) {
 	sp, err := scanSprint(db.QueryRowContext(ctx,
-		`SELECT `+sprintColumns+` FROM sprints WHERE workstream_id = ? ORDER BY created_at, rowid LIMIT 1`, workstreamID))
+		`SELECT `+sprintColumns+` FROM sprints WHERE workstream_id = ? AND status = ? ORDER BY created_at, rowid LIMIT 1`,
+		workstreamID, StatusActive))
 	if errors.Is(err, sql.ErrNoRows) {
-		return sprintRow{}, notFoundf("no default sprint for workstream: %s", workstreamID)
+		return sprintRow{}, notFoundf("no active default sprint for workstream: %s", workstreamID)
 	}
 	if err != nil {
 		return sprintRow{}, fmt.Errorf("get default sprint for workstream %q: %w", workstreamID, err)
