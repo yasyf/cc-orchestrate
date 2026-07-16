@@ -12,9 +12,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// jsonFlag is the persistent --json flag Root() installs: every data-emitting
-// command honors it through runRender, so the machine-readable surface never drifts
-// from the human one.
+// jsonFlag is the persistent --json flag Root() installs for cc-orchestrate's domain
+// commands. Those commands honor it through runRender; cc-interact's bundled substrate
+// commands retain their own output behavior.
 const jsonFlag = "json"
 
 // jsonOutput reports whether the persistent --json flag is set. It reads the flag off
@@ -230,6 +230,15 @@ func formatFleetFrame(data string) string {
 	if err := json.Unmarshal([]byte(data), &f); err != nil {
 		return data
 	}
+	f.AgentID = sanitizeLine(f.AgentID)
+	f.Name = sanitizeLine(f.Name)
+	f.ID = sanitizeLine(f.ID)
+	f.State = sanitizeLine(f.State)
+	f.Tool = sanitizeLine(f.Tool)
+	f.Target = sanitizeLine(f.Target)
+	f.Reason = sanitizeLine(f.Reason)
+	f.Backend = sanitizeLine(f.Backend)
+	f.Path = sanitizeLine(f.Path)
 	short := strings.TrimPrefix(f.Type, "fleet.")
 	var detail string
 	switch f.Type {
@@ -278,6 +287,12 @@ func formatEventLine(data string) string {
 	if err := json.Unmarshal([]byte(data), &e); err != nil {
 		return data
 	}
+	e.State = sanitizeLine(e.State)
+	e.Tool = sanitizeLine(e.Tool)
+	e.Target = sanitizeLine(e.Target)
+	e.Text = sanitizeLine(e.Text)
+	e.Backend = sanitizeLine(e.Backend)
+	e.Terminal = sanitizeLine(e.Terminal)
 	var label, detail string
 	switch e.Type {
 	case EventStatus:
@@ -305,6 +320,14 @@ func formatEventLine(data string) string {
 		return label
 	}
 	return fmt.Sprintf("%-9s %s", label, detail)
+}
+
+// sanitizeLine collapses embedded line breaks in a free-text event/frame field into the
+// literal two-character escape \n, so one logical event always renders as exactly one
+// physical line — the invariant --all's agent-id prefix demux depends on.
+func sanitizeLine(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\\n")
+	return strings.ReplaceAll(s, "\n", "\\n")
 }
 
 // toolTargetSuffix renders a status frame's optional tool and target as a

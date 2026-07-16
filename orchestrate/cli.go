@@ -42,7 +42,7 @@ func Root() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	r.PersistentFlags().Bool(jsonFlag, false, "emit the daemon's JSON reply verbatim instead of the human view")
+	r.PersistentFlags().Bool(jsonFlag, false, "emit machine-readable JSON (cco's domain commands)")
 	r.AddCommand(
 		cmd.DaemonCmd(d),
 		withSessionDefault(cmd.WatchCmd(d)),
@@ -269,11 +269,11 @@ func runBackendsSelect(c *cobra.Command, args []string) error {
 	if err := backend.ValidateBackend(backend.Name(name)); err != nil {
 		return fmt.Errorf("%w; run `%s backends list`", err, AppName)
 	}
-	if _, err := runOp(c, mConfigSet.op(), map[string]string{"key": "backend", "value": name}); err != nil {
-		return err
-	}
-	_, _ = fmt.Fprintf(c.OutOrStdout(), "selected backend: %s\n", name)
-	return nil
+	return runRender(c, mConfigSet, map[string]string{"key": "backend", "value": name},
+		func(w io.Writer, _ configSetResult) error {
+			_, err := fmt.Fprintf(w, "selected backend: %s\n", name)
+			return err
+		})
 }
 
 // selectedBackend reads the persisted default backend straight from the state db
@@ -1018,9 +1018,9 @@ const (
 	fleetStatusConsumer = "fleet-status"
 )
 
-// fleetRepaintDebounce coalesces a burst of fleet frames into a single fleet-status
-// repaint, so a spawn storm redraws once rather than per frame.
-const fleetRepaintDebounce = 250 * time.Millisecond
+// fleetRepaintThrottle bounds fleet-status repaints to one per fixed window: the first
+// poke starts the window, and further pokes within it coalesce into the same repaint.
+const fleetRepaintThrottle = 250 * time.Millisecond
 
 // fleetCmd is the `fleet` group: the fleet-wide status snapshot and the live event
 // stream. The root `watch`/`status` verbs belong to the cc-interact substrate, so the
@@ -1083,8 +1083,8 @@ func runFleetWatch(c *cobra.Command, _ []string) error {
 	})
 }
 
-// runFleetStatusWatch paints the fleet status once, then repaints it on every fleet
-// frame, debounced so a burst coalesces into one redraw. The consume loop only pokes a
+// runFleetStatusWatch paints the fleet status once, then repaints it on fleet-frame
+// bursts, throttled so each fixed window produces at most one redraw. The consume loop only pokes a
 // buffered channel; the repaint loop re-fetches the whole snapshot (the source of
 // truth), so a dropped or replayed frame never diverges the view.
 func runFleetStatusWatch(c *cobra.Command) error {
@@ -1101,9 +1101,19 @@ func runFleetStatusWatch(c *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	return watchFleetStatus(c.Context(), ctx, cancel, d, subjectID, port, func() error {
+		return paintFleetStatus(c)
+	})
+}
+
+// watchFleetStatus runs the paint-on-poke loop against an already-resolved fleet stream
+// target. It returns the stream error when consumption ends on its own, while a genuine
+// cancellation of the parent context remains a clean exit.
+func watchFleetStatus(parent, ctx context.Context, cancel context.CancelFunc, d cmd.Deps, subjectID string, port int, paint func() error) error {
 	poke := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
 	go func() {
-		_ = consumeFleet(ctx, d, subjectID, port, fleetStatusConsumer, func(string) error {
+		errCh <- consumeFleet(ctx, d, subjectID, port, fleetStatusConsumer, func(string) error {
 			select {
 			case poke <- struct{}{}:
 			default:
@@ -1115,23 +1125,26 @@ func runFleetStatusWatch(c *cobra.Command) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
-		case <-poke:
-			if !debounceQuiet(ctx, poke) {
+			if parent.Err() != nil {
 				return nil
 			}
-			if err := paintFleetStatus(c); err != nil {
+			return <-errCh
+		case <-poke:
+			if !throttleRepaint(ctx, poke) {
+				return nil
+			}
+			if err := paint(); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-// debounceQuiet waits out one fleetRepaintDebounce window, coalescing further pokes, so
-// the caller repaints once after a burst settles. It returns false when ctx is
-// cancelled mid-wait, signaling the repaint loop to stop.
-func debounceQuiet(ctx context.Context, poke <-chan struct{}) bool {
-	timer := time.NewTimer(fleetRepaintDebounce)
+// throttleRepaint waits out one fleetRepaintThrottle window from the first poke. Further
+// pokes within the fixed window coalesce into its single repaint without resetting the
+// timer. It returns false when ctx is cancelled mid-wait.
+func throttleRepaint(ctx context.Context, poke <-chan struct{}) bool {
+	timer := time.NewTimer(fleetRepaintThrottle)
 	defer timer.Stop()
 	for {
 		select {
@@ -1159,8 +1172,23 @@ func paintFleetStatus(c *cobra.Command) error {
 	if err := json.Unmarshal(reply.Body, &res); err != nil {
 		return err
 	}
-	_, _ = io.WriteString(out, "\033[H\033[2J")
+	writeFleetStatusHead(out, isTTY(os.Stdout))
 	return renderFleetStatus(out, res)
+}
+
+// isTTY reports whether f is a real terminal device (a character device), the gate on
+// whether repaint-clearing ANSI codes are safe to emit.
+func isTTY(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func writeFleetStatusHead(w io.Writer, tty bool) {
+	if tty {
+		_, _ = io.WriteString(w, "\033[H\033[2J")
+		return
+	}
+	_, _ = io.WriteString(w, "\n")
 }
 
 // fleetStreamTarget reads the fleet subject id and the daemon's HTTP port off one

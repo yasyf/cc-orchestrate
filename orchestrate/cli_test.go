@@ -1,6 +1,7 @@
 package orchestrate
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -12,10 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yasyf/cc-interact/cmd"
 	"github.com/yasyf/cc-interact/consume"
 	"github.com/yasyf/cc-interact/daemon"
 	"github.com/yasyf/cc-interact/store"
 	"github.com/yasyf/cc-interact/subject"
+
+	"github.com/yasyf/cc-orchestrate/backend"
 )
 
 // TestWorkstreamCommandTree asserts the `workstream` group (alias `ws`) carries
@@ -302,5 +306,107 @@ func TestRespawnExclusivity(t *testing.T) {
 				t.Fatalf("respawn %v err = %v, want an exactly-one error", tc.args, err)
 			}
 		})
+	}
+}
+
+// TestBackendsSelectValidatesBeforeDaemon proves an invalid backend is rejected by
+// ValidateBackend before the config-set path can attempt a daemon round trip.
+func TestBackendsSelectValidatesBeforeDaemon(t *testing.T) {
+	const name = "bogus-backend-name"
+	want := backend.ValidateBackend(backend.Name(name))
+	if want == nil {
+		t.Fatalf("ValidateBackend(%q) unexpectedly succeeded", name)
+	}
+
+	root := Root()
+	root.SetArgs([]string{"backends", "select", name})
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), want.Error()) {
+		t.Fatalf("backends select %q err = %v, want validation error containing %q", name, err, want)
+	}
+}
+
+// TestWatchFleetStatusPropagatesStreamErrors proves a fatal fleet SSE response reaches
+// the caller, while cancelling the parent context remains a clean watch exit.
+func TestWatchFleetStatusPropagatesStreamErrors(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s, err := daemon.New(daemon.Config{
+		AppName:        AppName,
+		Paths:          appPaths(),
+		Version:        Version,
+		ActiveStatuses: []string{"active"},
+		Migrate:        migrate,
+	})
+	if err != nil {
+		t.Fatalf("daemon.New: %v", err)
+	}
+	ts := httptest.NewServer(s.Mux())
+	t.Cleanup(ts.Close)
+	u, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatalf("parse %q: %v", ts.URL, err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("parse port from %q: %v", ts.URL, err)
+	}
+	d := cmd.Deps{Paths: appPaths(), WindowAlive: windowAlive}
+
+	t.Run("fatal stream error", func(t *testing.T) {
+		parent := context.Background()
+		ctx, cancel := context.WithCancel(parent)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			done <- watchFleetStatus(parent, ctx, cancel, d, "does-not-exist", port, func() error { return nil })
+		}()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("watchFleetStatus returned nil, want fatal stream error")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("watchFleetStatus did not return the fatal stream error within 5s")
+		}
+	})
+
+	t.Run("parent cancellation", func(t *testing.T) {
+		parent, cancelParent := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(parent)
+		cancelParent()
+		if err := watchFleetStatus(parent, ctx, cancel, d, "does-not-exist", port, func() error { return nil }); err != nil {
+			t.Fatalf("watchFleetStatus after parent cancellation = %v, want nil", err)
+		}
+	})
+}
+
+// TestIsTTYRejectsPipe proves terminal detection reads a real file descriptor and does
+// not mistake a pipe for a character-device terminal.
+func TestIsTTYRejectsPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = r.Close()
+		_ = w.Close()
+	})
+	if isTTY(w) {
+		t.Error("isTTY(pipe) = true, want false")
+	}
+}
+
+// TestWriteFleetStatusHeadNonTTY proves piped fleet-status repaints use a blank-line
+// separator without emitting an ANSI escape sequence.
+func TestWriteFleetStatusHeadNonTTY(t *testing.T) {
+	var buf bytes.Buffer
+	writeFleetStatusHead(&buf, false)
+	if bytes.ContainsRune(buf.Bytes(), '\x1b') {
+		t.Fatalf("non-TTY head contains ESC: %q", buf.Bytes())
+	}
+	if got, want := buf.String(), "\n"; got != want {
+		t.Fatalf("non-TTY head = %q, want %q", got, want)
 	}
 }

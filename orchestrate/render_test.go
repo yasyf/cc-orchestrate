@@ -53,6 +53,36 @@ func TestRenderReplyHuman(t *testing.T) {
 	}
 }
 
+// TestBackendsSelectRenderModes pins the specialized config-set renderer: human mode
+// keeps its legacy line, while JSON mode preserves the daemon body byte-for-byte.
+func TestBackendsSelectRenderModes(t *testing.T) {
+	const name = "tmux"
+	body := json.RawMessage(`{"key":"backend","value":"tmux","daemon_added":1}`)
+	human := func(w io.Writer, _ configSetResult) error {
+		_, err := fmt.Fprintf(w, "selected backend: %s\n", name)
+		return err
+	}
+
+	for _, tc := range []struct {
+		name   string
+		asJSON bool
+		want   string
+	}{
+		{"human", false, "selected backend: tmux\n"},
+		{"json", true, string(body) + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := renderReply(&buf, tc.asJSON, body, human); err != nil {
+				t.Fatalf("renderReply: %v", err)
+			}
+			if got := buf.String(); got != tc.want {
+				t.Fatalf("output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestAgentShowHumanMatchesLegacy pins the `agent show` (alias `status`) human view to
 // the exact bytes the hand-padded status command emitted before it was routed through
 // renderKV, so the alias renders identically and scripts keep working.
@@ -205,24 +235,26 @@ func TestRenderFleetStatusDanglingLink(t *testing.T) {
 func TestFormatFleetFrame(t *testing.T) {
 	const ts = "2026-06-16T00:00:00Z"
 	for _, tc := range []struct {
-		name    string
-		payload string
-		short   string
-		suffix  string
+		name      string
+		payload   string
+		short     string
+		suffix    string
+		sanitized bool
 	}{
-		{"spawned", `{"type":"fleet.agent.spawned","ts":"TS","agent_id":"a1","name":"worker","backend":"tmux"}`, "agent.spawned", "a1 worker backend=tmux"},
-		{"status", `{"type":"fleet.agent.status","ts":"TS","agent_id":"a1","state":"working","tool":"Bash","target":"ls","tokens":10}`, "agent.status", "a1 working Bash ls tokens=10"},
-		{"status no tool", `{"type":"fleet.agent.status","ts":"TS","agent_id":"a1","state":"idle","tokens":0}`, "agent.status", "a1 idle tokens=0"},
-		{"message", `{"type":"fleet.agent.message","ts":"TS","agent_id":"a1"}`, "agent.message", "a1"},
-		{"report", `{"type":"fleet.agent.report","ts":"TS","agent_id":"a1","state":"working"}`, "agent.report", "a1 state=working"},
-		{"exited", `{"type":"fleet.agent.exited","ts":"TS","agent_id":"a1","reason":"killed"}`, "agent.exited", "a1 reason=killed"},
-		{"restarted", `{"type":"fleet.agent.restarted","ts":"TS","agent_id":"a1","attempt":2}`, "agent.restarted", "a1 attempt=2"},
-		{"abandoned", `{"type":"fleet.agent.abandoned","ts":"TS","agent_id":"a1","attempts":3}`, "agent.abandoned", "a1 attempts=3"},
-		{"repo created", `{"type":"fleet.repo.created","ts":"TS","id":"r1","name":"myrepo"}`, "repo.created", "r1 myrepo"},
-		{"workstream activated", `{"type":"fleet.workstream.activated","ts":"TS","id":"w1","name":"feat"}`, "workstream.activated", "w1 feat"},
-		{"sprint killed", `{"type":"fleet.sprint.killed","ts":"TS","id":"s1","name":"main"}`, "sprint.killed", "s1 main"},
-		{"serialized", `{"type":"fleet.serialized","ts":"TS","path":"/b.json","count":4}`, "serialized", "/b.json count=4"},
-		{"restored", `{"type":"fleet.restored","ts":"TS","path":"/b.json","count":4}`, "restored", "/b.json count=4"},
+		{"spawned", `{"type":"fleet.agent.spawned","ts":"TS","agent_id":"a1","name":"worker","backend":"tmux"}`, "agent.spawned", "a1 worker backend=tmux", false},
+		{"status", `{"type":"fleet.agent.status","ts":"TS","agent_id":"a1","state":"working","tool":"Bash","target":"ls","tokens":10}`, "agent.status", "a1 working Bash ls tokens=10", false},
+		{"status multiline target", `{"type":"fleet.agent.status","ts":"TS","agent_id":"a1","state":"working","tool":"Bash","target":"line one\r\nline two","tokens":10}`, "agent.status", `a1 working Bash line one\nline two tokens=10`, true},
+		{"status no tool", `{"type":"fleet.agent.status","ts":"TS","agent_id":"a1","state":"idle","tokens":0}`, "agent.status", "a1 idle tokens=0", false},
+		{"message", `{"type":"fleet.agent.message","ts":"TS","agent_id":"a1"}`, "agent.message", "a1", false},
+		{"report", `{"type":"fleet.agent.report","ts":"TS","agent_id":"a1","state":"working"}`, "agent.report", "a1 state=working", false},
+		{"exited", `{"type":"fleet.agent.exited","ts":"TS","agent_id":"a1","reason":"killed"}`, "agent.exited", "a1 reason=killed", false},
+		{"restarted", `{"type":"fleet.agent.restarted","ts":"TS","agent_id":"a1","attempt":2}`, "agent.restarted", "a1 attempt=2", false},
+		{"abandoned", `{"type":"fleet.agent.abandoned","ts":"TS","agent_id":"a1","attempts":3}`, "agent.abandoned", "a1 attempts=3", false},
+		{"repo created", `{"type":"fleet.repo.created","ts":"TS","id":"r1","name":"myrepo"}`, "repo.created", "r1 myrepo", false},
+		{"workstream activated", `{"type":"fleet.workstream.activated","ts":"TS","id":"w1","name":"feat"}`, "workstream.activated", "w1 feat", false},
+		{"sprint killed", `{"type":"fleet.sprint.killed","ts":"TS","id":"s1","name":"main"}`, "sprint.killed", "s1 main", false},
+		{"serialized", `{"type":"fleet.serialized","ts":"TS","path":"/b.json","count":4}`, "serialized", "/b.json count=4", false},
+		{"restored", `{"type":"fleet.restored","ts":"TS","path":"/b.json","count":4}`, "restored", "/b.json count=4", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			line := formatFleetFrame(strings.ReplaceAll(tc.payload, "TS", ts))
@@ -234,6 +266,14 @@ func TestFormatFleetFrame(t *testing.T) {
 			}
 			if !strings.HasSuffix(line, tc.suffix) {
 				t.Errorf("line %q missing detail suffix %q", line, tc.suffix)
+			}
+			if tc.sanitized {
+				if strings.ContainsAny(line, "\r\n") {
+					t.Errorf("line contains a physical line break: %q", line)
+				}
+				if !strings.Contains(line, "\\n") {
+					t.Errorf("line %q missing literal \\n escape", line)
+				}
 			}
 		})
 	}
@@ -250,23 +290,34 @@ func TestFormatFleetFramePassThrough(t *testing.T) {
 // TestFormatEventLine covers the per-agent event human renderer used by `agent watch`.
 func TestFormatEventLine(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		payload string
-		want    string
+		name      string
+		payload   string
+		want      string
+		sanitized bool
 	}{
-		{"status", `{"type":"orchestrate.status","state":"working","tool":"Bash","target":"ls","tokens":10}`, "status    working Bash ls tokens=10"},
-		{"message", `{"type":"orchestrate.message","text":"go on"}`, "message   go on"},
-		{"report", `{"type":"orchestrate.report","text":"halfway","state":"working"}`, "report    halfway state=working"},
-		{"inbound", `{"type":"orchestrate.inbound","text":"hi"}`, "inbound   hi"},
-		{"exited", `{"type":"orchestrate.exited"}`, "exited"},
-		{"spawned", `{"type":"orchestrate.spawned","backend":"tmux","terminal":"t1"}`, "spawned   backend=tmux terminal=t1"},
-		{"restarted", `{"type":"orchestrate.restarted","terminal":"t2","attempt":1}`, "restarted terminal=t2 attempt=1"},
-		{"abandoned", `{"type":"orchestrate.abandoned","attempts":3}`, "abandoned attempts=3"},
-		{"restored", `{"type":"orchestrate.restored","terminal":"t3"}`, "restored  terminal=t3"},
+		{"status", `{"type":"orchestrate.status","state":"working","tool":"Bash","target":"ls","tokens":10}`, "status    working Bash ls tokens=10", false},
+		{"message", `{"type":"orchestrate.message","text":"go on"}`, "message   go on", false},
+		{"message multiline", `{"type":"orchestrate.message","text":"first\nsecond"}`, `message   first\nsecond`, true},
+		{"report", `{"type":"orchestrate.report","text":"halfway","state":"working"}`, "report    halfway state=working", false},
+		{"inbound", `{"type":"orchestrate.inbound","text":"hi"}`, "inbound   hi", false},
+		{"exited", `{"type":"orchestrate.exited"}`, "exited", false},
+		{"spawned", `{"type":"orchestrate.spawned","backend":"tmux","terminal":"t1"}`, "spawned   backend=tmux terminal=t1", false},
+		{"restarted", `{"type":"orchestrate.restarted","terminal":"t2","attempt":1}`, "restarted terminal=t2 attempt=1", false},
+		{"abandoned", `{"type":"orchestrate.abandoned","attempts":3}`, "abandoned attempts=3", false},
+		{"restored", `{"type":"orchestrate.restored","terminal":"t3"}`, "restored  terminal=t3", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := formatEventLine(tc.payload); got != tc.want {
+			got := formatEventLine(tc.payload)
+			if got != tc.want {
 				t.Errorf("formatEventLine = %q, want %q", got, tc.want)
+			}
+			if tc.sanitized {
+				if strings.ContainsAny(got, "\r\n") {
+					t.Errorf("line contains a physical line break: %q", got)
+				}
+				if !strings.Contains(got, "\\n") {
+					t.Errorf("line %q missing literal \\n escape", got)
+				}
 			}
 		})
 	}
