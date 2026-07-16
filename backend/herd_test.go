@@ -21,7 +21,7 @@ const (
 	herdPaneCloseOut      = `{"id":"cli:pane:close","result":{"type":"ok"}}`
 	herdWorkspaceCloseOut = `{"id":"cli:workspace:close","result":{"type":"ok"}}`
 
-	herdPaneReadOut = `{"id":"cli:pane:read","result":{"type":"pane_read","pane_id":"w65466e4ca40bb5-2","workspace_id":"w65466e4ca40bb5","tab_id":"w65466e4ca40bb5:1","source":"visible","format":"text","text":"Do you trust the files in this folder?","lines":1,"truncated":false}}`
+	herdAgentReadOut = `{"id":"cli:agent:read","result":{"type":"pane_read","read":{"pane_id":"w65466e4ca40bb5-2","workspace_id":"w65466e4ca40bb5","tab_id":"w65466e4ca40bb5:1","source":"visible","format":"text","text":"Do you trust the files in this folder?","revision":0,"truncated":false}}}`
 )
 
 type herdRecordedCall struct {
@@ -125,12 +125,12 @@ func TestHerdMethods(t *testing.T) {
 			},
 		},
 		{
-			name:   "Capture reads result.text from pane read",
-			output: herdPaneReadOut,
+			name:   "Capture reads result.read.text from agent read",
+			output: herdAgentReadOut,
 			invoke: func(ctx context.Context, b herd) (any, error) {
 				return b.Capture(ctx, AgentHandle{Backend: "herd", ID: "w65466e4ca40bb5-2"})
 			},
-			wantArgv: []string{"pane", "read", "w65466e4ca40bb5-2", "--source", "visible", "--format", "text"},
+			wantArgv: []string{"agent", "read", "w65466e4ca40bb5-2", "--source", "visible", "--format", "text"},
 			check: func(t *testing.T, got any) {
 				if s := got.(string); s != "Do you trust the files in this folder?" {
 					t.Errorf("screen = %q, want the trust prompt text", s)
