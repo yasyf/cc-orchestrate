@@ -94,7 +94,7 @@ curl "http://127.0.0.1:<port>/xrpc/cco.server.describe"
   "methods": [
     {"name": "cco.agent.spawn", "type": "procedure", "description": "…",
      "input": {"type": "object", "properties": {"prompt": {"type": "string"}}},
-     "output": {"type": "object", "properties": {"agent_id": {"type": "string"}}}}
+     "output": {"type": "object", "properties": {"id": {"type": "string"}}}}
   ],
   "events": {"stream": "/events?session=fleet", "types": {"fleet.agent.spawned": {"type": "object"}}}
 }
@@ -120,6 +120,11 @@ lifecycle change across the fleet as compact typed frames. Each SSE event's
 | `fleet.agent.abandoned` | `agent_id`, `attempts` | the restart budget runs out |
 | `fleet.{repo,workstream,sprint}.{created,activated,killed}` | `id`, `name` | container lifecycle changes |
 | `fleet.serialized`, `fleet.restored` | `path`, `count` | a bundle is written or restored |
+
+The stream can interleave cc-interact substrate frames — a `channel.changed`
+presence marker fires when a registered consumer attaches or detaches — so
+clients select frames by the `fleet.` type prefix rather than assuming every
+event is a fleet frame.
 
 Status frames coalesce: a state, tool, or target change emits immediately, but
 token-only updates emit at most once per agent per three seconds. Exact live

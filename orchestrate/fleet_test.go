@@ -345,8 +345,8 @@ func TestFleetSpawnFrame(t *testing.T) {
 	if pl["subject"] == "" || pl["subject"] != out.SubjectID {
 		t.Fatalf("spawned frame subject = %v, want the non-empty per-agent subject %q", pl["subject"], out.SubjectID)
 	}
-	if pl["agent_id"] != out.AgentID || pl["backend"] != "spawntest" {
-		t.Fatalf("spawned frame = %v, want agent_id %q backend spawntest", pl, out.AgentID)
+	if pl["agent_id"] != out.ID || pl["backend"] != "spawntest" {
+		t.Fatalf("spawned frame = %v, want agent_id %q backend spawntest", pl, out.ID)
 	}
 }
 

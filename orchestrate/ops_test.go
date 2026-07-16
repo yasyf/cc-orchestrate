@@ -956,8 +956,8 @@ func TestHandleAgentCapture(t *testing.T) {
 		if err := json.Unmarshal(reply.Body, &out); err != nil {
 			t.Fatal(err)
 		}
-		if out.AgentID != "a1" || out.Content != "screen:sess-1" || out.CapturedAt == "" {
-			t.Fatalf("capture result = %+v, want agent_id=a1 content=screen:sess-1 non-empty captured_at", out)
+		if out.ID != "a1" || out.Content != "screen:sess-1" || out.CapturedAt == "" {
+			t.Fatalf("capture result = %+v, want id=a1 content=screen:sess-1 non-empty captured_at", out)
 		}
 	})
 

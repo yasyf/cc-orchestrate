@@ -393,7 +393,7 @@ func TestHandleSpawn(t *testing.T) {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
 	var out struct {
-		AgentID   string `json:"agent_id"`
+		AgentID   string `json:"id"`
 		SubjectID string `json:"subject_id"`
 		Terminal  string `json:"terminal"`
 		Backend   string `json:"backend"`
@@ -528,7 +528,7 @@ func TestHandleSpawnDefaultsEmptyName(t *testing.T) {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
 	var out struct {
-		AgentID string `json:"agent_id"`
+		AgentID string `json:"id"`
 	}
 	if err := json.Unmarshal(reply.Body, &out); err != nil {
 		t.Fatalf("reply body: %v", err)
@@ -544,6 +544,23 @@ func TestHandleSpawnDefaultsEmptyName(t *testing.T) {
 	}
 	if ag.Name != want {
 		t.Errorf("agent row name = %q, want %q", ag.Name, want)
+	}
+}
+
+// TestResolveSpawnSprintNoTarget asserts a bare spawn with nothing active to default to
+// fails InvalidRequest, not InternalError.
+func TestResolveSpawnSprintNoTarget(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	db := newTestDB(ctx, t)
+
+	hc := opCtx(db, nil, nil)
+	_, err := resolveSpawnSprint(hc, "", "", "")
+	if err == nil {
+		t.Fatal("resolveSpawnSprint with no target did not error")
+	}
+	if !strings.HasPrefix(err.Error(), "InvalidRequest: ") {
+		t.Fatalf("resolveSpawnSprint error = %q, want InvalidRequest prefix", err.Error())
 	}
 }
 
@@ -972,7 +989,7 @@ func TestHandleAgentRespawnDeadSweepReportsFailures(t *testing.T) {
 	if len(out.Respawned) != 1 || out.Respawned[0].ID != "a-ok" {
 		t.Fatalf("respawned = %+v, want exactly [a-ok] (the sweep continued past a-bad)", out.Respawned)
 	}
-	if len(out.Failed) != 1 || out.Failed[0].AgentID != "a-bad" || out.Failed[0].Error == "" {
+	if len(out.Failed) != 1 || out.Failed[0].ID != "a-bad" || out.Failed[0].Error == "" {
 		t.Fatalf("failed = %+v, want one entry for a-bad with a non-empty error", out.Failed)
 	}
 }
@@ -1072,7 +1089,7 @@ func TestSpawnKillOrphanRace(t *testing.T) {
 		if reply := runTyped(handleSprintKill, opCtx(db, mustJSON(t, map[string]string{"id": "s1"}), log.append)); !reply.OK {
 			t.Fatalf("sprint kill failed: %s", reply.Error)
 		}
-		ag, err := getAgent(ctx, db, out.AgentID)
+		ag, err := getAgent(ctx, db, out.ID)
 		if err != nil {
 			t.Fatal(err)
 		}

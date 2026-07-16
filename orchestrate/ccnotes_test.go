@@ -147,7 +147,7 @@ func TestCCNotesDisabledSpawnLeavesTaskEmpty(t *testing.T) {
 		t.Fatalf("spawn not ok: %s", reply.Error)
 	}
 	var out struct {
-		AgentID string `json:"agent_id"`
+		AgentID string `json:"id"`
 	}
 	if err := json.Unmarshal(reply.Body, &out); err != nil {
 		t.Fatal(err)

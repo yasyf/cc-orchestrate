@@ -685,7 +685,7 @@ func agentCmd() *cobra.Command {
 				"repo": spawnRepo, "workstream": spawnWorkstream, "sprint": spawnSprint,
 				"name": spawnName, "cwd": spawnCwd, "prompt": spawnPrompt,
 			}, func(w io.Writer, out agentSpawnResult) error {
-				_, _ = fmt.Fprintf(w, "agent:    %s\n", out.AgentID)
+				_, _ = fmt.Fprintf(w, "agent:    %s\n", out.ID)
 				_, _ = fmt.Fprintf(w, "backend:  %s\n", out.Backend)
 				_, err := fmt.Fprintf(w, "terminal: %s\n", out.Terminal)
 				return err
@@ -792,7 +792,7 @@ func agentCmd() *cobra.Command {
 					return err
 				}
 				for _, f := range res.Failed {
-					_, _ = fmt.Fprintf(c.ErrOrStderr(), "failed to respawn %s: %s\n", f.AgentID, f.Error)
+					_, _ = fmt.Fprintf(c.ErrOrStderr(), "failed to respawn %s: %s\n", f.ID, f.Error)
 				}
 				return nil
 			})

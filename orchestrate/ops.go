@@ -815,8 +815,8 @@ type agentKillRequest struct {
 
 // agentKillResult reports the agent id and its post-kill lifecycle status.
 type agentKillResult struct {
-	AgentID string `json:"agent_id"`
-	Status  string `json:"status"`
+	ID     string `json:"id"`
+	Status string `json:"status"`
 }
 
 func handleAgentKill(hc daemon.HandlerCtx, req agentKillRequest) (agentKillResult, error) {
@@ -831,7 +831,7 @@ func handleAgentKill(hc daemon.HandlerCtx, req agentKillRequest) (agentKillResul
 		// Already terminal (its repo was killed, or a concurrent kill won the lock
 		// first): idempotent no-op, never a second EventExited or a re-kill of a dead
 		// terminal.
-		return agentKillResult{AgentID: ag.ID, Status: string(ag.Status)}, nil
+		return agentKillResult{ID: ag.ID, Status: string(ag.Status)}, nil
 	}
 	// Mark the row exited and append the terminal EventExited before the backend
 	// kill, so a failed kill still ends the row — a half-dead agent never lingers
@@ -845,7 +845,7 @@ func handleAgentKill(hc daemon.HandlerCtx, req agentKillRequest) (agentKillResul
 	if err := killAgentTerminal(hc.Ctx, hc.DB, ag); err != nil {
 		return agentKillResult{}, err
 	}
-	return agentKillResult{AgentID: ag.ID, Status: string(StatusExited)}, nil
+	return agentKillResult{ID: ag.ID, Status: string(StatusExited)}, nil
 }
 
 // agentCaptureRequest addresses one active agent by id.
@@ -855,7 +855,7 @@ type agentCaptureRequest struct {
 
 // agentCaptureResult reports an agent's captured terminal screen.
 type agentCaptureResult struct {
-	AgentID    string `json:"agent_id"`
+	ID         string `json:"id"`
 	Content    string `json:"content"`
 	CapturedAt string `json:"captured_at"`
 }
@@ -876,7 +876,7 @@ func handleAgentCapture(hc daemon.HandlerCtx, req agentCaptureRequest) (agentCap
 	if err != nil {
 		return agentCaptureResult{}, err
 	}
-	return agentCaptureResult{AgentID: ag.ID, Content: text, CapturedAt: nowStamp()}, nil
+	return agentCaptureResult{ID: ag.ID, Content: text, CapturedAt: nowStamp()}, nil
 }
 
 // killAgentTerminal terminates an agent's backend terminal, resolving the backend and

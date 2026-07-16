@@ -203,7 +203,7 @@ func resolveSpawnSprint(hc daemon.HandlerCtx, reqSprint, reqWorkstream, reqRepo 
 		}
 		return getDefaultSprint(hc.Ctx, hc.DB, ws.ID)
 	}
-	return sprintRow{}, fmt.Errorf("no sprint specified and no active sprint, workstream, or repo")
+	return sprintRow{}, opErr(codeInvalidRequest, fmt.Errorf("no sprint specified and no active sprint, workstream, or repo"))
 }
 
 // requireActiveHierarchy resolves sprint's workstream and repo and errors Conflict if
@@ -253,7 +253,7 @@ type agentSpawnRequest struct {
 // agentSpawnResult reports the new agent id, its subject, terminal handle, and
 // backend.
 type agentSpawnResult struct {
-	AgentID   string `json:"agent_id"`
+	ID        string `json:"id"`
 	SubjectID string `json:"subject_id"`
 	Terminal  string `json:"terminal"`
 	Backend   string `json:"backend"`
@@ -356,7 +356,7 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 	fleetLog.emit(hc.Ctx, spawnedFrame(ag))
 	tailers.start(hc.DB, hc.Append, ag)
 
-	return agentSpawnResult{AgentID: sid, SubjectID: sub.ID, Terminal: handle.ID, Backend: string(bname)}, nil
+	return agentSpawnResult{ID: sid, SubjectID: sub.ID, Terminal: handle.ID, Backend: string(bname)}, nil
 }
 
 // compensateSpawn undoes a spawn whose post-insert hierarchy re-check failed: under
@@ -445,8 +445,8 @@ type agentRespawnRequest struct {
 // respawnFailure reports one agent a {dead:true} sweep tried but could not respawn — a
 // real failure, distinct from a Conflict-ineligible agent the sweep silently skips.
 type respawnFailure struct {
-	AgentID string `json:"agent_id"`
-	Error   string `json:"error"`
+	ID    string `json:"id"`
+	Error string `json:"error"`
 }
 
 // agentRespawnResult reports the agents actually respawned and, for a {dead:true} sweep,
@@ -486,7 +486,7 @@ func handleAgentRespawn(hc daemon.HandlerCtx, req agentRespawnRequest) (agentRes
 		case isConflict(err):
 			continue // not eligible under the dead chain; the sweep skips it
 		case err != nil:
-			failed = append(failed, respawnFailure{AgentID: ag.ID, Error: err.Error()})
+			failed = append(failed, respawnFailure{ID: ag.ID, Error: err.Error()})
 		default:
 			respawned = append(respawned, view)
 		}
