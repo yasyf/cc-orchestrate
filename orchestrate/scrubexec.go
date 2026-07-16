@@ -1,9 +1,11 @@
 package orchestrate
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -44,6 +46,12 @@ func scrubExecCmd() *cobra.Command {
 				return err
 			}
 			path, err := exec.LookPath(args[0])
+			// A match through a relative PATH entry returns ErrDot; the host
+			// shell's own PATH search accepted such a match before this wrapper
+			// existed, so keep that behavior by resolving it absolute.
+			if errors.Is(err, exec.ErrDot) {
+				path, err = filepath.Abs(path)
+			}
 			if err != nil {
 				return fmt.Errorf("resolve %s: %w", args[0], err)
 			}

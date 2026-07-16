@@ -473,7 +473,7 @@ func TestHandleSpawn(t *testing.T) {
 	}
 	wantPrefix := []string{self, scrubExecCmdName, "--", "claude"}
 	if len(gotSpec.Command) < len(wantPrefix) || !slices.Equal(gotSpec.Command[:len(wantPrefix)], wantPrefix) {
-		t.Errorf("spawn command = %v, want prefix %v", gotSpec.Command, wantPrefix)
+		t.Fatalf("spawn command = %v, want prefix %v", gotSpec.Command, wantPrefix)
 	}
 	if last := gotSpec.Command[len(gotSpec.Command)-1]; last != "fix it" {
 		t.Errorf("spawn command trailing arg = %q, want the prompt", last)
