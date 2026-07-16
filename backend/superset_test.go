@@ -13,12 +13,10 @@ import (
 	"testing"
 )
 
-// Fixtures captured verbatim from superset v0.2.22 against a live, authenticated
-// host service (status, auth whoami, projects list --local, workspaces list
-// --local); values are trimmed to the fields the driver reads. The workspace and
-// terminal create fixtures are modeled on those verified element shapes
-// (`workspaces create` returns a workspace, `terminals create --json` returns
-// {terminalId}) rather than captured live, since creating them has side effects.
+// Project-create and workspace-create/list fixtures are verbatim captures from an
+// authenticated superset v1.15.0 CLI. Status, identity, and project-list fixtures
+// retain the existing v0.2.22 captures because replacement captures were not
+// provided. The terminal-create fixture remains modeled because Spawn is unchanged.
 const (
 	supersetStatusJSON = `{
   "running": true,
@@ -44,15 +42,111 @@ const (
 	supersetProjectsJSON = `[
   {"id":"98228586-8a1e-494e-b73b-2c5352422812","name":"bioqa","slug":"bioqa","repoCloneUrl":"https://github.com/anetaco/backend","githubRepositoryId":"9bb2d389-fc48-4b80-b427-81a392938c5b","setUp":"yes","path":"/Users/yasyf/Code/bioqa"},
   {"id":"48f92b66-fbd7-473f-a7ad-6b8e583e933a","name":"cc-orchestrate","slug":"cc-orchestrate","repoCloneUrl":"https://github.com/yasyf/cc-orchestrate","githubRepositoryId":null,"setUp":"yes","path":"/Users/yasyf/Code/cc-orchestrate"},
-  {"id":"a036a3fb-f75d-4f9a-ab8b-9e1a6c5e72e6","name":"claude-pool","slug":"claude-pool","repoCloneUrl":null,"githubRepositoryId":null,"setUp":"yes","path":"/Users/yasyf/Code/claude-pool"}
+  {"id":"a036a3fb-f75d-4f9a-ab8b-9e1a6c5e72e6","name":"claude-pool","slug":"claude-pool","repoCloneUrl":null,"githubRepositoryId":null,"setUp":"yes","path":"/Users/yasyf/Code/claude-pool"},
+  {"id":"f486ba1a-cc19-4bc7-a9e1-3f16522b022e","name":"smoke-superset-probe","slug":"smoke-superset-probe","repoCloneUrl":null,"githubRepositoryId":null,"setUp":"yes","path":"/private/tmp/smoke-superset-probe"}
 ]`
+
+	supersetProjectCreateJSON = `{
+  "projectId": "f486ba1a-cc19-4bc7-a9e1-3f16522b022e",
+  "repoPath": "/private/tmp/smoke-superset-probe",
+  "mainWorkspaceId": "8ec262c7-4f8b-454e-8425-50c0eb54b254"
+}`
+
+	supersetWorkspaceCreateJSON = `{
+  "workspace": {
+    "id": "534de98a-8623-42fb-87fa-cbc89dee3b9c",
+    "organizationId": "02b83abb-9da1-44e6-9170-ff67488df839",
+    "projectId": "f486ba1a-cc19-4bc7-a9e1-3f16522b022e",
+    "hostId": "1c81b26bf35dee5ff6bd704bd8578d66",
+    "name": "smoke-ws",
+    "branch": "yasyf/smoke-superset",
+    "type": "worktree",
+    "createdByUserId": "1c9a2ce4-5ab0-46b5-957e-801c44b44fc2",
+    "taskId": null,
+    "createdAt": "2026-07-15T23:38:59.613Z",
+    "updatedAt": "2026-07-15T23:38:59.613Z",
+    "txid": 361702615
+  },
+  "terminals": [],
+  "agents": [],
+  "alreadyExists": false,
+  "txid": 361702615
+}`
+
+	supersetWorkspaceAlreadyExistsJSON = `{
+  "workspace": {
+    "id": "534de98a-8623-42fb-87fa-cbc89dee3b9c",
+    "organizationId": "02b83abb-9da1-44e6-9170-ff67488df839",
+    "projectId": "f486ba1a-cc19-4bc7-a9e1-3f16522b022e",
+    "hostId": "1c81b26bf35dee5ff6bd704bd8578d66",
+    "name": "smoke-ws",
+    "branch": "yasyf/smoke-superset",
+    "type": "worktree",
+    "createdByUserId": null,
+    "taskId": null,
+    "createdAt": "2026-07-15T23:38:58.445Z",
+    "updatedAt": "2026-07-15T23:38:58.445Z"
+  },
+  "terminals": [],
+  "agents": [],
+  "alreadyExists": true,
+  "txid": null
+}`
 
 	supersetWorkspacesJSON = `[
-  {"id":"99b1c139-7250-4cd9-9b40-fda16963d665","name":"main","branch":"main","projectId":"a036a3fb-f75d-4f9a-ab8b-9e1a6c5e72e6","projectName":"claude-pool","hostId":"1c81b26bf35dee5ff6bd704bd8578d66","type":"main","createdAt":"2026-06-06T01:15:08.199Z","hostName":"yasyf"},
-  {"id":"c4f1ce2a-16f8-4006-866e-53b83bc1006a","name":"yasyf/expensive-tilapia","branch":"yasyf/expensive-tilapia","projectId":"98228586-8a1e-494e-b73b-2c5352422812","projectName":"bioqa","hostId":"1c81b26bf35dee5ff6bd704bd8578d66","type":"worktree","createdAt":"2026-06-06T06:03:00.086Z","hostName":"yasyf"}
+  {
+    "id": "2035e0f6-8c6a-4ecf-8367-7d0256b77228",
+    "organizationId": "02b83abb-9da1-44e6-9170-ff67488df839",
+    "projectId": "98228586-8a1e-494e-b73b-2c5352422812",
+    "hostId": "1c81b26bf35dee5ff6bd704bd8578d66",
+    "name": "main",
+    "branch": "main",
+    "type": "main",
+    "createdByUserId": "1c9a2ce4-5ab0-46b5-957e-801c44b44fc2",
+    "taskId": null,
+    "createdAt": "2026-05-28T19:52:00.298Z",
+    "updatedAt": "2026-05-28T19:52:00.298Z",
+    "worktreePath": "/Users/yasyf/Code/bioqa",
+    "worktreeExists": true,
+    "projectName": "bioqa",
+    "hostName": "yasyf"
+  },
+  {
+    "id": "534de98a-8623-42fb-87fa-cbc89dee3b9c",
+    "organizationId": "02b83abb-9da1-44e6-9170-ff67488df839",
+    "projectId": "f486ba1a-cc19-4bc7-a9e1-3f16522b022e",
+    "hostId": "1c81b26bf35dee5ff6bd704bd8578d66",
+    "name": "smoke-ws",
+    "branch": "yasyf/smoke-superset",
+    "type": "worktree",
+    "createdByUserId": null,
+    "taskId": null,
+    "createdAt": "2026-07-15T23:38:58.445Z",
+    "updatedAt": "2026-07-15T23:38:58.445Z",
+    "worktreePath": "/Users/yasyf/.superset/worktrees/f486ba1a-cc19-4bc7-a9e1-3f16522b022e/yasyf/smoke-superset",
+    "worktreeExists": true,
+    "projectName": "smoke-superset-probe",
+    "hostName": "yasyf"
+  }
 ]`
 
-	supersetWorkspaceCreateJSON = `{"id":"d1e2f3a4-0000-4aaa-bbbb-ccccddddeeee","name":"cc-orch-test","branch":"main","projectId":"48f92b66-fbd7-473f-a7ad-6b8e583e933a","projectName":"cc-orchestrate","hostId":"1c81b26bf35dee5ff6bd704bd8578d66","type":"worktree","createdAt":"2026-06-16T00:00:00.000Z","hostName":"yasyf"}`
+	// supersetWorkspaceGetJSON is the flat single-workspace object `superset
+	// workspaces get <id> --json` returns (shape captured from the v1.15.0 CLI); it
+	// carries the worktreePath superset owns and assigns, which CreateWorkstream reads.
+	supersetWorkspaceGetJSON = `{
+  "id": "534de98a-8623-42fb-87fa-cbc89dee3b9c",
+  "name": "smoke-ws",
+  "branch": "yasyf/smoke-superset",
+  "type": "worktree",
+  "projectId": "f486ba1a-cc19-4bc7-a9e1-3f16522b022e",
+  "projectName": "smoke-superset-probe",
+  "hostId": "1c81b26bf35dee5ff6bd704bd8578d66",
+  "hostName": "yasyf",
+  "taskId": null,
+  "worktreePath": "/Users/yasyf/.superset/worktrees/f486ba1a-cc19-4bc7-a9e1-3f16522b022e/yasyf/smoke-superset",
+  "worktreeExists": true,
+  "createdAt": "2026-07-15T23:38:59.613Z"
+}`
 
 	supersetTerminalCreateJSON = `{"terminalId":"term_9f8e7d6c5b4a"}`
 )
@@ -164,16 +258,6 @@ func TestSupersetListAgents(t *testing.T) {
 	}
 }
 
-// stubWorktreeBase pins supersetWorktreeBase to base for the duration of the test,
-// so the worktree path CreateWorkstream derives is deterministic without depending
-// on the invoking user's home.
-func stubWorktreeBase(t *testing.T, base string) {
-	t.Helper()
-	orig := supersetWorktreeBase
-	supersetWorktreeBase = func() (string, error) { return base, nil }
-	t.Cleanup(func() { supersetWorktreeBase = orig })
-}
-
 func TestSupersetEnsureReady(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
@@ -226,62 +310,142 @@ func TestSupersetEnsureReady(t *testing.T) {
 }
 
 func TestSupersetCreateWorkstreamExistingProject(t *testing.T) {
-	stubWorktreeBase(t, "/wt")
-	cwd := "/Users/yasyf/Code/cc-orchestrate"
+	// cwd resolves to the smoke-superset-probe project already in supersetProjectsJSON.
+	cwd := "/private/tmp/smoke-superset-probe"
+	cases := []struct {
+		name       string
+		createJSON string
+	}{
+		{name: "new workspace", createJSON: supersetWorkspaceCreateJSON},
+		{name: "existing workspace is reused", createJSON: supersetWorkspaceAlreadyExistsJSON},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &supersetRunner{outs: []string{
+				supersetProjectsJSON,
+				tc.createJSON,
+				supersetWorkspaceGetJSON,
+			}}
+			got, err := superset{run: r.run}.CreateWorkstream(context.Background(), WorkstreamSpec{Name: "smoke-ws", Cwd: cwd, RepoCwd: cwd, Branch: "yasyf/smoke-superset"})
+			if err != nil {
+				t.Fatalf("CreateWorkstream: %v", err)
+			}
+			assertCalls(t, r.calls, [][]string{
+				{"superset", "projects", "list", "--local", "--json"},
+				{
+					"superset", "workspaces", "create", "--local",
+					"--project", "f486ba1a-cc19-4bc7-a9e1-3f16522b022e",
+					"--branch", "yasyf/smoke-superset", "--name", "smoke-ws", "--json",
+				},
+				{"superset", "workspaces", "get", "534de98a-8623-42fb-87fa-cbc89dee3b9c", "--json"},
+			})
+			want := WorkstreamHandle{
+				Backend: "superset", ID: "534de98a-8623-42fb-87fa-cbc89dee3b9c", Name: "smoke-ws", Cwd: cwd,
+				Worktree: "/Users/yasyf/.superset/worktrees/f486ba1a-cc19-4bc7-a9e1-3f16522b022e/yasyf/smoke-superset",
+			}
+			if got != want {
+				t.Fatalf("handle = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestSupersetCreateWorkstreamImportsWhenMissing(t *testing.T) {
+	cwd := "/tmp/smoke-superset-probe"
 	r := &supersetRunner{outs: []string{
-		supersetProjectsJSON,        // projects list --local --json
-		supersetWorkspaceCreateJSON, // workspaces create
+		supersetProjectsJSON,
+		supersetProjectCreateJSON,
+		supersetWorkspaceCreateJSON,
+		supersetWorkspaceGetJSON,
 	}}
-	got, err := superset{run: r.run}.CreateWorkstream(context.Background(), WorkstreamSpec{Name: "cc-orch-test", Cwd: cwd, RepoCwd: cwd, Branch: "feature/login"})
+	got, err := superset{run: r.run}.CreateWorkstream(context.Background(), WorkstreamSpec{Name: "smoke-ws", Cwd: cwd, RepoCwd: cwd, Branch: "smoke-superset"})
 	if err != nil {
 		t.Fatalf("CreateWorkstream: %v", err)
+	}
+	assertCalls(t, r.calls, [][]string{
+		{"superset", "projects", "list", "--local", "--json"},
+		{"superset", "projects", "create", "--local", "--import", cwd, "--name", "smoke-superset-probe", "--json"},
+		{
+			"superset", "workspaces", "create", "--local",
+			"--project", "f486ba1a-cc19-4bc7-a9e1-3f16522b022e",
+			"--branch", "smoke-superset", "--name", "smoke-ws", "--json",
+		},
+		{"superset", "workspaces", "get", "534de98a-8623-42fb-87fa-cbc89dee3b9c", "--json"},
+	})
+	if got.ID != "534de98a-8623-42fb-87fa-cbc89dee3b9c" {
+		t.Fatalf("workspace id = %q, want 534de98a-...", got.ID)
+	}
+	if want := "/Users/yasyf/.superset/worktrees/f486ba1a-cc19-4bc7-a9e1-3f16522b022e/yasyf/smoke-superset"; got.Worktree != want {
+		t.Fatalf("worktree = %q, want %q", got.Worktree, want)
+	}
+}
+
+func TestSupersetCreateWorkstreamRejectsEmptyIDs(t *testing.T) {
+	cases := []struct {
+		name      string
+		cwd       string
+		outs      []string
+		wantError string
+		wantCalls [][]string
+	}{
+		{
+			name:      "project create returns no id",
+			cwd:       "/tmp/unlisted",
+			outs:      []string{supersetProjectsJSON, `{}`},
+			wantError: "empty project id",
+			wantCalls: [][]string{
+				{"superset", "projects", "list", "--local", "--json"},
+				{"superset", "projects", "create", "--local", "--import", "/tmp/unlisted", "--name", "unlisted", "--json"},
+			},
+		},
+		{
+			name:      "workspace create returns no id",
+			cwd:       "/Users/yasyf/Code/cc-orchestrate",
+			outs:      []string{supersetProjectsJSON, `{}`},
+			wantError: "empty workspace id",
+			wantCalls: [][]string{
+				{"superset", "projects", "list", "--local", "--json"},
+				{
+					"superset", "workspaces", "create", "--local",
+					"--project", "48f92b66-fbd7-473f-a7ad-6b8e583e933a",
+					"--branch", "main", "--name", "smoke-ws", "--json",
+				},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &supersetRunner{outs: tc.outs}
+			_, err := superset{run: r.run}.CreateWorkstream(context.Background(), WorkstreamSpec{Name: "smoke-ws", Cwd: tc.cwd, RepoCwd: tc.cwd, Branch: "main"})
+			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("CreateWorkstream error = %v, want containing %q", err, tc.wantError)
+			}
+			assertCalls(t, r.calls, tc.wantCalls)
+		})
+	}
+}
+
+// TestSupersetCreateWorkstreamRequiresWorktreePath proves CreateWorkstream fails loud
+// when the re-read workspace carries no worktree path, rather than returning a handle
+// with an empty Worktree.
+func TestSupersetCreateWorkstreamRequiresWorktreePath(t *testing.T) {
+	getEmpty := `{"id":"534de98a-8623-42fb-87fa-cbc89dee3b9c","name":"smoke-ws","worktreePath":""}`
+	r := &supersetRunner{outs: []string{supersetProjectsJSON, supersetWorkspaceCreateJSON, getEmpty}}
+	_, err := superset{run: r.run}.CreateWorkstream(context.Background(), WorkstreamSpec{
+		Name: "smoke-ws", Cwd: "/Users/yasyf/Code/cc-orchestrate", Branch: "main",
+	})
+	if err == nil || !strings.Contains(err.Error(), "empty worktree path") {
+		t.Fatalf("CreateWorkstream error = %v, want empty-worktree-path error", err)
 	}
 	assertCalls(t, r.calls, [][]string{
 		{"superset", "projects", "list", "--local", "--json"},
 		{
 			"superset", "workspaces", "create", "--local",
 			"--project", "48f92b66-fbd7-473f-a7ad-6b8e583e933a",
-			"--branch", "feature/login", "--name", "cc-orch-test", "--json",
+			"--branch", "main", "--name", "smoke-ws", "--json",
 		},
+		{"superset", "workspaces", "get", "534de98a-8623-42fb-87fa-cbc89dee3b9c", "--json"},
 	})
-	want := WorkstreamHandle{
-		Backend: "superset", ID: "d1e2f3a4-0000-4aaa-bbbb-ccccddddeeee", Name: "cc-orch-test", Cwd: cwd,
-		Worktree: "/wt/48f92b66-fbd7-473f-a7ad-6b8e583e933a/feature/login",
-	}
-	if got != want {
-		t.Fatalf("handle = %+v, want %+v", got, want)
-	}
-}
-
-func TestSupersetCreateWorkstreamImportsWhenMissing(t *testing.T) {
-	stubWorktreeBase(t, "/wt")
-	cwd := "/Users/yasyf/Code/brand-new"
-	listWith := `[{"id":"new-proj-id","name":"brand-new","slug":"brand-new","setUp":"yes","path":"/Users/yasyf/Code/brand-new"}]`
-	r := &supersetRunner{outs: []string{
-		supersetProjectsJSON,        // list: cwd absent
-		`{"id":"new-proj-id"}`,      // setup --import
-		listWith,                    // list: cwd now present
-		supersetWorkspaceCreateJSON, // workspaces create
-	}}
-	got, err := superset{run: r.run}.CreateWorkstream(context.Background(), WorkstreamSpec{Name: "brand-new", Cwd: cwd, RepoCwd: cwd, Branch: "main"})
-	if err != nil {
-		t.Fatalf("CreateWorkstream: %v", err)
-	}
-	assertCalls(t, r.calls, [][]string{
-		{"superset", "projects", "list", "--local", "--json"},
-		{"superset", "projects", "setup", "--import", cwd, "--local", "--json"},
-		{"superset", "projects", "list", "--local", "--json"},
-		{
-			"superset", "workspaces", "create", "--local",
-			"--project", "new-proj-id", "--branch", "main", "--name", "brand-new", "--json",
-		},
-	})
-	if got.ID != "d1e2f3a4-0000-4aaa-bbbb-ccccddddeeee" {
-		t.Fatalf("workspace id = %q, want d1e2f3a4-...", got.ID)
-	}
-	if want := "/wt/new-proj-id/main"; got.Worktree != want {
-		t.Fatalf("worktree = %q, want %q", got.Worktree, want)
-	}
 }
 
 // TestSupersetCreateWorkstreamRequiresBranch proves CreateWorkstream fails loud on
@@ -305,8 +469,8 @@ func TestSupersetListWorkstreamsParsesRealJSON(t *testing.T) {
 	}
 	assertCalls(t, r.calls, [][]string{{"superset", "workspaces", "list", "--local", "--json"}})
 	want := []WorkstreamHandle{
-		{Backend: "superset", ID: "99b1c139-7250-4cd9-9b40-fda16963d665", Name: "main"},
-		{Backend: "superset", ID: "c4f1ce2a-16f8-4006-866e-53b83bc1006a", Name: "yasyf/expensive-tilapia"},
+		{Backend: "superset", ID: "2035e0f6-8c6a-4ecf-8367-7d0256b77228", Name: "main", Worktree: "/Users/yasyf/Code/bioqa"},
+		{Backend: "superset", ID: "534de98a-8623-42fb-87fa-cbc89dee3b9c", Name: "smoke-ws", Worktree: "/Users/yasyf/.superset/worktrees/f486ba1a-cc19-4bc7-a9e1-3f16522b022e/yasyf/smoke-superset"},
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("workstreams = %+v, want %+v", got, want)

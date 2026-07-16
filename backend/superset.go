@@ -40,11 +40,21 @@ type supersetProject struct {
 	Path string `json:"path"`
 }
 
+type supersetProjectCreateResult struct {
+	ProjectID string `json:"projectId"`
+}
+
 // supersetWorkspace is a `superset workspaces ...` entry; its id is the workspace
 // a workstream handle wraps.
 type supersetWorkspace struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	WorktreePath string `json:"worktreePath"`
+}
+
+type supersetWorkspaceCreateResult struct {
+	Workspace     supersetWorkspace `json:"workspace"`
+	AlreadyExists bool              `json:"alreadyExists"`
 }
 
 // supersetTerminal is the `superset terminals create --json` result.
@@ -78,22 +88,6 @@ var resolveClaude = func() (string, error) {
 // shim, so a pty-host launched for a non-capturing backend runs the real CLI rather
 // than recursing through a wrapper.
 func ResolveClaude() (string, error) { return resolveClaude() }
-
-// supersetWorktreeBase returns the directory under which the superset host
-// service places per-workspace git worktrees on this machine, laid out as
-// <base>/<projectID>/<branch>. The superset CLI exposes no filesystem path on the
-// workspace object (verified against v0.2.23: `workspaces list --local --json`
-// returns only id/name/branch/projectId/projectName/hostId/type/createdAt/
-// hostName), so CreateWorkstream reconstructs the adopted worktree path from this
-// observed layout. It is a package var so tests can pin it without reading the
-// invoking user's home.
-var supersetWorktreeBase = func() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".superset", "worktrees"), nil
-}
 
 func (b superset) Name() Name { return supersetBin }
 
@@ -136,11 +130,10 @@ func (b superset) EnsureReady(ctx context.Context) error {
 }
 
 // CreateWorkstream resolves (or imports) the superset project for spec.Cwd, then
-// forks a local workspace for it on spec.Branch. superset owns the worktree, so
-// the returned handle's Worktree is the path superset placed it at —
-// <supersetWorktreeBase>/<projectID>/<branch> — which cc-orchestrate adopts. The
-// branch is required: the superset CLI rejects a workspace create without one, so
-// an empty spec.Branch is an error rather than a silent default.
+// forks a local workspace for it on spec.Branch. Superset owns the worktree, so
+// the returned handle adopts the authoritative path reported by the workspace
+// list. The branch is required: the superset CLI rejects a workspace create
+// without one, so an empty spec.Branch is an error rather than a silent default.
 func (b superset) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error) {
 	if spec.Branch == "" {
 		return WorkstreamHandle{}, fmt.Errorf("superset: create workspace %q: branch is required", spec.Name)
@@ -152,25 +145,35 @@ func (b superset) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (Wo
 	out, err := b.run(ctx, supersetBin, "workspaces", "create", "--local",
 		"--project", projectID, "--branch", spec.Branch, "--name", spec.Name, "--json")
 	if err != nil {
-		return WorkstreamHandle{}, err
+		return WorkstreamHandle{}, fmt.Errorf("superset: create workspace %q: %w", spec.Name, err)
 	}
-	ws, err := decodeJSON[supersetWorkspace](out, "superset", "workspace")
+	created, err := decodeJSON[supersetWorkspaceCreateResult](out, "superset", "workspace")
 	if err != nil {
 		return WorkstreamHandle{}, err
 	}
-	base, err := supersetWorktreeBase()
+	if created.Workspace.ID == "" {
+		return WorkstreamHandle{}, fmt.Errorf("superset: create workspace %q returned an empty workspace id", spec.Name)
+	}
+	// Superset reuses the returned workspace when alreadyExists is true; its id
+	// remains authoritative. Re-read it by id for the worktree path superset owns.
+	workspace, err := b.getWorkspace(ctx, created.Workspace.ID)
 	if err != nil {
 		return WorkstreamHandle{}, err
+	}
+	if workspace.WorktreePath == "" {
+		return WorkstreamHandle{}, fmt.Errorf("superset: workspace %s has an empty worktree path", workspace.ID)
 	}
 	return WorkstreamHandle{
 		Backend:  b.Name(),
-		ID:       ws.ID,
+		ID:       workspace.ID,
 		Name:     spec.Name,
 		Cwd:      spec.Cwd,
-		Worktree: filepath.Join(base, projectID, spec.Branch),
+		Worktree: workspace.WorktreePath,
 	}, nil
 }
 
+// resolveProjectID finds the superset project for cwd, importing one named after
+// cwd's basename (the project's own directory, not the workstream) when none exists.
 func (b superset) resolveProjectID(ctx context.Context, cwd string) (string, error) {
 	projects, err := b.listSetupProjects(ctx)
 	if err != nil {
@@ -179,23 +182,35 @@ func (b superset) resolveProjectID(ctx context.Context, cwd string) (string, err
 	if id := matchProjectID(projects, cwd); id != "" {
 		return id, nil
 	}
-	if _, err := b.run(ctx, supersetBin, "projects", "setup", "--import", cwd, "--local", "--json"); err != nil {
-		return "", err
+	name := filepath.Base(cwd)
+	out, err := b.run(ctx, supersetBin, "projects", "create", "--local", "--import", cwd, "--name", name, "--json")
+	if err != nil {
+		return "", fmt.Errorf("superset: create project %q: %w", name, err)
 	}
-	projects, err = b.listSetupProjects(ctx)
+	created, err := decodeJSON[supersetProjectCreateResult](out, "superset", "project")
 	if err != nil {
 		return "", err
 	}
-	if id := matchProjectID(projects, cwd); id != "" {
-		return id, nil
+	if created.ProjectID == "" {
+		return "", fmt.Errorf("superset: create project %q returned an empty project id", name)
 	}
-	return "", fmt.Errorf("superset: no project for %s after import", cwd)
+	return created.ProjectID, nil
+}
+
+// getWorkspace re-reads a single workspace by id via `workspaces get`, which reports
+// the worktree path superset assigns; unlike the list commands it takes no --local.
+func (b superset) getWorkspace(ctx context.Context, id string) (supersetWorkspace, error) {
+	out, err := b.run(ctx, supersetBin, "workspaces", "get", id, "--json")
+	if err != nil {
+		return supersetWorkspace{}, fmt.Errorf("superset: get workspace %s: %w", id, err)
+	}
+	return decodeJSON[supersetWorkspace](out, "superset", "workspace")
 }
 
 func (b superset) listSetupProjects(ctx context.Context) ([]supersetProject, error) {
 	out, err := b.run(ctx, supersetBin, "projects", "list", "--local", "--json")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("superset: list projects: %w", err)
 	}
 	projects, err := decodeJSON[[]supersetProject](out, "superset", "projects")
 	if err != nil {
@@ -222,18 +237,26 @@ func matchProjectID(projects []supersetProject, cwd string) string {
 	return best
 }
 
-func (b superset) ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error) {
+func (b superset) listWorkspaces(ctx context.Context) ([]supersetWorkspace, error) {
 	out, err := b.run(ctx, supersetBin, "workspaces", "list", "--local", "--json")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("superset: list workspaces: %w", err)
 	}
 	workspaces, err := decodeJSON[[]supersetWorkspace](out, "superset", "workspaces")
 	if err != nil {
 		return nil, err
 	}
+	return workspaces, nil
+}
+
+func (b superset) ListWorkstreams(ctx context.Context) ([]WorkstreamHandle, error) {
+	workspaces, err := b.listWorkspaces(ctx)
+	if err != nil {
+		return nil, err
+	}
 	workstreams := make([]WorkstreamHandle, len(workspaces))
 	for i, w := range workspaces {
-		workstreams[i] = WorkstreamHandle{Backend: b.Name(), ID: w.ID, Name: w.Name}
+		workstreams[i] = WorkstreamHandle{Backend: b.Name(), ID: w.ID, Name: w.Name, Worktree: w.WorktreePath}
 	}
 	return workstreams, nil
 }
