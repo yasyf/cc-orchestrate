@@ -51,10 +51,17 @@ func TestSchemaFor(t *testing.T) {
 	for _, tc := range []struct {
 		field, want string
 	}{
-		{"str", "string"}, {"num", "integer"}, {"big", "integer"},
-		{"flag", "boolean"}, {"ratio", "number"}, {"tags", "array"},
-		{"child", "object"}, {"dict", "object"},
-		{"optional", "string"}, {"ptr", "object"}, {"omitted", "string"},
+		{"str", "string"},
+		{"num", "integer"},
+		{"big", "integer"},
+		{"flag", "boolean"},
+		{"ratio", "number"},
+		{"tags", "array"},
+		{"child", "object"},
+		{"dict", "object"},
+		{"optional", "string"},
+		{"ptr", "object"},
+		{"omitted", "string"},
 	} {
 		if got := schemaType(t, props[tc.field]); got != tc.want {
 			t.Errorf("property %q type = %q, want %q", tc.field, got, tc.want)

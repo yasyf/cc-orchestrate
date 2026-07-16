@@ -311,6 +311,7 @@ func (b spawnBackend) Spawn(_ context.Context, spec backend.SpawnSpec) (backend.
 func (spawnBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
 	return nil, nil
 }
+
 func (b spawnBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
 	if b.killed != nil {
 		*b.killed = append(*b.killed, agent)

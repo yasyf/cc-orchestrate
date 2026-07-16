@@ -83,7 +83,7 @@ func TestXRPCCatalog(t *testing.T) {
 	_, ts := newXRPCServer(t)
 
 	resp := doReq(t, ts, http.MethodGet, "/xrpc/cco.server.describe", "")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -112,7 +112,7 @@ func TestXRPCCatalog(t *testing.T) {
 	}
 
 	byName := map[string]catalogMethod{}
-	var names []string
+	names := make([]string, 0, len(cat.Methods))
 	for _, m := range cat.Methods {
 		byName[m.Name] = m
 		names = append(names, m.Name)
@@ -148,7 +148,7 @@ func TestXRPCPostProcedureRoundTrip(t *testing.T) {
 	_, ts := newXRPCServer(t)
 
 	resp := doReq(t, ts, http.MethodPost, "/xrpc/cco.config.set", `{"key":"k1","value":"v1"}`)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -170,13 +170,13 @@ func TestXRPCGetQueryRoundTrip(t *testing.T) {
 	// Set a key over POST, then read it back over GET with a query param, proving the
 	// URL param is projected into the request body the handler decodes.
 	set := doReq(t, ts, http.MethodPost, "/xrpc/cco.config.set", `{"key":"host","value":"local"}`)
-	set.Body.Close()
+	_ = set.Body.Close()
 	if set.StatusCode != http.StatusOK {
 		t.Fatalf("set status = %d, want 200", set.StatusCode)
 	}
 
 	resp := doReq(t, ts, http.MethodGet, "/xrpc/cco.config.get?key=host", "")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get status = %d, want 200", resp.StatusCode)
 	}
@@ -197,7 +197,7 @@ func TestXRPCGetQueryRoundTrip(t *testing.T) {
 func TestXRPCEmptyPostBody(t *testing.T) {
 	_, ts := newXRPCServer(t)
 	resp := doReq(t, ts, http.MethodPost, "/xrpc/cco.config.set", "")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (empty body → zero request)", resp.StatusCode)
 	}
@@ -235,7 +235,7 @@ func TestXRPCErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := doReq(t, ts, tc.method, tc.path, tc.body)
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode != tc.wantStatus {
 				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.wantStatus)
 			}
@@ -268,7 +268,7 @@ func TestXRPCHead(t *testing.T) {
 
 	t.Run("head on query is allowed", func(t *testing.T) {
 		resp := doReq(t, ts, http.MethodHead, "/xrpc/cco.config.get?key=absent", "")
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (HEAD satisfies the GET query requirement)", resp.StatusCode)
 		}
@@ -283,7 +283,7 @@ func TestXRPCHead(t *testing.T) {
 
 	t.Run("head on procedure is a 405", func(t *testing.T) {
 		resp := doReq(t, ts, http.MethodHead, "/xrpc/cco.config.set", "")
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusMethodNotAllowed {
 			t.Fatalf("status = %d, want 405 (HEAD may not reach a procedure)", resp.StatusCode)
 		}
@@ -298,7 +298,7 @@ func TestXRPCHead(t *testing.T) {
 func TestXRPCHandlerNotFoundStripsPrefix(t *testing.T) {
 	_, ts := newXRPCServer(t)
 	resp := doReq(t, ts, http.MethodGet, "/xrpc/cco.agent.show?agent_id=missing", "")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var env errEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -317,7 +317,7 @@ func TestXRPCVerbatimBody(t *testing.T) {
 	s, ts := newXRPCServer(t)
 
 	resp := doReq(t, ts, http.MethodGet, "/xrpc/cco.config.get?key=absent", "")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	httpBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read http body: %v", err)

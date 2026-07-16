@@ -103,9 +103,14 @@ func TestAgentShowHumanMatchesLegacy(t *testing.T) {
 
 	var got bytes.Buffer
 	err := renderKV(&got, [][2]string{
-		{"agent", a.ID}, {"name", a.Name}, {"status", a.Status}, {"state", a.State},
-		{"activity", a.Activity}, {"tokens", strconv.Itoa(a.Tokens)},
-		{"restart", strconv.Itoa(a.RestartCount)}, {"updated", a.UpdatedAt},
+		{"agent", a.ID},
+		{"name", a.Name},
+		{"status", a.Status},
+		{"state", a.State},
+		{"activity", a.Activity},
+		{"tokens", strconv.Itoa(a.Tokens)},
+		{"restart", strconv.Itoa(a.RestartCount)},
+		{"updated", a.UpdatedAt},
 	})
 	if err != nil {
 		t.Fatalf("renderKV: %v", err)
@@ -190,8 +195,14 @@ func TestRenderFleetStatus(t *testing.T) {
 	}
 	out := buf.String()
 	for _, kv := range [][2]string{
-		{"agents", "1"}, {"repos", "1"}, {"workstreams", "1"}, {"sprints", "1"},
-		{"backend", "tmux"}, {"subject", "subj-fleet"}, {"seq", "42"}, {"port", "8080"},
+		{"agents", "1"},
+		{"repos", "1"},
+		{"workstreams", "1"},
+		{"sprints", "1"},
+		{"backend", "tmux"},
+		{"subject", "subj-fleet"},
+		{"seq", "42"},
+		{"port", "8080"},
 	} {
 		if !headHasLine(out, kv[0], kv[1]) {
 			t.Errorf("fleet status head missing %q: %q\n%s", kv[0], kv[1], out)

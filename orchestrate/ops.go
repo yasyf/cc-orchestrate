@@ -383,7 +383,7 @@ func handleConfigSet(hc daemon.HandlerCtx, req configSetRequest) (configSetResul
 	if err := setConfig(hc.Ctx, hc.DB, req.Key, req.Value); err != nil {
 		return configSetResult{}, err
 	}
-	return configSetResult{Key: req.Key, Value: req.Value}, nil
+	return configSetResult(req), nil
 }
 
 // configListRequest takes no arguments; cco.config.list returns every key.

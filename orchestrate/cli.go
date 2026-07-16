@@ -406,8 +406,12 @@ func repoCmd() *cobra.Command {
 			return runRender(c, mRepoShow, map[string]string{"id": args[0]},
 				func(w io.Writer, p repoView) error {
 					return renderKV(w, [][2]string{
-						{"id", p.ID}, {"name", p.Name}, {"backend", p.Backend},
-						{"cwd", p.Cwd}, {"status", p.Status}, {"created", p.CreatedAt},
+						{"id", p.ID},
+						{"name", p.Name},
+						{"backend", p.Backend},
+						{"cwd", p.Cwd},
+						{"status", p.Status},
+						{"created", p.CreatedAt},
 					})
 				})
 		},
@@ -505,10 +509,17 @@ func workstreamCmd() *cobra.Command {
 			return runRender(c, mWorkstreamShow, map[string]string{"id": args[0], "repo": showRepo},
 				func(w io.Writer, ws workstreamView) error {
 					return renderKV(w, [][2]string{
-						{"id", ws.ID}, {"repo", ws.RepoID}, {"name", ws.Name}, {"backend", ws.Backend},
-						{"workspace", ws.WorkspaceHandle}, {"branch", ws.Branch}, {"worktree", ws.Worktree},
-						{"primary", strconv.FormatBool(ws.IsPrimary)}, {"ccnotes", ws.CCNotesProject},
-						{"status", ws.Status}, {"created", ws.CreatedAt},
+						{"id", ws.ID},
+						{"repo", ws.RepoID},
+						{"name", ws.Name},
+						{"backend", ws.Backend},
+						{"workspace", ws.WorkspaceHandle},
+						{"branch", ws.Branch},
+						{"worktree", ws.Worktree},
+						{"primary", strconv.FormatBool(ws.IsPrimary)},
+						{"ccnotes", ws.CCNotesProject},
+						{"status", ws.Status},
+						{"created", ws.CreatedAt},
 					})
 				})
 		},
@@ -608,8 +619,12 @@ func sprintCmd() *cobra.Command {
 			return runRender(c, mSprintShow, map[string]string{"id": args[0], "workstream": showWorkstream},
 				func(w io.Writer, s sprintView) error {
 					return renderKV(w, [][2]string{
-						{"id", s.ID}, {"workstream", s.WorkstreamID}, {"name", s.Name},
-						{"ccnotes", s.CCNotesSprint}, {"status", s.Status}, {"created", s.CreatedAt},
+						{"id", s.ID},
+						{"workstream", s.WorkstreamID},
+						{"name", s.Name},
+						{"ccnotes", s.CCNotesSprint},
+						{"status", s.Status},
+						{"created", s.CreatedAt},
 					})
 				})
 		},
@@ -746,9 +761,14 @@ func agentCmd() *cobra.Command {
 			return runRender(c, mAgentShow, map[string]string{"agent_id": args[0]},
 				func(w io.Writer, a agentView) error {
 					return renderKV(w, [][2]string{
-						{"agent", a.ID}, {"name", a.Name}, {"status", a.Status}, {"state", a.State},
-						{"activity", a.Activity}, {"tokens", strconv.Itoa(a.Tokens)},
-						{"restart", strconv.Itoa(a.RestartCount)}, {"updated", a.UpdatedAt},
+						{"agent", a.ID},
+						{"name", a.Name},
+						{"status", a.Status},
+						{"state", a.State},
+						{"activity", a.Activity},
+						{"tokens", strconv.Itoa(a.Tokens)},
+						{"restart", strconv.Itoa(a.RestartCount)},
+						{"updated", a.UpdatedAt},
 					})
 				})
 		},
@@ -1036,7 +1056,7 @@ func fleetCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show the fleet: counts, the resume cursor, and a joined agent table",
 		Args:  cobra.NoArgs,
-		RunE: func(c *cobra.Command, args []string) error {
+		RunE: func(c *cobra.Command, _ []string) error {
 			if watch {
 				return runFleetStatusWatch(c)
 			}
