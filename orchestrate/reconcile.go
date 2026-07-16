@@ -36,7 +36,7 @@ func reconcileWorkstreams(ctx context.Context, db *sql.DB, appendFn daemon.Appen
 			continue
 		}
 		if !containsWorkstreamHandle(live, ws.WorkspaceHandle) {
-			if err := markWorkstreamKilled(ctx, db, appendFn, ws); err != nil {
+			if _, _, err := markWorkstreamKilled(ctx, db, appendFn, ws); err != nil {
 				return err
 			}
 		}

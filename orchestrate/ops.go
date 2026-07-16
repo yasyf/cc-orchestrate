@@ -511,15 +511,20 @@ func resolveWorkstreamRef(hc daemon.HandlerCtx, ref, repoRef string) (workstream
 }
 
 // createDefaultSprint inserts a workstream's default sprint — the planning group an
-// agent spawns into when no sprint is named — named defaultSprintName and active,
-// bound to ccnotesSprint (empty when cc-notes is not in play). It is the shared step
-// both handleRepoCreate (for the primary workstream) and handleWorkstreamCreate run
-// right after persisting their workstream row.
-func createDefaultSprint(ctx context.Context, db *sql.DB, workstreamID, ccnotesSprint string) error {
-	return insertSprint(ctx, db, sprintRow{
+// agent spawns into when no sprint is named — named defaultSprintName and active, bound
+// to ccnotesSprint (empty when cc-notes is not in play), returning its id so the caller's
+// fleet.sprint.created frame carries the row's actual slug. It is the shared step both
+// handleRepoCreate (for the primary workstream) and handleWorkstreamCreate run right
+// after persisting their workstream row.
+func createDefaultSprint(ctx context.Context, db *sql.DB, workstreamID, ccnotesSprint string) (string, error) {
+	sp := sprintRow{
 		ID: sprintSlug(defaultSprintName), WorkstreamID: workstreamID,
 		Name: defaultSprintName, CCNotesSprint: ccnotesSprint, Status: StatusActive, CreatedAt: nowStamp(),
-	})
+	}
+	if err := insertSprint(ctx, db, sp); err != nil {
+		return "", err
+	}
+	return sp.ID, nil
 }
 
 // provisionCCNotes provisions a cc-notes project for a new workstream and a sprint
@@ -675,12 +680,13 @@ func handleRepoCreate(hc daemon.HandlerCtx, req repoCreateRequest) (repoCreateRe
 	if err := insertWorkstream(hc.Ctx, hc.DB, w); err != nil {
 		return repoCreateResult{}, err
 	}
-	if err := createDefaultSprint(hc.Ctx, hc.DB, w.ID, ccSprint); err != nil {
+	sprintID, err := createDefaultSprint(hc.Ctx, hc.DB, w.ID, ccSprint)
+	if err != nil {
 		return repoCreateResult{}, err
 	}
 	fleetLog.emit(hc.Ctx, containerFrame(FrameRepoCreated, p.ID, p.Name))
 	fleetLog.emit(hc.Ctx, containerFrame(FrameWorkstreamCreated, w.ID, w.Name))
-	fleetLog.emit(hc.Ctx, containerFrame(FrameSprintCreated, sprintSlug(defaultSprintName), defaultSprintName))
+	fleetLog.emit(hc.Ctx, containerFrame(FrameSprintCreated, sprintID, defaultSprintName))
 	return repoCreateResult{RepoID: p.ID, Workspace: handle.ID, Backend: string(bname)}, nil
 }
 
@@ -824,10 +830,12 @@ func handleAgentKill(hc daemon.HandlerCtx, req agentKillRequest) (agentKillResul
 	if err := softExitAgent(hc.Ctx, hc.DB, hc.Append, ag); err != nil {
 		return agentKillResult{}, err
 	}
+	// Emit after the durable mutations, before the backend teardown, so a teardown
+	// failure can no longer suppress the exited frame.
+	fleetLog.emit(hc.Ctx, exitedFrame(ag.ID, reasonKilled))
 	if err := killAgentTerminal(hc.Ctx, hc.DB, ag); err != nil {
 		return agentKillResult{}, err
 	}
-	fleetLog.emit(hc.Ctx, exitedFrame(ag.ID, reasonKilled))
 	return agentKillResult{AgentID: ag.ID, Status: string(StatusExited)}, nil
 }
 
@@ -910,63 +918,81 @@ func clearActiveSelection(ctx context.Context, db *sql.DB, key, killedID string)
 	return nil
 }
 
-// markSprintKilled soft-exits every active agent of a sprint, then marks the sprint
-// killed and drops it as the active sprint. Like markWorkstreamKilled it never calls
-// the backend nor removes a worktree — a sprint has none, it shares its workstream's.
-// Reused by the repo- and workstream-kill cascades and boot reconcile.
-func markSprintKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, sp sprintRow) error {
-	agents, err := listAgents(ctx, db, sp.ID, "")
+// markSprintKilled flips a sprint active→killed (compare-and-set) and, when this call
+// won the flip, soft-exits its still-active agents and returns their rows (with terminal
+// handles) so the caller can emit their exited frames and tear down their terminals. The
+// agent list is read AFTER the status commit, so a spawn racing this kill is either
+// captured here (its insert landed before the read) or observes the killed sprint on its
+// own post-insert re-check — the two cases that close the spawn/kill orphan window. A
+// loser of a concurrent flip returns (nil, false, nil) and touches nothing. It never
+// calls the backend nor removes a worktree — a sprint has none, it shares its
+// workstream's. Reused by the repo- and workstream-kill cascades and boot reconcile.
+func markSprintKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, sp sprintRow) ([]agentRow, bool, error) {
+	won, err := casSprintKilled(ctx, db, sp.ID)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
+	if !won {
+		return nil, false, nil
+	}
+	agents, err := listAgents(ctx, db, sp.ID, StatusActive)
+	if err != nil {
+		return nil, false, err
+	}
+	flipped := make([]agentRow, 0, len(agents))
 	for _, ag := range agents {
-		if ag.Status != StatusActive {
-			continue
+		row, err := flipAgentExited(ctx, db, appendFn, ag.ID)
+		if err != nil {
+			return nil, false, err
 		}
-		if err := func() error {
-			mu := agentLock(ag.ID)
-			mu.Lock()
-			defer mu.Unlock()
-			return softExitAgent(ctx, db, appendFn, ag)
-		}(); err != nil {
-			return err
+		if row.ID != "" {
+			flipped = append(flipped, row)
 		}
 	}
-	if err := setSprintStatus(ctx, db, sp.ID, StatusKilled); err != nil {
-		return err
+	if err := clearActiveSelection(ctx, db, configActiveSprint, sp.ID); err != nil {
+		return nil, false, err
 	}
-	return clearActiveSelection(ctx, db, configActiveSprint, sp.ID)
+	return flipped, true, nil
 }
 
-// killSprint kills a sprint for real: it snapshots the ids of agents active before the
-// kill, runs markSprintKilled (the sole row-write path, unchanged), then tears down
-// each formerly-active agent's backend terminal under agentLock, surfacing the first
-// teardown error only after every row is mutated — the handleWorkstreamKill pattern.
-func killSprint(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, sp sprintRow) error {
-	agents, err := listAgents(ctx, db, sp.ID, "")
+// flipAgentExited soft-exits one still-active agent under agentLock and returns its
+// pre-exit row (carrying the terminal handle) for the caller to tear down. An agent some
+// other path already exited between the sprint's agent list and this lock — a concurrent
+// spawn compensation racing the kill — returns the zero row, so the exit and its terminal
+// teardown happen exactly once.
+func flipAgentExited(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, id string) (agentRow, error) {
+	mu := agentLock(id)
+	mu.Lock()
+	defer mu.Unlock()
+	cur, err := getAgent(ctx, db, id)
 	if err != nil {
-		return err
+		return agentRow{}, err
 	}
-	wasActive := make([]string, 0, len(agents))
-	for _, ag := range agents {
-		if ag.Status == StatusActive {
-			wasActive = append(wasActive, ag.ID)
-		}
+	if cur.Status != StatusActive {
+		return agentRow{}, nil
 	}
-	if err := markSprintKilled(ctx, db, appendFn, sp); err != nil {
-		return err
+	if err := softExitAgent(ctx, db, appendFn, cur); err != nil {
+		return agentRow{}, err
 	}
+	return cur, nil
+}
+
+// teardownAgents kills each formerly-active agent's backend terminal under agentLock,
+// re-reading the row so a handle a concurrent respawn swapped is honored, and returns the
+// first teardown error after attempting every one. The rows are the exact set a mark step
+// flipped, so a terminal is torn down exactly once.
+func teardownAgents(ctx context.Context, db *sql.DB, agents []agentRow) error {
 	var teardownErr error
-	for _, id := range wasActive {
+	for _, a := range agents {
 		if err := func() error {
-			mu := agentLock(id)
+			mu := agentLock(a.ID)
 			mu.Lock()
 			defer mu.Unlock()
-			ag, err := getAgent(ctx, db, id)
+			cur, err := getAgent(ctx, db, a.ID)
 			if err != nil {
 				return err
 			}
-			return killAgentTerminal(ctx, db, ag)
+			return killAgentTerminal(ctx, db, cur)
 		}(); err != nil && teardownErr == nil {
 			teardownErr = err
 		}
@@ -974,30 +1000,38 @@ func killSprint(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, sp 
 	return teardownErr
 }
 
-// markWorkstreamKilled cascades a workstream to killed: every active sprint is marked
-// killed and its agents exited, then the workstream itself, dropping it as the active
-// workstream. It never calls the backend nor removes the worktree: a caller that must
-// also tear those down
-// (workstream-kill) does so first and surfaces the error after these row writes
-// (mirroring handleAgentKill). Reused by the repo-kill cascade and boot reconcile
-// when a workspace has vanished out-of-band.
-func markWorkstreamKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ws workstreamRow) error {
-	sprints, err := listSprints(ctx, db, ws.ID, "")
+// markWorkstreamKilled cascades a workstream to killed (compare-and-set): it flips the
+// workstream, then marks every still-active sprint killed and exits their agents,
+// returning the aggregate flipped agent rows so the caller can emit their frames and tear
+// down their terminals. Like markSprintKilled it reads its children after the status
+// commit and returns (nil, false, nil) when it loses a concurrent flip. It never calls
+// the backend nor removes the worktree — a caller that must also tear those down does so
+// after these row writes. Reused by the repo-kill cascade and boot reconcile when a
+// workspace has vanished out-of-band.
+func markWorkstreamKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ws workstreamRow) ([]agentRow, bool, error) {
+	won, err := casWorkstreamKilled(ctx, db, ws.ID)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
+	if !won {
+		return nil, false, nil
+	}
+	sprints, err := listSprints(ctx, db, ws.ID, StatusActive)
+	if err != nil {
+		return nil, false, err
+	}
+	var flipped []agentRow
 	for _, sp := range sprints {
-		if sp.Status != StatusActive {
-			continue
+		rows, _, err := markSprintKilled(ctx, db, appendFn, sp)
+		if err != nil {
+			return nil, false, err
 		}
-		if err := markSprintKilled(ctx, db, appendFn, sp); err != nil {
-			return err
-		}
+		flipped = append(flipped, rows...)
 	}
-	if err := setWorkstreamStatus(ctx, db, ws.ID, StatusKilled); err != nil {
-		return err
+	if err := clearActiveSelection(ctx, db, configActiveWorkstream, ws.ID); err != nil {
+		return nil, false, err
 	}
-	return clearActiveSelection(ctx, db, configActiveWorkstream, ws.ID)
+	return flipped, true, nil
 }
 
 // tearDownWorkstream tears down a workstream's real resources: its backend
@@ -1028,41 +1062,58 @@ func tearDownWorkstream(ctx context.Context, bk backend.Backend, repo repoRow, w
 	return nil
 }
 
-// killRepo tears a repo down for real: it tears down every active workstream's
-// backend workspace and non-primary worktree, cascades each workstream's sprints to
-// killed and agents to exited, marks the repo killed, and drops it as the active
-// repo. Teardown errors are collected and surfaced only after every row is mutated,
-// mirroring handleAgentKill, so a half-dead repo never lingers active; an unknown
-// backend or failed teardown on one workstream does not abort the others.
-func killRepo(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, repo repoRow) error {
-	wss, err := listWorkstreams(ctx, db, repo.ID, "")
+// killRepo marks a repo killed (compare-and-set) and cascades every active workstream to
+// killed, exiting their sprints' agents. It performs only the durable row/subject-log
+// mutations, returning the flipped agent rows and the workstreams it flipped so the
+// caller can emit their frames and then tear down the backend workspaces and worktrees. A
+// loser of a concurrent repo flip returns (nil, nil, false, nil).
+func killRepo(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, repo repoRow) (flipped []agentRow, torn []workstreamRow, won bool, err error) {
+	won, err = casRepoKilled(ctx, db, repo.ID)
 	if err != nil {
-		return err
+		return nil, nil, false, err
 	}
-	var teardownErr error
+	if !won {
+		return nil, nil, false, nil
+	}
+	wss, err := listWorkstreams(ctx, db, repo.ID, StatusActive)
+	if err != nil {
+		return nil, nil, false, err
+	}
 	for _, ws := range wss {
-		if ws.Status != StatusActive {
+		rows, wsWon, err := markWorkstreamKilled(ctx, db, appendFn, ws)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		if !wsWon {
 			continue
 		}
-		switch bk, ok := backend.Get(ws.Backend); {
-		case !ok:
+		flipped = append(flipped, rows...)
+		torn = append(torn, ws)
+	}
+	if err := clearActiveSelection(ctx, db, configActiveRepo, repo.ID); err != nil {
+		return nil, nil, false, err
+	}
+	return flipped, torn, true, nil
+}
+
+// tearDownWorkstreams tears down each flipped workstream's backend workspace and, for a
+// non-primary worktree on a backend that does not manage its own, its git worktree —
+// after the repo-kill's row mutations are committed and its frames emitted. It returns the
+// first teardown error after attempting every one; an unknown backend does not abort the
+// others.
+func tearDownWorkstreams(ctx context.Context, repo repoRow, wss []workstreamRow) error {
+	var teardownErr error
+	for _, ws := range wss {
+		bk, ok := backend.Get(ws.Backend)
+		if !ok {
 			if teardownErr == nil {
 				teardownErr = fmt.Errorf("unknown backend %q for workstream %q", ws.Backend, ws.ID)
 			}
-		default:
-			if err := tearDownWorkstream(ctx, bk, repo, ws); err != nil && teardownErr == nil {
-				teardownErr = err
-			}
+			continue
 		}
-		if err := markWorkstreamKilled(ctx, db, appendFn, ws); err != nil {
-			return err
+		if err := tearDownWorkstream(ctx, bk, repo, ws); err != nil && teardownErr == nil {
+			teardownErr = err
 		}
-	}
-	if err := setRepoStatus(ctx, db, repo.ID, StatusKilled); err != nil {
-		return err
-	}
-	if err := clearActiveSelection(ctx, db, configActiveRepo, repo.ID); err != nil {
-		return err
 	}
 	return teardownErr
 }
@@ -1081,19 +1132,25 @@ func handleRepoKill(hc daemon.HandlerCtx, req repoKillRequest) (repoLifecycleRes
 	if err != nil {
 		return repoLifecycleResult{}, err
 	}
-	// Snapshot the agents active before the cascade exits them, so their fleet frames
-	// carry the ids the kill is about to terminate.
-	killed, err := listRepoAgents(hc.Ctx, hc.DB, repo.ID, StatusActive)
+	if repo.Status != StatusActive {
+		return repoLifecycleResult{}, opErr(codeConflict, fmt.Errorf("repo %s is %s, not active", repo.ID, repo.Status))
+	}
+	flipped, torn, won, err := killRepo(hc.Ctx, hc.DB, hc.Append, repo)
 	if err != nil {
 		return repoLifecycleResult{}, err
 	}
-	if err := killRepo(hc.Ctx, hc.DB, hc.Append, repo); err != nil {
-		return repoLifecycleResult{}, err
+	if !won {
+		return repoLifecycleResult{}, opErr(codeConflict, fmt.Errorf("repo %s is already being killed", repo.ID))
 	}
-	for _, ag := range killed {
+	// Emit the exact flipped set before teardown, so a teardown failure never suppresses
+	// the frames.
+	for _, ag := range flipped {
 		fleetLog.emit(hc.Ctx, exitedFrame(ag.ID, reasonKilled))
 	}
 	fleetLog.emit(hc.Ctx, containerFrame(FrameRepoKilled, repo.ID, repo.Name))
+	if err := tearDownWorkstreams(hc.Ctx, repo, torn); err != nil {
+		return repoLifecycleResult{}, err
+	}
 	return repoLifecycleResult{RepoID: repo.ID, Status: string(StatusKilled)}, nil
 }
 
@@ -1175,11 +1232,12 @@ func handleWorkstreamCreate(hc daemon.HandlerCtx, req workstreamCreateRequest) (
 	if err := insertWorkstream(hc.Ctx, hc.DB, w); err != nil {
 		return workstreamCreateResult{}, err
 	}
-	if err := createDefaultSprint(hc.Ctx, hc.DB, w.ID, ccSprint); err != nil {
+	sprintID, err := createDefaultSprint(hc.Ctx, hc.DB, w.ID, ccSprint)
+	if err != nil {
 		return workstreamCreateResult{}, err
 	}
 	fleetLog.emit(hc.Ctx, containerFrame(FrameWorkstreamCreated, w.ID, w.Name))
-	fleetLog.emit(hc.Ctx, containerFrame(FrameSprintCreated, sprintSlug(defaultSprintName), defaultSprintName))
+	fleetLog.emit(hc.Ctx, containerFrame(FrameSprintCreated, sprintID, defaultSprintName))
 	return workstreamCreateResult{
 		WorkstreamID: w.ID, RepoID: repo.ID, Workspace: workspaceHandle, Branch: branch, Worktree: path,
 	}, nil
@@ -1296,6 +1354,9 @@ func handleWorkstreamKill(hc daemon.HandlerCtx, req workstreamKillRequest) (work
 	if err != nil {
 		return workstreamLifecycleResult{}, err
 	}
+	if ws.Status != StatusActive {
+		return workstreamLifecycleResult{}, opErr(codeConflict, fmt.Errorf("workstream %s is %s, not active", ws.ID, ws.Status))
+	}
 	bk, ok := backend.Get(ws.Backend)
 	if !ok {
 		return workstreamLifecycleResult{}, opErr(codeUnsupported, fmt.Errorf("unknown backend: %s", ws.Backend))
@@ -1304,25 +1365,22 @@ func handleWorkstreamKill(hc daemon.HandlerCtx, req workstreamKillRequest) (work
 	if err != nil {
 		return workstreamLifecycleResult{}, err
 	}
-	// Snapshot the agents active before the cascade exits them, so their fleet frames
-	// carry the ids the kill is about to terminate.
-	killed, err := listWorkstreamAgents(hc.Ctx, hc.DB, ws.ID)
+	flipped, won, err := markWorkstreamKilled(hc.Ctx, hc.DB, hc.Append, ws)
 	if err != nil {
 		return workstreamLifecycleResult{}, err
 	}
-	teardownErr := tearDownWorkstream(hc.Ctx, bk, repo, ws)
-	if err := markWorkstreamKilled(hc.Ctx, hc.DB, hc.Append, ws); err != nil {
-		return workstreamLifecycleResult{}, err
+	if !won {
+		return workstreamLifecycleResult{}, opErr(codeConflict, fmt.Errorf("workstream %s is already being killed", ws.ID))
 	}
-	if teardownErr != nil {
-		return workstreamLifecycleResult{}, teardownErr
-	}
-	for _, ag := range killed {
-		if ag.Status == StatusActive {
-			fleetLog.emit(hc.Ctx, exitedFrame(ag.ID, reasonKilled))
-		}
+	// Emit the exact flipped set before teardown, so a teardown failure never suppresses
+	// the frames.
+	for _, ag := range flipped {
+		fleetLog.emit(hc.Ctx, exitedFrame(ag.ID, reasonKilled))
 	}
 	fleetLog.emit(hc.Ctx, containerFrame(FrameWorkstreamKilled, ws.ID, ws.Name))
+	if err := tearDownWorkstream(hc.Ctx, bk, repo, ws); err != nil {
+		return workstreamLifecycleResult{}, err
+	}
 	return workstreamLifecycleResult{WorkstreamID: ws.ID, Status: string(StatusKilled)}, nil
 }
 
@@ -1493,8 +1551,10 @@ type sprintKillResult struct {
 	Status   string `json:"status"`
 }
 
-// handleSprintKill answers cco.sprint.kill: a real teardown via killSprint. Unlike
-// agent-kill, killing an already-killed sprint is a Conflict, not an idempotent no-op.
+// handleSprintKill answers cco.sprint.kill: a real teardown that marks the sprint killed
+// (compare-and-set), exits its agents, emits their frames, then tears down their
+// terminals. Unlike agent-kill, killing an already-killed sprint — or losing the flip to
+// a concurrent kill — is a Conflict, not an idempotent no-op.
 func handleSprintKill(hc daemon.HandlerCtx, req sprintKillRequest) (sprintKillResult, error) {
 	workstreamID := ""
 	if req.Workstream != "" {
@@ -1511,19 +1571,22 @@ func handleSprintKill(hc daemon.HandlerCtx, req sprintKillRequest) (sprintKillRe
 	if sp.Status != StatusActive {
 		return sprintKillResult{}, opErr(codeConflict, fmt.Errorf("sprint %s is %s, not active", sp.ID, sp.Status))
 	}
-	// Snapshot the agents active before the cascade exits them, so their fleet frames
-	// carry the ids the kill is about to terminate.
-	killed, err := listAgents(hc.Ctx, hc.DB, sp.ID, StatusActive)
+	flipped, won, err := markSprintKilled(hc.Ctx, hc.DB, hc.Append, sp)
 	if err != nil {
 		return sprintKillResult{}, err
 	}
-	if err := killSprint(hc.Ctx, hc.DB, hc.Append, sp); err != nil {
-		return sprintKillResult{}, err
+	if !won {
+		return sprintKillResult{}, opErr(codeConflict, fmt.Errorf("sprint %s is already being killed", sp.ID))
 	}
-	for _, ag := range killed {
+	// Emit the exact flipped set before teardown, so a teardown failure never suppresses
+	// the frames.
+	for _, ag := range flipped {
 		fleetLog.emit(hc.Ctx, exitedFrame(ag.ID, reasonKilled))
 	}
 	fleetLog.emit(hc.Ctx, containerFrame(FrameSprintKilled, sp.ID, sp.Name))
+	if err := teardownAgents(hc.Ctx, hc.DB, flipped); err != nil {
+		return sprintKillResult{}, err
+	}
 	return sprintKillResult{SprintID: sp.ID, Status: string(StatusKilled)}, nil
 }
 

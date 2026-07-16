@@ -1501,7 +1501,7 @@ func TestHandleSprintKill(t *testing.T) {
 	})
 }
 
-// TestKillSprintSurfacesTeardownErrorAfterRowWrites proves killSprint mirrors
+// TestKillSprintSurfacesTeardownErrorAfterRowWrites proves handleSprintKill mirrors
 // handleWorkstreamKill: a backend kill failure is returned only after every row
 // (sprint status, agent status) is already mutated, so a half-dead sprint never
 // lingers active.
@@ -1533,6 +1533,137 @@ func TestKillSprintSurfacesTeardownErrorAfterRowWrites(t *testing.T) {
 	}
 	assertSprintStatus(ctx, t, db, "s1", StatusKilled)
 	assertAgentStatus(ctx, t, db, "a1", StatusExited)
+}
+
+// killSeed builds a repo → primary workstream → sprint → active agent hierarchy on a
+// fresh DB with the "optest" backend registered under bk, returning the DB.
+func killSeed(t *testing.T, bk backend.Backend) (context.Context, *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+	db := newTestDB(ctx, t)
+	backend.Register(bk)
+	if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "optest", Cwd: "/s", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "optest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/s", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatal(err)
+	}
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a1", SprintID: "s1", Backend: "optest", TerminalHandle: "term-1",
+		SessionID: "sess-1", Scope: "/s", SubjectID: "subj-1", Status: StatusActive, State: StateWorking, CreatedAt: "t0",
+	})
+	return ctx, db
+}
+
+// TestKillFramesEmittedDespiteTeardownError proves every kill path mirrors its durable
+// mutations to the fleet before attempting teardown (finding 8): a backend teardown
+// failure still surfaces as the op's error, but the exited and container frames are
+// already on the fleet subject.
+func TestKillFramesEmittedDespiteTeardownError(t *testing.T) {
+	appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+	failing := func() backend.Backend { return opBackend{killErr: errors.New("backend: teardown failed")} }
+
+	assertOneKilledExit := func(t *testing.T, log *eventLog) {
+		t.Helper()
+		if got := exitedReasons(t, log); len(got) != 1 || got[0] != reasonKilled {
+			t.Fatalf("exited frames = %v, want one killed (emitted before teardown)", got)
+		}
+	}
+
+	t.Run("agent kill", func(t *testing.T) {
+		_, db := killSeed(t, failing())
+		log, _ := installTestFleet(t)
+		reply := runTyped(handleAgentKill, opCtx(db, mustJSON(t, map[string]string{"agent_id": "a1"}), appendFn))
+		if reply.OK {
+			t.Fatal("agent kill reply ok, want the teardown error")
+		}
+		assertOneKilledExit(t, log)
+	})
+
+	t.Run("sprint kill", func(t *testing.T) {
+		_, db := killSeed(t, failing())
+		log, _ := installTestFleet(t)
+		reply := runTyped(handleSprintKill, opCtx(db, mustJSON(t, map[string]string{"id": "s1"}), appendFn))
+		if reply.OK {
+			t.Fatal("sprint kill reply ok, want the teardown error")
+		}
+		assertOneKilledExit(t, log)
+		if log.count(FrameSprintKilled) != 1 {
+			t.Fatalf("sprint.killed count = %d, want 1 (emitted before teardown)", log.count(FrameSprintKilled))
+		}
+	})
+
+	t.Run("workstream kill", func(t *testing.T) {
+		_, db := killSeed(t, failing())
+		log, _ := installTestFleet(t)
+		reply := runTyped(handleWorkstreamKill, opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), appendFn))
+		if reply.OK {
+			t.Fatal("workstream kill reply ok, want the teardown error")
+		}
+		assertOneKilledExit(t, log)
+		if log.count(FrameWorkstreamKilled) != 1 {
+			t.Fatalf("workstream.killed count = %d, want 1 (emitted before teardown)", log.count(FrameWorkstreamKilled))
+		}
+	})
+
+	t.Run("repo kill", func(t *testing.T) {
+		_, db := killSeed(t, failing())
+		log, _ := installTestFleet(t)
+		reply := runTyped(handleRepoKill, opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
+		if reply.OK {
+			t.Fatal("repo kill reply ok, want the teardown error")
+		}
+		assertOneKilledExit(t, log)
+		if log.count(FrameRepoKilled) != 1 {
+			t.Fatalf("repo.killed count = %d, want 1 (emitted before teardown)", log.count(FrameRepoKilled))
+		}
+	})
+}
+
+// TestSecondKillIsConflict proves a container kill is compare-and-set (finding 10): a
+// second kill of an already-killed sprint, workstream, or repo is a Conflict, never a
+// silent re-teardown.
+func TestSecondKillIsConflict(t *testing.T) {
+	appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+
+	t.Run("sprint", func(t *testing.T) {
+		_, db := killSeed(t, opBackend{})
+		if reply := runTyped(handleSprintKill, opCtx(db, mustJSON(t, map[string]string{"id": "s1"}), appendFn)); !reply.OK {
+			t.Fatalf("first kill failed: %s", reply.Error)
+		}
+		reply := runTyped(handleSprintKill, opCtx(db, mustJSON(t, map[string]string{"id": "s1"}), appendFn))
+		if reply.OK || !strings.HasPrefix(reply.Error, "Conflict: ") {
+			t.Fatalf("second sprint kill = %+v, want Conflict", reply)
+		}
+	})
+	t.Run("workstream", func(t *testing.T) {
+		_, db := killSeed(t, opBackend{})
+		if reply := runTyped(handleWorkstreamKill, opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), appendFn)); !reply.OK {
+			t.Fatalf("first kill failed: %s", reply.Error)
+		}
+		reply := runTyped(handleWorkstreamKill, opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), appendFn))
+		if reply.OK || !strings.HasPrefix(reply.Error, "Conflict: ") {
+			t.Fatalf("second workstream kill = %+v, want Conflict", reply)
+		}
+	})
+	t.Run("repo", func(t *testing.T) {
+		_, db := killSeed(t, opBackend{})
+		if reply := runTyped(handleRepoKill, opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn)); !reply.OK {
+			t.Fatalf("first kill failed: %s", reply.Error)
+		}
+		reply := runTyped(handleRepoKill, opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
+		if reply.OK || !strings.HasPrefix(reply.Error, "Conflict: ") {
+			t.Fatalf("second repo kill = %+v, want Conflict", reply)
+		}
+	})
 }
 
 // assertConfig asserts a config key's value and presence.

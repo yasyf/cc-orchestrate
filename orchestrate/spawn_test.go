@@ -288,7 +288,8 @@ func TestTailerManagerStartStop(t *testing.T) {
 // spawnBackend is a registered test backend that records the SpawnSpec it
 // receives, so handleSpawn's wiring can be asserted without a live claude.
 type spawnBackend struct {
-	spec *backend.SpawnSpec
+	spec   *backend.SpawnSpec
+	killed *[]backend.AgentHandle
 }
 
 func (spawnBackend) Name() backend.Name                { return "spawntest" }
@@ -310,7 +311,12 @@ func (b spawnBackend) Spawn(_ context.Context, spec backend.SpawnSpec) (backend.
 func (spawnBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
 	return nil, nil
 }
-func (spawnBackend) Kill(context.Context, backend.AgentHandle) error                { return nil }
+func (b spawnBackend) Kill(_ context.Context, agent backend.AgentHandle) error {
+	if b.killed != nil {
+		*b.killed = append(*b.killed, agent)
+	}
+	return nil
+}
 func (spawnBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error { return nil }
 
 // Capture + CanCapture make spawnBackend a capturing backend (like tmux), the common
@@ -906,6 +912,178 @@ func TestHandleAgentRespawn(t *testing.T) {
 		}
 		if len(out.Respawned) != 1 || out.Respawned[0].ID != "a-eligible" {
 			t.Fatalf("respawned = %+v, want exactly [a-eligible] (a-chain-dead skipped, a-active not exited)", out.Respawned)
+		}
+	})
+}
+
+// TestHandleAgentRespawnDeadSweepReportsFailures proves the {dead:true} sweep continues
+// past a real per-agent failure (finding 5): an eligible agent on a vanished backend
+// lands in Failed while a healthy sibling still respawns, and the op itself succeeds.
+func TestHandleAgentRespawnDeadSweepReportsFailures(t *testing.T) {
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	oldLookup := lookupPath
+	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { lookupPath = oldLookup })
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+	installTestFleet(t)
+	db := newTestDB(ctx, t)
+	backend.Register(spawnBackend{spec: &backend.SpawnSpec{}})
+
+	if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "spawntest", Cwd: "/tmp/a", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "spawntest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/tmp/a", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatal(err)
+	}
+	// a-ok respawns cleanly; a-bad is eligible (its hierarchy is active) but its backend is
+	// gone, so respawnAgent fails with a non-Conflict error the sweep must record, not abort on.
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a-ok", SprintID: "s1", Backend: "spawntest", TerminalHandle: "term-ok",
+		SessionID: "sess-ok", Scope: "/tmp/a", Name: "ok", SubjectID: "subj-ok",
+		Status: StatusExited, State: StateIdle, CreatedAt: "t0",
+	})
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a-bad", SprintID: "s1", Backend: "ghost", TerminalHandle: "term-bad",
+		SessionID: "sess-bad", Scope: "/tmp/a", Name: "bad", SubjectID: "subj-bad",
+		Status: StatusExited, State: StateIdle, CreatedAt: "t1",
+	})
+
+	log := &eventLog{}
+	reply := runTyped(handleAgentRespawn, opCtx(db, mustJSON(t, map[string]any{"dead": true}), log.append))
+	if !reply.OK {
+		t.Fatalf("sweep reply not ok: %s (a per-agent failure must not fail the whole sweep)", reply.Error)
+	}
+	var out agentRespawnResult
+	if err := json.Unmarshal(reply.Body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Respawned) != 1 || out.Respawned[0].ID != "a-ok" {
+		t.Fatalf("respawned = %+v, want exactly [a-ok] (the sweep continued past a-bad)", out.Respawned)
+	}
+	if len(out.Failed) != 1 || out.Failed[0].AgentID != "a-bad" || out.Failed[0].Error == "" {
+		t.Fatalf("failed = %+v, want one entry for a-bad with a non-empty error", out.Failed)
+	}
+}
+
+// TestSpawnKillOrphanRace covers the spawn/container-kill orphan window (finding 4): a
+// spawn whose insert lands around a concurrent sprint kill must never leave a live agent
+// under a killed sprint. The two orders are driven deterministically — the kill via the
+// spawnAfterInsert seam, the capture via direct sequencing.
+func TestSpawnKillOrphanRace(t *testing.T) {
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	oldLookup := lookupPath
+	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { lookupPath = oldLookup })
+
+	newEnv := func(t *testing.T) (context.Context, *sql.DB, *eventLog, *[]backend.AgentHandle) {
+		t.Helper()
+		t.Setenv("HOME", t.TempDir())
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		tailers = newTestTailerManager(ctx)
+		log, _ := installTestFleet(t)
+		killed := &[]backend.AgentHandle{}
+		backend.Register(spawnBackend{spec: &backend.SpawnSpec{}, killed: killed})
+		st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+		if err != nil {
+			t.Fatalf("store.Open: %v", err)
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		db := st.DB()
+		if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "spawntest", Cwd: "/tmp/a", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := insertWorkstream(ctx, db, workstreamRow{
+			ID: "w1", RepoID: "p1", Name: "main", Backend: "spawntest", WorkspaceHandle: "ws-1",
+			Branch: "main", Worktree: "/tmp/a", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+			t.Fatal(err)
+		}
+		return ctx, db, log, killed
+	}
+	spawnHC := func(ctx context.Context, db *sql.DB, log *eventLog) daemon.HandlerCtx {
+		return daemon.HandlerCtx{
+			Ctx: ctx, Env: daemon.Envelope{Body: mustJSON(t, map[string]string{"repo": "p1", "name": "worker"})},
+			Window: subject.Window{Session: "parent", ClaudePID: 4242}, Scope: "/parent",
+			Subjects: subject.Resolver{Store: store.NewSubjectStore(db)}, DB: db, Append: log.append,
+		}
+	}
+
+	t.Run("spawn after kill compensates and conflicts", func(t *testing.T) {
+		ctx, db, log, killed := newEnv(t)
+		// Kill the sprint in the window between the agent insert and the hierarchy re-check.
+		prev := spawnAfterInsert
+		spawnAfterInsert = func() {
+			if err := setSprintStatus(ctx, db, "s1", StatusKilled); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Cleanup(func() { spawnAfterInsert = prev })
+
+		reply := runTyped(handleSpawn, spawnHC(ctx, db, log))
+		if reply.OK || !strings.HasPrefix(reply.Error, "Conflict: ") {
+			t.Fatalf("reply = %+v, want Conflict (the re-check saw the killed sprint)", reply)
+		}
+		agents, err := listAgents(ctx, db, "s1", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(agents) != 1 {
+			t.Fatalf("agents under s1 = %d, want 1 (the compensated tombstone)", len(agents))
+		}
+		if agents[0].Status != StatusExited {
+			t.Fatalf("compensated agent status = %q, want exited (no live orphan under a killed sprint)", agents[0].Status)
+		}
+		if len(*killed) != 1 {
+			t.Fatalf("terminal kills = %d, want 1 (compensation tore down the just-spawned terminal)", len(*killed))
+		}
+		if n := log.count(FrameAgentSpawned); n != 0 {
+			t.Fatalf("fleet.agent.spawned count = %d, want 0 (a compensated spawn is never announced)", n)
+		}
+	})
+
+	t.Run("kill after insert captures the agent in teardown", func(t *testing.T) {
+		ctx, db, log, killed := newEnv(t)
+		reply := runTyped(handleSpawn, spawnHC(ctx, db, log))
+		if !reply.OK {
+			t.Fatalf("spawn failed: %s", reply.Error)
+		}
+		var out agentSpawnResult
+		if err := json.Unmarshal(reply.Body, &out); err != nil {
+			t.Fatal(err)
+		}
+		if reply := runTyped(handleSprintKill, opCtx(db, mustJSON(t, map[string]string{"id": "s1"}), log.append)); !reply.OK {
+			t.Fatalf("sprint kill failed: %s", reply.Error)
+		}
+		ag, err := getAgent(ctx, db, out.AgentID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ag.Status != StatusExited {
+			t.Fatalf("agent status = %q after sprint kill, want exited (captured by the mark's teardown list)", ag.Status)
+		}
+		if !slices.ContainsFunc(*killed, func(h backend.AgentHandle) bool { return h.ID == "term-1" }) {
+			t.Fatalf("killed terminals = %+v, want the captured agent's term-1", *killed)
+		}
+		if got := exitedReasons(t, log); len(got) != 1 || got[0] != reasonKilled {
+			t.Fatalf("exited frames = %v, want one killed", got)
 		}
 	})
 }

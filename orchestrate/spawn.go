@@ -28,6 +28,11 @@ var lifecycle = subject.Lifecycle{Initial: string(StatusActive), Closed: string(
 
 var lookupPath = exec.LookPath
 
+// spawnAfterInsert is a test seam fired between the agent insert and the hierarchy
+// re-check, so a test can kill the target sprint in that exact window and drive the
+// compensation path deterministically. A no-op in production.
+var spawnAfterInsert = func() {}
+
 // mcpServer is one entry of the child's --mcp-config: the orchestrate binary
 // re-invoked as the child's channel MCP server, scoped to its session and cwd.
 type mcpServer struct {
@@ -328,15 +333,52 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 	if err := insertAgent(hc.Ctx, hc.DB, ag); err != nil {
 		return agentSpawnResult{}, err
 	}
+	spawnAfterInsert()
+	// Re-check the hierarchy on a fresh sprint read: a container-kill racing this spawn
+	// either captured this insert or is observed killed here — closing the orphan window.
+	fresh, err := getSprint(hc.Ctx, hc.DB, sprint.ID, "")
+	if err != nil {
+		return agentSpawnResult{}, err
+	}
+	if _, _, err := requireActiveHierarchy(hc, fresh); err != nil {
+		if cerr := compensateSpawn(hc.Ctx, hc.DB, hc.Append, ag); cerr != nil {
+			return agentSpawnResult{}, cerr
+		}
+		return agentSpawnResult{}, err
+	}
 	if _, err := hc.Append(hc.Ctx, &event.Event{
 		SubjectID: sub.ID, Origin: event.OriginSystem, Type: EventSpawned, Payload: spawnedPayload(ag),
 	}); err != nil {
 		return agentSpawnResult{}, err
 	}
-	tailers.start(hc.DB, hc.Append, ag)
+	// Announce before starting the tailer, so a fast tailer's status frame can never
+	// precede the spawned frame on the stream.
 	fleetLog.emit(hc.Ctx, spawnedFrame(ag))
+	tailers.start(hc.DB, hc.Append, ag)
 
 	return agentSpawnResult{AgentID: sid, SubjectID: sub.ID, Terminal: handle.ID, Backend: string(bname)}, nil
+}
+
+// compensateSpawn undoes a spawn whose post-insert hierarchy re-check failed: under
+// agentLock it re-reads the row and, if still active, soft-exits it and kills its fresh
+// terminal, so a concurrent container-kill that missed the insert never leaves a live
+// agent orphaned under a killed container. An agent that kill's teardown already exited
+// is a no-op, so the exit and terminal teardown happen exactly once.
+func compensateSpawn(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow) error {
+	mu := agentLock(ag.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	cur, err := getAgent(ctx, db, ag.ID)
+	if err != nil {
+		return err
+	}
+	if cur.Status != StatusActive {
+		return nil
+	}
+	if err := softExitAgent(ctx, db, appendFn, cur); err != nil {
+		return err
+	}
+	return killAgentTerminal(ctx, db, cur)
 }
 
 // respawnAgent brings a vanished agent's terminal back: it resumes the agent's
@@ -400,15 +442,26 @@ type agentRespawnRequest struct {
 	Dead    bool   `json:"dead,omitempty"`
 }
 
-// agentRespawnResult reports the agents actually respawned.
-type agentRespawnResult struct {
-	Respawned []agentView `json:"respawned"`
+// respawnFailure reports one agent a {dead:true} sweep tried but could not respawn — a
+// real failure, distinct from a Conflict-ineligible agent the sweep silently skips.
+type respawnFailure struct {
+	AgentID string `json:"agent_id"`
+	Error   string `json:"error"`
 }
 
-// handleAgentRespawn answers cco.agent.respawn. {agent_id} respawns one eligible
-// agent, erroring Conflict if it is not; {dead:true} sweeps every StatusExited agent
-// and silently skips the ineligible ones, returning the views of those revived (an
-// empty list is a valid success).
+// agentRespawnResult reports the agents actually respawned and, for a {dead:true} sweep,
+// any that failed to respawn (Conflict-ineligible agents are silently skipped, not
+// listed). The sweep succeeds with both lists; a single {agent_id} respawn still returns
+// its error.
+type agentRespawnResult struct {
+	Respawned []agentView      `json:"respawned"`
+	Failed    []respawnFailure `json:"failed,omitempty"`
+}
+
+// handleAgentRespawn answers cco.agent.respawn. {agent_id} respawns one eligible agent,
+// erroring Conflict if it is not; {dead:true} sweeps every StatusExited agent, silently
+// skipping the Conflict-ineligible ones and continuing past a real per-agent failure
+// (recorded in Failed), so one wedged agent never aborts the rest of the sweep.
 func handleAgentRespawn(hc daemon.HandlerCtx, req agentRespawnRequest) (agentRespawnResult, error) {
 	hasID := req.AgentID != ""
 	if hasID == req.Dead {
@@ -426,17 +479,19 @@ func handleAgentRespawn(hc daemon.HandlerCtx, req agentRespawnRequest) (agentRes
 		return agentRespawnResult{}, err
 	}
 	respawned := make([]agentView, 0, len(exited))
+	var failed []respawnFailure
 	for _, ag := range exited {
 		view, err := respawnOneAgent(hc, ag.ID)
 		switch {
 		case isConflict(err):
 			continue // not eligible under the dead chain; the sweep skips it
 		case err != nil:
-			return agentRespawnResult{}, err
+			failed = append(failed, respawnFailure{AgentID: ag.ID, Error: err.Error()})
+		default:
+			respawned = append(respawned, view)
 		}
-		respawned = append(respawned, view)
 	}
-	return agentRespawnResult{Respawned: respawned}, nil
+	return agentRespawnResult{Respawned: respawned, Failed: failed}, nil
 }
 
 // checkRespawnEligible gates a respawn on the same rule a bare spawn enforces: the

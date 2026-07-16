@@ -592,3 +592,95 @@ func TestFleetAbandonFrameOrder(t *testing.T) {
 		t.Fatalf("frame order = %v, want [abandoned exited]", got)
 	}
 }
+
+// TestFleetStatusCursorLagsSnapshot proves the resume cursor is captured before the views
+// (finding 6): a frame emitted between the two reads is already reflected in the snapshot
+// yet carries a seq beyond the reported cursor, so resuming re-delivers it rather than
+// skipping it. The window is driven deterministically via the fleetStatusMidRead seam.
+func TestFleetStatusCursorLagsSnapshot(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(ctx, t)
+	installTestFleet(t)
+	if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "tmux", Cwd: "/s", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatal(err)
+	}
+	before := fleetLog.seq()
+
+	prev := fleetStatusMidRead
+	fleetStatusMidRead = func() {
+		if err := insertRepo(ctx, db, repoRow{ID: "p2", Name: "beta", Backend: "tmux", Cwd: "/s2", Status: StatusActive, CreatedAt: "t1"}); err != nil {
+			t.Fatal(err)
+		}
+		fleetLog.emit(ctx, containerFrame(FrameRepoCreated, "p2", "beta"))
+	}
+	t.Cleanup(func() { fleetStatusMidRead = prev })
+
+	res, err := handleFleetStatus(daemon.HandlerCtx{Ctx: ctx, DB: db, HTTPPort: 1}, fleetStatusRequest{})
+	if err != nil {
+		t.Fatalf("handleFleetStatus: %v", err)
+	}
+	// The mid-read repo is in the snapshot (views read after the emit).
+	present := false
+	for _, r := range res.Repos {
+		if r.ID == "p2" {
+			present = true
+		}
+	}
+	if !present {
+		t.Fatalf("views = %+v, want the mid-read repo p2 present", res.Repos)
+	}
+	// The cursor was captured before that emit, so it lags — never leads — the snapshot.
+	if res.Seq != before {
+		t.Fatalf("seq = %d, want %d (cursor captured before the mid-read emit)", res.Seq, before)
+	}
+	if fleetLog.seq() <= res.Seq {
+		t.Fatalf("post-call seq %d must exceed the reported cursor %d (the p2 frame is re-delivered)", fleetLog.seq(), res.Seq)
+	}
+}
+
+// TestFleetRepoCreateSprintFrameId proves the default-sprint frame carries the created
+// sprint row's actual id (finding 7), not a second random slug that matches nothing.
+func TestFleetRepoCreateSprintFrameId(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(ctx, t)
+	log, _ := installTestFleet(t)
+	repo := gitRepo(ctx, t, "main")
+	backend.Register(workstreamBackend{manages: true, worktree: t.TempDir()})
+
+	reply := runTyped(handleRepoCreate, opCtx(db, mustJSON(t, map[string]string{"name": "demo", "backend": "wstest", "cwd": repo}), nil))
+	if !reply.OK {
+		t.Fatalf("repo create failed: %s", reply.Error)
+	}
+	pl := framePayload(t, log, FrameSprintCreated)
+	sprintID, _ := pl["id"].(string)
+	if sprintID == "" {
+		t.Fatalf("sprint.created frame has no id: %v", pl)
+	}
+	if _, err := getSprint(ctx, db, sprintID, ""); err != nil {
+		t.Fatalf("sprint.created frame id %q is not a queryable sprint row: %v", sprintID, err)
+	}
+}
+
+// TestFleetCoalescePrunedOnExit proves a terminal frame clears an agent's coalesce entry
+// (finding 11): after an exit, a respawn-identical status re-emits despite still being
+// inside the 3s coalesce window.
+func TestFleetCoalescePrunedOnExit(t *testing.T) {
+	log, clk := installTestFleet(t)
+	ctx := context.Background()
+	st := Status{State: StateWorking, Tool: "Bash", Target: "go test", Tokens: 1}
+
+	fleetLog.emit(ctx, agentStatusFrame("a1", st)) // first status: emits
+	if n := log.count(FrameAgentStatus); n != 1 {
+		t.Fatalf("first status: %d, want 1", n)
+	}
+	clk.advance(1 * time.Second)
+	fleetLog.emit(ctx, agentStatusFrame("a1", st)) // identical, in window: suppressed
+	if n := log.count(FrameAgentStatus); n != 1 {
+		t.Fatalf("identical status in window: %d, want 1 (suppressed)", n)
+	}
+	fleetLog.emit(ctx, exitedFrame("a1", reasonKilled)) // prunes a1's coalesce entry
+	fleetLog.emit(ctx, agentStatusFrame("a1", st))      // re-emits despite the window
+	if n := log.count(FrameAgentStatus); n != 2 {
+		t.Fatalf("status after exit: %d, want 2 (coalesce entry pruned on exit)", n)
+	}
+}

@@ -30,10 +30,13 @@ const maxXRPCBody = 1 << 20
 var fleetEventSchemas = map[string]any{}
 
 // mountXRPC registers the /xrpc HTTP surface on the daemon's mux, already behind
-// cc-interact's authHandler (the whole mux is wrapped at Serve time). Only the two
-// method wildcards and the one literal describe route are registered — Go's mux
-// prefers the literal over the wildcard — so every /xrpc/* miss stays inside these
-// handlers and answers a JSON envelope rather than the mux's plain-text 404/405.
+// cc-interact's authHandler (the whole mux is wrapped at Serve time). The literal
+// describe route, the GET/POST method wildcards, and a verb-less method wildcard are
+// registered. Go's mux prefers the literal over a wildcard and a method-qualified
+// wildcard over the bare one, so a GET/POST lands on its verb handler while every
+// other verb (PUT/DELETE/PATCH/…) falls through to the bare wildcard. Every /xrpc/*
+// request therefore stays inside serveXRPC and answers a JSON envelope — the verb-less
+// route is what keeps an unsupported verb from reaching the mux's own plain-text 405.
 func mountXRPC(s *daemon.Server) {
 	mux := s.Mux()
 	mux.HandleFunc("GET /xrpc/cco.server.describe", func(w http.ResponseWriter, _ *http.Request) {
@@ -42,11 +45,13 @@ func mountXRPC(s *daemon.Server) {
 	h := func(w http.ResponseWriter, r *http.Request) { serveXRPC(w, r, s) }
 	mux.HandleFunc("GET /xrpc/{method}", h)
 	mux.HandleFunc("POST /xrpc/{method}", h)
+	mux.HandleFunc("/xrpc/{method}", h)
 }
 
 // serveXRPC resolves the {method} path value to an xrpc-exposed method, enforces the
-// GET-query / POST-procedure verb split, decodes the request, and dispatches it
-// through the daemon's op table under a bounded context.
+// query/procedure verb split (a query is reachable by GET or HEAD, a procedure by
+// POST), decodes the request, and dispatches it through the daemon's op table under a
+// bounded context.
 func serveXRPC(w http.ResponseWriter, r *http.Request, s *daemon.Server) {
 	name := r.PathValue("method")
 	m, ok := lookupXRPCMethod(name)
@@ -54,7 +59,8 @@ func serveXRPC(w http.ResponseWriter, r *http.Request, s *daemon.Server) {
 		writeXRPCError(w, http.StatusNotFound, "MethodNotFound", fmt.Sprintf("no method %q", name))
 		return
 	}
-	if want := verbFor(m.kind); r.Method != want {
+	if !methodAllowed(m.kind, r.Method) {
+		want := verbFor(m.kind)
 		w.Header().Set("Allow", want)
 		writeXRPCError(w, http.StatusMethodNotAllowed, string(codeInvalidRequest),
 			fmt.Sprintf("method %q is a %s; use %s", name, m.kind, want))
@@ -76,13 +82,23 @@ func serveXRPC(w http.ResponseWriter, r *http.Request, s *daemon.Server) {
 	writeXRPCReply(w, reply)
 }
 
-// verbFor maps a method kind to the single HTTP verb it is reachable on: a query is
-// GET, a procedure is POST.
+// verbFor maps a method kind to the canonical HTTP verb the Allow header advertises: a
+// query is GET, a procedure is POST.
 func verbFor(kind methodKind) string {
 	if kind == kindQuery {
 		return http.MethodGet
 	}
 	return http.MethodPost
+}
+
+// methodAllowed reports whether an HTTP verb may reach a method of the given kind: a
+// query by GET or HEAD (net/http serves HEAD by running the GET handler and discarding
+// the body), a procedure only by POST.
+func methodAllowed(kind methodKind, verb string) bool {
+	if kind == kindQuery {
+		return verb == http.MethodGet || verb == http.MethodHead
+	}
+	return verb == http.MethodPost
 }
 
 // lookupXRPCMethod finds the xrpc-exposed method with the given name. A socket-only
@@ -97,10 +113,12 @@ func lookupXRPCMethod(name string) (method, bool) {
 	return method{}, false
 }
 
-// decodeXRPCRequest builds the Envelope body for a request: a POST reads the raw JSON
-// object body, a GET projects the URL query params through the method's request schema.
+// decodeXRPCRequest builds the Envelope body for a request, keyed off the method kind
+// the verb check already validated: a query projects the URL query params through the
+// method's request schema (so a HEAD query decodes its params exactly as a GET does,
+// never falling through to a body read), a procedure reads the raw JSON object body.
 func decodeXRPCRequest(r *http.Request, m method) (json.RawMessage, error) {
-	if r.Method == http.MethodGet {
+	if m.kind == kindQuery {
 		return decodeQueryParams(r, m)
 	}
 	return readJSONBody(r)
@@ -130,8 +148,9 @@ func readJSONBody(r *http.Request) (json.RawMessage, error) {
 
 // decodeQueryParams projects a GET request's URL query params into a JSON object keyed
 // by the method's request schema: a string field passes through, an int/bool/number
-// field is parsed to its typed value, and a param absent from the schema is rejected
-// (mirroring the socket adapter's DisallowUnknownFields).
+// field is parsed to its typed value, a param absent from the schema is rejected, and a
+// param given more than once is rejected rather than silently collapsed to its first
+// value (both mirroring the socket adapter's strict DisallowUnknownFields decode).
 func decodeQueryParams(r *http.Request, m method) (json.RawMessage, error) {
 	q := r.URL.Query()
 	if len(q) == 0 {
@@ -143,6 +162,9 @@ func decodeQueryParams(r *http.Request, m method) (json.RawMessage, error) {
 		prop, ok := props[key]
 		if !ok {
 			return nil, fmt.Errorf("unknown query parameter %q", key)
+		}
+		if len(vals) != 1 {
+			return nil, fmt.Errorf("query parameter %q given %d times; provide it exactly once", key, len(vals))
 		}
 		v, err := parseQueryValue(prop, vals[0])
 		if err != nil {

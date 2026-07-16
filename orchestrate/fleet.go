@@ -249,11 +249,14 @@ type statusCoalesce struct {
 	lastEmit time.Time
 }
 
-// emit is the single fleet write codepath: it coalesces a token-only status frame,
-// appends the frame to the fleet subject, and advances the high-water seq. It never
-// fails a caller's already-completed op — an append failure is logged (matching the
-// tailer and supervisor async paths) rather than propagated — and is a no-op on a nil
-// stream so a focused handler test needs no fleet bootstrap.
+// emit is the single fleet write codepath. Frames mirror durable state — row and
+// subject-log mutations — never teardown success: a caller emits only after the durable
+// mutation a frame reflects has committed, and never gates a frame on a backend teardown.
+// It coalesces a token-only status frame, clears an agent's coalesce entry on its
+// terminal or (re)spawn frame, appends the frame to the fleet subject, and advances the
+// high-water seq. It never fails a caller's already-completed op — an append failure is
+// logged (matching the tailer and supervisor async paths) rather than propagated — and is
+// a no-op on a nil stream so a focused handler test needs no fleet bootstrap.
 func (f *fleetStream) emit(ctx context.Context, fr fleetFrame) {
 	if f == nil {
 		return
@@ -263,6 +266,7 @@ func (f *fleetStream) emit(ctx context.Context, fr fleetFrame) {
 	if st, ok := fr.(fleetAgentStatus); ok && !f.admitStatus(st.AgentID, st.State, st.Tool, st.Target) {
 		return
 	}
+	f.resetCoalesceOn(fr)
 	payload, err := json.Marshal(fr)
 	if err != nil {
 		log.Printf("cc-orchestrate: fleet %s marshal: %v", fr.frameType(), err)
@@ -295,6 +299,20 @@ func (f *fleetStream) admitStatus(agentID, state, tool, target string) bool {
 		return true
 	}
 	return false
+}
+
+// resetCoalesceOn drops an agent's coalescing state on its terminal (exited) or (re)spawn
+// frame, so a respawned agent's first status always emits (never suppressed by the prior
+// life's window) and the coalesce map never grows without bound. Held under f.mu by emit.
+func (f *fleetStream) resetCoalesceOn(fr fleetFrame) {
+	switch t := fr.(type) {
+	case fleetAgentExited:
+		delete(f.coalesce, t.AgentID)
+	case fleetAgentRestarted:
+		delete(f.coalesce, t.AgentID)
+	case fleetAgentSpawned:
+		delete(f.coalesce, t.AgentID)
+	}
 }
 
 // subject returns the fleet subject id (empty on a nil stream).
@@ -386,11 +404,20 @@ type fleetStatusResult struct {
 	Agents       []agentView      `json:"agents"`
 }
 
+// fleetStatusMidRead is a test seam fired between the cursor read and the views read, so
+// a test can inject an emit into that window and prove the cursor lags the snapshot. A
+// no-op in production.
+var fleetStatusMidRead = func() {}
+
 // handleFleetStatus answers cco.fleet.status: the current views plus the fleet subject
-// and its seq. The views are read before the seq, so the resume cursor can only lag the
-// snapshot, never lead it — a frame whose effect is already in the views is at worst
-// re-delivered on the stream (an idempotent repaint), never dropped.
+// and its seq. The seq is read before the views, so the resume cursor can only lag the
+// snapshot, never lead it — a frame emitted between the two reads is already reflected in
+// the views yet is re-delivered on the stream (an idempotent repaint), never dropped.
 func handleFleetStatus(hc daemon.HandlerCtx, _ fleetStatusRequest) (fleetStatusResult, error) {
+	// Cursor before views, so it can only lag the snapshot, never lead it.
+	fleetSubject := fleetLog.subject()
+	seq := fleetLog.seq()
+	fleetStatusMidRead()
 	repos, err := listRepos(hc.Ctx, hc.DB, "")
 	if err != nil {
 		return fleetStatusResult{}, err
@@ -408,8 +435,8 @@ func handleFleetStatus(hc daemon.HandlerCtx, _ fleetStatusRequest) (fleetStatusR
 		return fleetStatusResult{}, err
 	}
 	res := fleetStatusResult{
-		FleetSubject: fleetLog.subject(),
-		Seq:          fleetLog.seq(),
+		FleetSubject: fleetSubject,
+		Seq:          seq,
 		HTTPPort:     hc.HTTPPort,
 		Repos:        make([]repoView, len(repos)),
 		Workstreams:  make([]workstreamView, len(workstreams)),

@@ -222,7 +222,13 @@ func TestXRPCErrors(t *testing.T) {
 		{"socket-only method not routable", http.MethodPost, "/xrpc/cco.agent.report", "{}", http.StatusNotFound, "MethodNotFound", ""},
 		{"get on procedure", http.MethodGet, "/xrpc/cco.config.set", "", http.StatusMethodNotAllowed, "InvalidRequest", http.MethodPost},
 		{"post on query", http.MethodPost, "/xrpc/cco.config.get", "{}", http.StatusMethodNotAllowed, "InvalidRequest", http.MethodGet},
+		// PUT/DELETE/PATCH land on the verb-less route and get the JSON 405 envelope, not
+		// the mux's own plain-text 405.
+		{"put on query", http.MethodPut, "/xrpc/cco.config.get", "", http.StatusMethodNotAllowed, "InvalidRequest", http.MethodGet},
+		{"delete on procedure", http.MethodDelete, "/xrpc/cco.config.set", "", http.StatusMethodNotAllowed, "InvalidRequest", http.MethodPost},
+		{"patch on procedure", http.MethodPatch, "/xrpc/cco.config.set", "", http.StatusMethodNotAllowed, "InvalidRequest", http.MethodPost},
 		{"unknown query param", http.MethodGet, "/xrpc/cco.config.get?bogus=1", "", http.StatusBadRequest, "InvalidRequest", ""},
+		{"repeated query param", http.MethodGet, "/xrpc/cco.config.get?key=a&key=b", "", http.StatusBadRequest, "InvalidRequest", ""},
 		{"non-object body", http.MethodPost, "/xrpc/cco.config.set", "[1,2,3]", http.StatusBadRequest, "InvalidRequest", ""},
 		{"oversize body", http.MethodPost, "/xrpc/cco.config.set", oversize, http.StatusBadRequest, "InvalidRequest", ""},
 		{"handler not found", http.MethodGet, "/xrpc/cco.agent.show?agent_id=missing", "", http.StatusNotFound, "NotFound", ""},
@@ -253,6 +259,38 @@ func TestXRPCErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestXRPCHead proves HEAD satisfies a query's GET requirement (net/http discards the
+// body), while HEAD on a procedure stays a 405.
+func TestXRPCHead(t *testing.T) {
+	_, ts := newXRPCServer(t)
+
+	t.Run("head on query is allowed", func(t *testing.T) {
+		resp := doReq(t, ts, http.MethodHead, "/xrpc/cco.config.get?key=absent", "")
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (HEAD satisfies the GET query requirement)", resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", ct)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		if len(body) != 0 {
+			t.Errorf("HEAD body = %q, want empty (net/http discards it)", body)
+		}
+	})
+
+	t.Run("head on procedure is a 405", func(t *testing.T) {
+		resp := doReq(t, ts, http.MethodHead, "/xrpc/cco.config.set", "")
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, want 405 (HEAD may not reach a procedure)", resp.StatusCode)
+		}
+		if got := resp.Header.Get("Allow"); got != http.MethodPost {
+			t.Errorf("Allow = %q, want POST", got)
+		}
+	})
 }
 
 // TestXRPCHandlerNotFoundStripsPrefix asserts the "<Code>: " prefix is parsed out of a

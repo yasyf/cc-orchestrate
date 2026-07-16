@@ -222,6 +222,21 @@ func setRepoStatus(ctx context.Context, db *sql.DB, id string, status LifecycleS
 	return nil
 }
 
+// casRepoKilled flips a repo active→killed only while it is still active, reporting
+// whether this call won the flip. A loser of a concurrent kill (false) mutates nothing,
+// so exactly one kill of a repo cascades, tears it down, and emits its frames.
+func casRepoKilled(ctx context.Context, db *sql.DB, id string) (bool, error) {
+	res, err := db.ExecContext(ctx, `UPDATE repos SET status = ? WHERE id = ? AND status = ?`, StatusKilled, id, StatusActive)
+	if err != nil {
+		return false, fmt.Errorf("cas repo %q killed: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("cas repo %q rows affected: %w", id, err)
+	}
+	return n == 1, nil
+}
+
 func insertWorkstream(ctx context.Context, db *sql.DB, w workstreamRow) error {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO workstreams (id, repo_id, name, backend, backend_workspace_handle,
@@ -309,6 +324,20 @@ func setWorkstreamStatus(ctx context.Context, db *sql.DB, id string, status Life
 		return fmt.Errorf("set workstream %q status: %w", id, err)
 	}
 	return nil
+}
+
+// casWorkstreamKilled flips a workstream active→killed only while it is still active,
+// reporting whether this call won the flip. See casRepoKilled.
+func casWorkstreamKilled(ctx context.Context, db *sql.DB, id string) (bool, error) {
+	res, err := db.ExecContext(ctx, `UPDATE workstreams SET status = ? WHERE id = ? AND status = ?`, StatusKilled, id, StatusActive)
+	if err != nil {
+		return false, fmt.Errorf("cas workstream %q killed: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("cas workstream %q rows affected: %w", id, err)
+	}
+	return n == 1, nil
 }
 
 func insertSprint(ctx context.Context, db *sql.DB, sp sprintRow) error {
@@ -399,6 +428,20 @@ func setSprintStatus(ctx context.Context, db *sql.DB, id string, status Lifecycl
 		return fmt.Errorf("set sprint %q status: %w", id, err)
 	}
 	return nil
+}
+
+// casSprintKilled flips a sprint active→killed only while it is still active, reporting
+// whether this call won the flip. See casRepoKilled.
+func casSprintKilled(ctx context.Context, db *sql.DB, id string) (bool, error) {
+	res, err := db.ExecContext(ctx, `UPDATE sprints SET status = ? WHERE id = ? AND status = ?`, StatusKilled, id, StatusActive)
+	if err != nil {
+		return false, fmt.Errorf("cas sprint %q killed: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("cas sprint %q rows affected: %w", id, err)
+	}
+	return n == 1, nil
 }
 
 func insertAgent(ctx context.Context, db *sql.DB, a agentRow) error {
