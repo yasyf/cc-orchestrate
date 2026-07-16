@@ -590,6 +590,27 @@ func TestSupersetKillWorkstream(t *testing.T) {
 	assertCalls(t, r.calls, [][]string{{"superset", "workspaces", "delete", "ws-1", "--local", "--json"}})
 }
 
+// supersetMainWorkspaceDeleteErr is the wrapped error execRunner produces (name,
+// args, exec error, captured stderr) when superset v1.15.0 refuses to delete a
+// project's main workspace.
+const supersetMainWorkspaceDeleteErr = `superset [workspaces delete ws-main --local --json]: exit status 1: Error: Main workspaces cannot be deleted`
+
+func TestSupersetKillWorkstreamMainWorkspaceSoftKilled(t *testing.T) {
+	r := &supersetRunner{errs: []error{errors.New(supersetMainWorkspaceDeleteErr)}}
+	if err := (superset{run: r.run}).KillWorkstream(context.Background(), WorkstreamHandle{ID: "ws-main"}); err != nil {
+		t.Fatalf("KillWorkstream: %v, want nil (soft success)", err)
+	}
+	assertCalls(t, r.calls, [][]string{{"superset", "workspaces", "delete", "ws-main", "--local", "--json"}})
+}
+
+func TestSupersetKillWorkstreamOtherErrorPropagates(t *testing.T) {
+	r := &supersetRunner{errs: []error{errors.New("superset [workspaces delete ws-1 --local --json]: exit status 1: Error: workspace not found")}}
+	err := (superset{run: r.run}).KillWorkstream(context.Background(), WorkstreamHandle{ID: "ws-1"})
+	if err == nil || !strings.Contains(err.Error(), "workspace not found") {
+		t.Fatalf("KillWorkstream err = %v, want it to propagate workspace not found", err)
+	}
+}
+
 func TestMatchProjectID(t *testing.T) {
 	projects := []supersetProject{
 		{ID: "root", Path: "/Users/yasyf/Code"},

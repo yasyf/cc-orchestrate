@@ -473,6 +473,67 @@ func TestHandleSpawn(t *testing.T) {
 	}
 }
 
+// TestHandleSpawnDefaultsEmptyName proves an omitted name defaults deterministically
+// to "agent-" + the session id's first 8 chars, before it reaches SpawnSpec or the
+// DB row — herd rejects an empty --name, so every backend and the DB must agree on
+// one non-empty name.
+func TestHandleSpawnDefaultsEmptyName(t *testing.T) {
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	oldLookup := lookupPath
+	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { lookupPath = oldLookup })
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+
+	var gotSpec backend.SpawnSpec
+	backend.Register(spawnBackend{spec: &gotSpec})
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	db := st.DB()
+	spawnPoolingHierarchy(ctx, t, db)
+
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db)}
+	appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+	body := mustJSON(t, map[string]string{"repo": "p1", "prompt": "fix it"})
+	hc := daemon.HandlerCtx{
+		Ctx: ctx, Env: daemon.Envelope{Body: body},
+		Window: subject.Window{Session: "parent", ClaudePID: 4242},
+		Scope:  "/parent", Subjects: subjects, DB: db, Append: appendFn,
+	}
+
+	reply := handleSpawn(hc)
+	if !reply.OK {
+		t.Fatalf("reply not ok: %s", reply.Error)
+	}
+	var out struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.Unmarshal(reply.Body, &out); err != nil {
+		t.Fatalf("reply body: %v", err)
+	}
+
+	want := "agent-" + out.AgentID[:8]
+	if gotSpec.Name != want {
+		t.Errorf("spawn spec name = %q, want %q", gotSpec.Name, want)
+	}
+	ag, err := getAgent(ctx, db, out.AgentID)
+	if err != nil {
+		t.Fatalf("getAgent: %v", err)
+	}
+	if ag.Name != want {
+		t.Errorf("agent row name = %q, want %q", ag.Name, want)
+	}
+}
+
 // spawnPoolingHierarchy inserts the repo/workstream/sprint a pooling test spawns into.
 func spawnPoolingHierarchy(ctx context.Context, t *testing.T, db *sql.DB) {
 	t.Helper()

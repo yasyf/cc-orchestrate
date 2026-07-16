@@ -258,6 +258,9 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 	}
 
 	sid := uuid.NewString()
+	// herd rejects an empty agent name; other backends tolerate it. Default once,
+	// here, so SpawnSpec and the DB row always agree on the same non-empty name.
+	name := cmp.Or(body.Name, "agent-"+sid[:8])
 
 	// cc-notes runs first, before any subject/terminal exists: a cc-notes failure
 	// here leaves no started subject, no live claude process, and no agent row — only
@@ -280,7 +283,7 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 	}
 	handle, err := b.Spawn(hc.Ctx, backend.SpawnSpec{
 		Workstream: backend.WorkstreamHandle{Backend: ws.Backend, ID: ws.WorkspaceHandle, Name: ws.Name, Cwd: ws.Worktree},
-		Name:       body.Name,
+		Name:       name,
 		Cwd:        scope,
 		Command:    command,
 		SessionID:  sid,
@@ -291,7 +294,7 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 
 	ag := agentRow{
 		ID: sid, SprintID: sprint.ID, Backend: bname, TerminalHandle: handle.ID,
-		SessionID: sid, Scope: scope, Name: body.Name, Prompt: body.Prompt,
+		SessionID: sid, Scope: scope, Name: name, Prompt: body.Prompt,
 		SubjectID: sub.ID, CCNotesTask: ccTask, Status: StatusActive, State: StateUnknown,
 		CreatedAt: nowStamp(),
 	}

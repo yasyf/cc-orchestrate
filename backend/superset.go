@@ -339,7 +339,12 @@ func (b superset) Kill(ctx context.Context, agent AgentHandle) error {
 }
 
 // KillWorkstream deletes the workspace, which SIGHUP→SIGKILLs all of its terminals.
+// superset refuses to delete a project's main workspace (soft-killed here; see
+// cc-notes note superset-main-workspace-delete-refused).
 func (b superset) KillWorkstream(ctx context.Context, workstream WorkstreamHandle) error {
 	_, err := b.run(ctx, supersetBin, "workspaces", "delete", workstream.ID, "--local", "--json")
+	if err != nil && strings.Contains(err.Error(), "Main workspaces cannot be deleted") {
+		return nil
+	}
 	return err
 }
