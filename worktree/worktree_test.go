@@ -134,7 +134,7 @@ func TestRemoveDirIfEmpty(t *testing.T) {
 			setup: func(t *testing.T, dir string) {
 				t.Helper()
 				child := filepath.Join(dir, "last-worktree")
-				if err := os.MkdirAll(child, 0o755); err != nil {
+				if err := os.MkdirAll(child, 0o750); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.Remove(child); err != nil {
@@ -146,7 +146,7 @@ func TestRemoveDirIfEmpty(t *testing.T) {
 			name: "leaves a non-empty parent alone",
 			setup: func(t *testing.T, dir string) {
 				t.Helper()
-				if err := os.MkdirAll(filepath.Join(dir, "remaining-worktree"), 0o755); err != nil {
+				if err := os.MkdirAll(filepath.Join(dir, "remaining-worktree"), 0o750); err != nil {
 					t.Fatal(err)
 				}
 			},
