@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-17
+
 ### Added
 - XRPC-style HTTP API: every op is callable as `GET`/`POST /xrpc/cco.<noun>.<verb>`,
   with a self-describing catalog at `/xrpc/cco.server.describe` (JSON schemas per
@@ -50,5 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cc-orchestrate backends` command reporting which backends (cmux, superset)
   are installed.
 
-[Unreleased]: https://github.com/yasyf/cc-orchestrate/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/yasyf/cc-orchestrate/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/yasyf/cc-orchestrate/releases/tag/v0.1.0
