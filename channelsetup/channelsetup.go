@@ -105,7 +105,7 @@ func ApplyManagedViaAdmin(merged []byte) (retErr error) {
 		removeTemp = false
 		return fmt.Errorf("automatic managed-settings write is macOS-only; run: sudo install -d -m 755 %q && sudo install -m 644 %q %q", filepath.Dir(dest), tmpPath, dest)
 	}
-	if out, err := exec.Command("osascript", "-e", adminScript(dest, tmpPath)).CombinedOutput(); err != nil {
+	if out, err := exec.Command("osascript", "-e", adminScript(dest, tmpPath)).CombinedOutput(); err != nil { //nolint:gosec // G204: adminScript shell-quotes + AppleScript-escapes every path (TestAdminScriptQuoting)
 		return fmt.Errorf("admin write of %s (%s): %w", dest, strings.TrimSpace(string(out)), err)
 	}
 	return nil
