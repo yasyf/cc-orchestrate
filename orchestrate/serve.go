@@ -94,6 +94,7 @@ func serve(ctx context.Context) error {
 		return err
 	}
 	registerOps(s)
+	mountXRPC(s)
 	return s.Serve(ctx)
 }
 
