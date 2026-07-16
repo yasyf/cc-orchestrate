@@ -184,58 +184,62 @@ func abandonedPayload(ag agentRow) json.RawMessage {
 }
 
 // handleStatus answers agent-status with one agent's persisted snapshot.
-func handleStatus(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		AgentID string `json:"agent_id"`
+// parseStatusFilter validates an optional lifecycle-status filter from a list
+// request: "" means every status, otherwise it must name one of the three states.
+func parseStatusFilter(s string) (LifecycleStatus, error) {
+	switch LifecycleStatus(s) {
+	case "", StatusActive, StatusExited, StatusKilled:
+		return LifecycleStatus(s), nil
+	default:
+		return "", opErr(codeInvalidRequest, fmt.Errorf("unknown status filter %q (want active, exited, or killed)", s))
 	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad agent-status body: " + err.Error()}
-	}
-	ag, err := getAgent(hc.Ctx, hc.DB, b.AgentID)
-	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
-	}
-	body, err := json.Marshal(newAgentView(ag))
-	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
-	}
-	return daemon.Reply{OK: true, Body: body}
 }
 
-// handleList answers agent-list with every agent, optionally filtered to one
-// repo resolved by id or name. An absent body lists all.
-func handleList(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		Repo string `json:"repo"`
+// agentShowRequest addresses one agent by id.
+type agentShowRequest struct {
+	AgentID string `json:"agent_id"`
+}
+
+// handleStatus answers cco.agent.show with one agent's flattened view.
+func handleStatus(hc daemon.HandlerCtx, req agentShowRequest) (agentView, error) {
+	ag, err := getAgent(hc.Ctx, hc.DB, req.AgentID)
+	if err != nil {
+		return agentView{}, err
 	}
-	if len(hc.Env.Body) > 0 {
-		if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-			return daemon.Reply{OK: false, Error: "bad agent-list body: " + err.Error()}
-		}
+	return newAgentView(ag), nil
+}
+
+// agentListRequest lists agents, optionally filtered by repo and lifecycle status.
+type agentListRequest struct {
+	Repo   string `json:"repo,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
+// handleList answers cco.agent.list with every agent, optionally filtered to one repo
+// (by id or name) and one lifecycle status.
+func handleList(hc daemon.HandlerCtx, req agentListRequest) ([]agentView, error) {
+	status, err := parseStatusFilter(req.Status)
+	if err != nil {
+		return nil, err
 	}
 	var agents []agentRow
-	var err error
-	if b.Repo != "" {
-		repo, repoErr := getRepo(hc.Ctx, hc.DB, b.Repo)
+	if req.Repo != "" {
+		repo, repoErr := getRepo(hc.Ctx, hc.DB, req.Repo)
 		if repoErr != nil {
-			return daemon.Reply{OK: false, Error: repoErr.Error()}
+			return nil, repoErr
 		}
-		agents, err = listRepoAgents(hc.Ctx, hc.DB, repo.ID)
+		agents, err = listRepoAgents(hc.Ctx, hc.DB, repo.ID, status)
 	} else {
-		agents, err = listAgents(hc.Ctx, hc.DB, "")
+		agents, err = listAgents(hc.Ctx, hc.DB, "", status)
 	}
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return nil, err
 	}
 	views := make([]agentView, len(agents))
 	for i, a := range agents {
 		views[i] = newAgentView(a)
 	}
-	body, err := json.Marshal(views)
-	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
-	}
-	return daemon.Reply{OK: true, Body: body}
+	return views, nil
 }
 
 // handleSendMessage answers agent-send-message: it delivers the text to the agent
@@ -243,31 +247,36 @@ func handleList(hc daemon.HandlerCtx) daemon.Reply {
 // appending an OriginHuman EventMessage the agent's watch Monitor consumes (the
 // LCD). The native path writes no event-plane frame; the transcript tailer emits
 // an EventInbound audit frame when the typed turn lands.
-func handleSendMessage(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		AgentID string `json:"agent_id"`
-		Text    string `json:"text"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad agent-send-message body: " + err.Error()}
-	}
-	ag, err := getAgent(hc.Ctx, hc.DB, b.AgentID)
+// agentSendMessageRequest delivers text to a running agent.
+type agentSendMessageRequest struct {
+	AgentID string `json:"agent_id"`
+	Text    string `json:"text"`
+}
+
+// agentSendMessageResult reports the delivery: the event-log seq on the LCD path (0
+// on the native path) and which transport carried it.
+type agentSendMessageResult struct {
+	Seq       int64  `json:"seq"`
+	Transport string `json:"transport"`
+}
+
+func handleSendMessage(hc daemon.HandlerCtx, req agentSendMessageRequest) (agentSendMessageResult, error) {
+	ag, err := getAgent(hc.Ctx, hc.DB, req.AgentID)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSendMessageResult{}, err
 	}
 	if ag.SubjectID == "" {
-		return daemon.Reply{OK: false, Error: "agent has no subject: " + b.AgentID}
+		return agentSendMessageResult{}, opErr(codeConflict, fmt.Errorf("agent has no subject: %s", req.AgentID))
 	}
 	bk, ok := backend.Get(ag.Backend)
 	if !ok {
-		return daemon.Reply{OK: false, Error: "unknown backend: " + string(ag.Backend)}
+		return agentSendMessageResult{}, opErr(codeUnsupported, fmt.Errorf("unknown backend: %s", ag.Backend))
 	}
-	native, seq, err := deliverMessage(hc, bk, ag, b.Text)
+	native, seq, err := deliverMessage(hc, bk, ag, req.Text)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSendMessageResult{}, err
 	}
-	body, _ := json.Marshal(map[string]any{"seq": seq, "transport": transportLabel(native)})
-	return daemon.Reply{OK: true, Body: body}
+	return agentSendMessageResult{Seq: seq, Transport: transportLabel(native)}, nil
 }
 
 // deliverMessage routes a message to a running agent: natively when the backend is
@@ -326,42 +335,79 @@ type reportPayload struct {
 // reporting agent's subject log. The subject is resolved from the child's session
 // and scope (the channel server stamps both), so the agent never needs to know its
 // own subject id. An unresolvable subject is an error.
-func handleReport(hc daemon.HandlerCtx) daemon.Reply {
-	var b reportRequest
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad agent-report body: " + err.Error()}
-	}
+// agentReportResult reports the event-log seq the report frame landed at.
+type agentReportResult struct {
+	Seq int64 `json:"seq"`
+}
+
+func handleReport(hc daemon.HandlerCtx, req reportRequest) (agentReportResult, error) {
 	sub, ok, err := hc.Subjects.Find(hc.Ctx, hc.Window, hc.Scope)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentReportResult{}, err
 	}
 	if !ok {
-		return daemon.Reply{OK: false, Error: "no subject for session " + hc.Env.Session + " in scope " + hc.Scope}
+		return agentReportResult{}, opErr(codeNotFound, fmt.Errorf("no subject for session %s in scope %s", hc.Env.Session, hc.Scope))
 	}
-	payload, _ := json.Marshal(reportPayload{Type: EventReport, Text: b.Text, State: b.State})
+	payload, _ := json.Marshal(reportPayload{Type: EventReport, Text: req.Text, State: req.State})
 	seq, err := hc.Append(hc.Ctx, &event.Event{
 		SubjectID: sub.ID, Origin: event.OriginAgent, Type: EventReport, Payload: payload,
 	})
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentReportResult{}, err
 	}
-	body, _ := json.Marshal(map[string]int64{"seq": seq})
-	return daemon.Reply{OK: true, Body: body}
+	return agentReportResult{Seq: seq}, nil
 }
 
-// handleConfigSet answers config-set by upserting one config key.
-func handleConfigSet(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		Key   string `json:"key"`
-		Value string `json:"value"`
+// configSetRequest upserts one config key.
+type configSetRequest struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// configSetResult echoes the upserted key and value.
+type configSetResult struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// handleConfigSet answers cco.config.set by upserting one config key.
+func handleConfigSet(hc daemon.HandlerCtx, req configSetRequest) (configSetResult, error) {
+	if err := setConfig(hc.Ctx, hc.DB, req.Key, req.Value); err != nil {
+		return configSetResult{}, err
 	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad config-set body: " + err.Error()}
+	return configSetResult{Key: req.Key, Value: req.Value}, nil
+}
+
+// configListRequest takes no arguments; cco.config.list returns every key.
+type configListRequest struct{}
+
+// handleConfigList answers cco.config.list with every persisted key-value pair.
+func handleConfigList(hc daemon.HandlerCtx, _ configListRequest) ([]configEntry, error) {
+	return listConfig(hc.Ctx, hc.DB)
+}
+
+// configUnsetRequest deletes one config key.
+type configUnsetRequest struct {
+	Key string `json:"key"`
+}
+
+// configUnsetResult echoes the key and whether it was set before deletion.
+type configUnsetResult struct {
+	Key   string `json:"key"`
+	Found bool   `json:"found"`
+}
+
+// handleConfigUnset answers cco.config.unset by deleting one config key, reporting
+// whether it was set beforehand.
+func handleConfigUnset(hc daemon.HandlerCtx, req configUnsetRequest) (configUnsetResult, error) {
+	_, found, err := getConfig(hc.Ctx, hc.DB, req.Key)
+	if err != nil {
+		return configUnsetResult{}, err
 	}
-	if err := setConfig(hc.Ctx, hc.DB, b.Key, b.Value); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+	if err := clearConfig(hc.Ctx, hc.DB, req.Key); err != nil {
+		return configUnsetResult{}, err
 	}
-	return daemon.Reply{OK: true}
+	return configUnsetResult{Key: req.Key, Found: found}, nil
 }
 
 // repoView is the JSON shape every repo-facing op returns, flattened from
@@ -559,42 +605,49 @@ func resolveBackend(hc daemon.HandlerCtx, explicit string) (backend.Backend, bac
 // drives with git, or the backend's own forked worktree for a ManagesWorktree backend
 // (superset). It reports the new repo id, the primary workstream's workspace handle,
 // and the backend.
-func handleRepoCreate(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		Name    string `json:"name"`
-		Backend string `json:"backend"`
-		Cwd     string `json:"cwd"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad repo-create body: " + err.Error()}
-	}
-	bk, bname, err := resolveBackend(hc, b.Backend)
+// repoCreateRequest creates a repo and its primary workstream's backend workspace.
+type repoCreateRequest struct {
+	Name    string `json:"name"`
+	Backend string `json:"backend,omitempty"`
+	Cwd     string `json:"cwd,omitempty"`
+}
+
+// repoCreateResult reports the new repo id, its primary workstream's workspace
+// handle, and the backend it landed on.
+type repoCreateResult struct {
+	RepoID    string `json:"repo_id"`
+	Workspace string `json:"workspace"`
+	Backend   string `json:"backend"`
+}
+
+func handleRepoCreate(hc daemon.HandlerCtx, req repoCreateRequest) (repoCreateResult, error) {
+	bk, bname, err := resolveBackend(hc, req.Backend)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoCreateResult{}, err
 	}
 	if err := bk.EnsureReady(hc.Ctx); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoCreateResult{}, err
 	}
-	cwd := cmp.Or(b.Cwd, ".")
+	cwd := cmp.Or(req.Cwd, ".")
 	if !filepath.IsAbs(cwd) {
 		cwd = filepath.Join(hc.Scope, cwd)
 	}
 	canonical, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: fmt.Errorf("canonicalizing repo cwd %q: %w", cwd, err).Error()}
+		return repoCreateResult{}, fmt.Errorf("canonicalizing repo cwd %q: %w", cwd, err)
 	}
 	cwd = canonical
 	branch, err := worktree.CurrentBranch(hc.Ctx, cwd)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoCreateResult{}, err
 	}
 	handle, err := bk.CreateWorkstream(hc.Ctx, backend.WorkstreamSpec{Name: branch, Cwd: cwd, RepoCwd: cwd, Branch: branch})
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoCreateResult{}, err
 	}
-	ccProject, ccSprint, err := provisionCCNotes(hc.Ctx, cwd, b.Name)
+	ccProject, ccSprint, err := provisionCCNotes(hc.Ctx, cwd, req.Name)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoCreateResult{}, err
 	}
 	// A ManagesWorktree backend owns its own forked worktree; adopt the path it
 	// returns. Every other backend's primary workstream is the repo root itself.
@@ -603,11 +656,11 @@ func handleRepoCreate(hc daemon.HandlerCtx) daemon.Reply {
 		worktreePath = handle.Worktree
 	}
 	p := repoRow{
-		ID: repoSlug(b.Name), Name: b.Name, Backend: bname,
+		ID: repoSlug(req.Name), Name: req.Name, Backend: bname,
 		Cwd: cwd, Status: StatusActive, CreatedAt: nowStamp(),
 	}
 	if err := insertRepo(hc.Ctx, hc.DB, p); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoCreateResult{}, err
 	}
 	w := workstreamRow{
 		ID: workstreamSlug(branch), RepoID: p.ID, Name: branch, Backend: bname,
@@ -615,30 +668,49 @@ func handleRepoCreate(hc daemon.HandlerCtx) daemon.Reply {
 		CCNotesProject: ccProject, Status: StatusActive, CreatedAt: nowStamp(),
 	}
 	if err := insertWorkstream(hc.Ctx, hc.DB, w); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoCreateResult{}, err
 	}
 	if err := createDefaultSprint(hc.Ctx, hc.DB, w.ID, ccSprint); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoCreateResult{}, err
 	}
-	out, _ := json.Marshal(map[string]string{"repo_id": p.ID, "workspace": handle.ID, "backend": string(bname)})
-	return daemon.Reply{OK: true, Body: out}
+	return repoCreateResult{RepoID: p.ID, Workspace: handle.ID, Backend: string(bname)}, nil
 }
 
-// handleRepoList answers repo-list with every repo's flattened view.
-func handleRepoList(hc daemon.HandlerCtx) daemon.Reply {
-	repos, err := listRepos(hc.Ctx, hc.DB)
+// repoListRequest lists repos, optionally filtered by lifecycle status.
+type repoListRequest struct {
+	Status string `json:"status,omitempty"`
+}
+
+// handleRepoList answers cco.repo.list with every repo's flattened view, optionally
+// filtered by lifecycle status.
+func handleRepoList(hc daemon.HandlerCtx, req repoListRequest) ([]repoView, error) {
+	status, err := parseStatusFilter(req.Status)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return nil, err
+	}
+	repos, err := listRepos(hc.Ctx, hc.DB, status)
+	if err != nil {
+		return nil, err
 	}
 	views := make([]repoView, len(repos))
 	for i, p := range repos {
 		views[i] = newRepoView(p)
 	}
-	body, err := json.Marshal(views)
+	return views, nil
+}
+
+// repoShowRequest addresses one repo by id or name.
+type repoShowRequest struct {
+	ID string `json:"id"`
+}
+
+// handleRepoShow answers cco.repo.show with one repo's flattened view.
+func handleRepoShow(hc daemon.HandlerCtx, req repoShowRequest) (repoView, error) {
+	repo, err := getRepo(hc.Ctx, hc.DB, req.ID)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoView{}, err
 	}
-	return daemon.Reply{OK: true, Body: body}
+	return newRepoView(repo), nil
 }
 
 // handleRepoActivate answers repo-activate: it resolves the repo (by id
@@ -647,31 +719,36 @@ func handleRepoList(hc daemon.HandlerCtx) daemon.Reply {
 // workstream. Activating a repo resets the precedence chain — it clears the
 // higher-precedence active workstream and sprint — so the most recent activation
 // wins and a stale active sprint can never silently misroute a bare spawn.
-func handleRepoActivate(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad repo-activate body: " + err.Error()}
-	}
-	repo, err := getRepo(hc.Ctx, hc.DB, b.ID)
+// repoActivateRequest and repoKillRequest address one repo by id or name.
+type repoActivateRequest struct {
+	ID string `json:"id"`
+}
+
+// repoLifecycleResult reports a repo's id and its post-op lifecycle status, the shape
+// both cco.repo.activate and cco.repo.kill return.
+type repoLifecycleResult struct {
+	RepoID string `json:"repo_id"`
+	Status string `json:"status"`
+}
+
+func handleRepoActivate(hc daemon.HandlerCtx, req repoActivateRequest) (repoLifecycleResult, error) {
+	repo, err := getRepo(hc.Ctx, hc.DB, req.ID)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoLifecycleResult{}, err
 	}
 	if err := setRepoStatus(hc.Ctx, hc.DB, repo.ID, StatusActive); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoLifecycleResult{}, err
 	}
 	if err := setConfig(hc.Ctx, hc.DB, configActiveRepo, repo.ID); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoLifecycleResult{}, err
 	}
 	if err := clearConfig(hc.Ctx, hc.DB, configActiveWorkstream); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoLifecycleResult{}, err
 	}
 	if err := clearConfig(hc.Ctx, hc.DB, configActiveSprint); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoLifecycleResult{}, err
 	}
-	out, _ := json.Marshal(map[string]string{"repo_id": repo.ID, "status": string(StatusActive)})
-	return daemon.Reply{OK: true, Body: out}
+	return repoLifecycleResult{RepoID: repo.ID, Status: string(StatusActive)}, nil
 }
 
 // backendAgentHandle resolves an agent's backend handle: its terminal addressed
@@ -707,38 +784,41 @@ func backendAgentHandle(ctx context.Context, db *sql.DB, ag agentRow) (backend.A
 // lock is observed: the kill targets the agent's current terminal (a freshly respawned
 // one), never the stale handle the request raced against, and a concurrent kill that
 // already exited the row is an idempotent no-op rather than a second EventExited.
-func handleAgentKill(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		AgentID string `json:"agent_id"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad agent-kill body: " + err.Error()}
-	}
-	mu := agentLock(b.AgentID)
+// agentKillRequest addresses one agent by id.
+type agentKillRequest struct {
+	AgentID string `json:"agent_id"`
+}
+
+// agentKillResult reports the agent id and its post-kill lifecycle status.
+type agentKillResult struct {
+	AgentID string `json:"agent_id"`
+	Status  string `json:"status"`
+}
+
+func handleAgentKill(hc daemon.HandlerCtx, req agentKillRequest) (agentKillResult, error) {
+	mu := agentLock(req.AgentID)
 	mu.Lock()
 	defer mu.Unlock()
-	ag, err := getAgent(hc.Ctx, hc.DB, b.AgentID)
+	ag, err := getAgent(hc.Ctx, hc.DB, req.AgentID)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentKillResult{}, err
 	}
 	if ag.Status != StatusActive {
 		// Already terminal (its repo was killed, or a concurrent kill won the lock
 		// first): idempotent no-op, never a second EventExited or a re-kill of a dead
 		// terminal.
-		out, _ := json.Marshal(map[string]string{"agent_id": ag.ID, "status": string(ag.Status)})
-		return daemon.Reply{OK: true, Body: out}
+		return agentKillResult{AgentID: ag.ID, Status: string(ag.Status)}, nil
 	}
 	// Mark the row exited and append the terminal EventExited before the backend
 	// kill, so a failed kill still ends the row — a half-dead agent never lingers
 	// active.
 	if err := softExitAgent(hc.Ctx, hc.DB, hc.Append, ag); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentKillResult{}, err
 	}
 	if err := killAgentTerminal(hc.Ctx, hc.DB, ag); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentKillResult{}, err
 	}
-	out, _ := json.Marshal(map[string]string{"agent_id": ag.ID, "status": string(StatusExited)})
-	return daemon.Reply{OK: true, Body: out}
+	return agentKillResult{AgentID: ag.ID, Status: string(StatusExited)}, nil
 }
 
 // killAgentTerminal terminates an agent's backend terminal, resolving the backend and
@@ -794,7 +874,7 @@ func clearActiveSelection(ctx context.Context, db *sql.DB, key, killedID string)
 // the backend nor removes a worktree — a sprint has none, it shares its workstream's.
 // Reused by the repo- and workstream-kill cascades and boot reconcile.
 func markSprintKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, sp sprintRow) error {
-	agents, err := listAgents(ctx, db, sp.ID)
+	agents, err := listAgents(ctx, db, sp.ID, "")
 	if err != nil {
 		return err
 	}
@@ -825,7 +905,7 @@ func markSprintKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFun
 // (mirroring handleAgentKill). Reused by the repo-kill cascade and boot reconcile
 // when a workspace has vanished out-of-band.
 func markWorkstreamKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ws workstreamRow) error {
-	sprints, err := listSprints(ctx, db, ws.ID)
+	sprints, err := listSprints(ctx, db, ws.ID, "")
 	if err != nil {
 		return err
 	}
@@ -878,7 +958,7 @@ func tearDownWorkstream(ctx context.Context, bk backend.Backend, repo repoRow, w
 // mirroring handleAgentKill, so a half-dead repo never lingers active; an unknown
 // backend or failed teardown on one workstream does not abort the others.
 func killRepo(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, repo repoRow) error {
-	wss, err := listWorkstreams(ctx, db, repo.ID)
+	wss, err := listWorkstreams(ctx, db, repo.ID, "")
 	if err != nil {
 		return err
 	}
@@ -914,22 +994,20 @@ func killRepo(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, repo 
 // backend workspace and non-primary worktree, cascades their sprints to killed and
 // agents to exited, then marks the repo killed. Teardown errors are surfaced after the
 // row mutations (mirroring handleAgentKill), so a half-dead repo never lingers active.
-func handleRepoKill(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad repo-kill body: " + err.Error()}
-	}
-	repo, err := getRepo(hc.Ctx, hc.DB, b.ID)
+// repoKillRequest addresses one repo by id or name.
+type repoKillRequest struct {
+	ID string `json:"id"`
+}
+
+func handleRepoKill(hc daemon.HandlerCtx, req repoKillRequest) (repoLifecycleResult, error) {
+	repo, err := getRepo(hc.Ctx, hc.DB, req.ID)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoLifecycleResult{}, err
 	}
 	if err := killRepo(hc.Ctx, hc.DB, hc.Append, repo); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return repoLifecycleResult{}, err
 	}
-	out, _ := json.Marshal(map[string]string{"repo_id": repo.ID, "status": string(StatusKilled)})
-	return daemon.Reply{OK: true, Body: out}
+	return repoLifecycleResult{RepoID: repo.ID, Status: string(StatusKilled)}, nil
 }
 
 // handleWorkstreamCreate answers workstream-create: it resolves the repo, then
@@ -940,108 +1018,131 @@ func handleRepoKill(hc daemon.HandlerCtx) daemon.Reply {
 // with jj) and runs in it as its cwd. Either path yields exactly one worktree per
 // workstream. The new workstream gets its own default sprint, so a simple flow never
 // touches sprints.
-func handleWorkstreamCreate(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		Repo   string `json:"repo"`
-		Name   string `json:"name"`
-		Branch string `json:"branch"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad workstream-create body: " + err.Error()}
-	}
-	repo, err := getRepo(hc.Ctx, hc.DB, b.Repo)
+// workstreamCreateRequest creates a workstream — a branch and its worktree — in a
+// repo.
+type workstreamCreateRequest struct {
+	Repo   string `json:"repo,omitempty"`
+	Name   string `json:"name"`
+	Branch string `json:"branch,omitempty"`
+}
+
+// workstreamCreateResult reports the new workstream and the resources it created.
+type workstreamCreateResult struct {
+	WorkstreamID string `json:"workstream_id"`
+	RepoID       string `json:"repo_id"`
+	Workspace    string `json:"workspace"`
+	Branch       string `json:"branch"`
+	Worktree     string `json:"worktree"`
+}
+
+func handleWorkstreamCreate(hc daemon.HandlerCtx, req workstreamCreateRequest) (workstreamCreateResult, error) {
+	repo, err := getRepo(hc.Ctx, hc.DB, req.Repo)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamCreateResult{}, err
 	}
 	bk, ok := backend.Get(repo.Backend)
 	if !ok {
-		return daemon.Reply{OK: false, Error: "unknown backend: " + string(repo.Backend)}
+		return workstreamCreateResult{}, opErr(codeUnsupported, fmt.Errorf("unknown backend: %s", repo.Backend))
 	}
 	if err := bk.EnsureReady(hc.Ctx); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamCreateResult{}, err
 	}
-	branch := cmp.Or(b.Branch, b.Name)
+	branch := cmp.Or(req.Branch, req.Name)
 	repoRoot := repo.Cwd
 
 	var path, workspaceHandle string
 	if bk.Caps().Has(backend.ManagesWorktree) {
-		handle, err := bk.CreateWorkstream(hc.Ctx, backend.WorkstreamSpec{Name: b.Name, Cwd: repoRoot, RepoCwd: repoRoot, Branch: branch})
+		handle, err := bk.CreateWorkstream(hc.Ctx, backend.WorkstreamSpec{Name: req.Name, Cwd: repoRoot, RepoCwd: repoRoot, Branch: branch})
 		if err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return workstreamCreateResult{}, err
 		}
 		path, workspaceHandle = handle.Worktree, handle.ID
 		if err := colocateJJ(hc.Ctx, repoRoot, path); err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return workstreamCreateResult{}, err
 		}
 	} else {
-		dest := filepath.Join(worktreesBase(), repo.ID, pathComponent(b.Name))
+		dest := filepath.Join(worktreesBase(), repo.ID, pathComponent(req.Name))
 		path, err = worktree.Add(hc.Ctx, repoRoot, dest, branch)
 		if err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return workstreamCreateResult{}, err
 		}
 		if err := colocateJJ(hc.Ctx, repoRoot, path); err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return workstreamCreateResult{}, err
 		}
-		handle, err := bk.CreateWorkstream(hc.Ctx, backend.WorkstreamSpec{Name: b.Name, Cwd: path, RepoCwd: repoRoot, Branch: branch})
+		handle, err := bk.CreateWorkstream(hc.Ctx, backend.WorkstreamSpec{Name: req.Name, Cwd: path, RepoCwd: repoRoot, Branch: branch})
 		if err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return workstreamCreateResult{}, err
 		}
 		workspaceHandle = handle.ID
 	}
 
-	ccProject, ccSprint, err := provisionCCNotes(hc.Ctx, repoRoot, b.Name)
+	ccProject, ccSprint, err := provisionCCNotes(hc.Ctx, repoRoot, req.Name)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamCreateResult{}, err
 	}
 	w := workstreamRow{
-		ID: workstreamSlug(b.Name), RepoID: repo.ID, Name: b.Name, Backend: repo.Backend,
+		ID: workstreamSlug(req.Name), RepoID: repo.ID, Name: req.Name, Backend: repo.Backend,
 		WorkspaceHandle: workspaceHandle, Branch: branch, Worktree: path, IsPrimary: false,
 		CCNotesProject: ccProject, Status: StatusActive, CreatedAt: nowStamp(),
 	}
 	if err := insertWorkstream(hc.Ctx, hc.DB, w); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamCreateResult{}, err
 	}
 	if err := createDefaultSprint(hc.Ctx, hc.DB, w.ID, ccSprint); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamCreateResult{}, err
 	}
-	out, _ := json.Marshal(map[string]string{
-		"workstream_id": w.ID, "repo_id": repo.ID, "workspace": workspaceHandle, "branch": branch, "worktree": path,
-	})
-	return daemon.Reply{OK: true, Body: out}
+	return workstreamCreateResult{
+		WorkstreamID: w.ID, RepoID: repo.ID, Workspace: workspaceHandle, Branch: branch, Worktree: path,
+	}, nil
 }
 
-// handleWorkstreamList answers workstream-list with every workstream's flattened
-// view, optionally filtered to one repo resolved by id or name.
-func handleWorkstreamList(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		Repo string `json:"repo"`
-	}
-	if len(hc.Env.Body) > 0 {
-		if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-			return daemon.Reply{OK: false, Error: "bad workstream-list body: " + err.Error()}
-		}
+// workstreamListRequest lists workstreams, optionally filtered by repo and status.
+type workstreamListRequest struct {
+	Repo   string `json:"repo,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
+// handleWorkstreamList answers cco.workstream.list with every workstream's flattened
+// view, optionally filtered to one repo (by id or name) and one lifecycle status.
+func handleWorkstreamList(hc daemon.HandlerCtx, req workstreamListRequest) ([]workstreamView, error) {
+	status, err := parseStatusFilter(req.Status)
+	if err != nil {
+		return nil, err
 	}
 	filter := ""
-	if b.Repo != "" {
-		repo, err := getRepo(hc.Ctx, hc.DB, b.Repo)
+	if req.Repo != "" {
+		repo, err := getRepo(hc.Ctx, hc.DB, req.Repo)
 		if err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return nil, err
 		}
 		filter = repo.ID
 	}
-	wss, err := listWorkstreams(hc.Ctx, hc.DB, filter)
+	wss, err := listWorkstreams(hc.Ctx, hc.DB, filter, status)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return nil, err
 	}
 	views := make([]workstreamView, len(wss))
 	for i, w := range wss {
 		views[i] = newWorkstreamView(w)
 	}
-	body, err := json.Marshal(views)
+	return views, nil
+}
+
+// workstreamShowRequest addresses one workstream by id or name, scoped to a repo when
+// given to disambiguate the name.
+type workstreamShowRequest struct {
+	ID   string `json:"id"`
+	Repo string `json:"repo,omitempty"`
+}
+
+// handleWorkstreamShow answers cco.workstream.show with one workstream's flattened
+// view.
+func handleWorkstreamShow(hc daemon.HandlerCtx, req workstreamShowRequest) (workstreamView, error) {
+	ws, err := resolveWorkstreamRef(hc, req.ID, req.Repo)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamView{}, err
 	}
-	return daemon.Reply{OK: true, Body: body}
+	return newWorkstreamView(ws), nil
 }
 
 // handleWorkstreamActivate answers workstream-activate: it resolves the workstream
@@ -1050,32 +1151,38 @@ func handleWorkstreamList(hc daemon.HandlerCtx) daemon.Reply {
 // spawn with no explicit target lands in it. Activating a workstream resets the
 // precedence chain — it sets the active repo to the workstream's repo and clears the
 // higher-precedence active sprint — so the most recent activation wins.
-func handleWorkstreamActivate(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		ID   string `json:"id"`
-		Repo string `json:"repo"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad workstream-activate body: " + err.Error()}
-	}
-	ws, err := resolveWorkstreamRef(hc, b.ID, b.Repo)
+// workstreamActivateRequest and workstreamKillRequest address one workstream by id or
+// name, scoped to a repo when given to disambiguate the name.
+type workstreamActivateRequest struct {
+	ID   string `json:"id"`
+	Repo string `json:"repo,omitempty"`
+}
+
+// workstreamLifecycleResult reports a workstream's id and its post-op lifecycle
+// status, the shape both cco.workstream.activate and cco.workstream.kill return.
+type workstreamLifecycleResult struct {
+	WorkstreamID string `json:"workstream_id"`
+	Status       string `json:"status"`
+}
+
+func handleWorkstreamActivate(hc daemon.HandlerCtx, req workstreamActivateRequest) (workstreamLifecycleResult, error) {
+	ws, err := resolveWorkstreamRef(hc, req.ID, req.Repo)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamLifecycleResult{}, err
 	}
 	if err := setWorkstreamStatus(hc.Ctx, hc.DB, ws.ID, StatusActive); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamLifecycleResult{}, err
 	}
 	if err := setConfig(hc.Ctx, hc.DB, configActiveWorkstream, ws.ID); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamLifecycleResult{}, err
 	}
 	if err := setConfig(hc.Ctx, hc.DB, configActiveRepo, ws.RepoID); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamLifecycleResult{}, err
 	}
 	if err := clearConfig(hc.Ctx, hc.DB, configActiveSprint); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamLifecycleResult{}, err
 	}
-	out, _ := json.Marshal(map[string]string{"workstream_id": ws.ID, "status": string(StatusActive)})
-	return daemon.Reply{OK: true, Body: out}
+	return workstreamLifecycleResult{WorkstreamID: ws.ID, Status: string(StatusActive)}, nil
 }
 
 // handleWorkstreamKill answers workstream-kill: a real teardown. It tears down the
@@ -1087,105 +1194,133 @@ func handleWorkstreamActivate(hc daemon.HandlerCtx) daemon.Reply {
 // the workstream's sprints to killed and their agents to exited. The teardown errors
 // are surfaced after the row mutations, mirroring handleAgentKill, so a half-dead
 // workstream never lingers active.
-func handleWorkstreamKill(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		ID   string `json:"id"`
-		Repo string `json:"repo"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad workstream-kill body: " + err.Error()}
-	}
-	ws, err := resolveWorkstreamRef(hc, b.ID, b.Repo)
+// workstreamKillRequest addresses one workstream by id or name, scoped to a repo when
+// given to disambiguate the name.
+type workstreamKillRequest struct {
+	ID   string `json:"id"`
+	Repo string `json:"repo,omitempty"`
+}
+
+func handleWorkstreamKill(hc daemon.HandlerCtx, req workstreamKillRequest) (workstreamLifecycleResult, error) {
+	ws, err := resolveWorkstreamRef(hc, req.ID, req.Repo)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamLifecycleResult{}, err
 	}
 	bk, ok := backend.Get(ws.Backend)
 	if !ok {
-		return daemon.Reply{OK: false, Error: "unknown backend: " + string(ws.Backend)}
+		return workstreamLifecycleResult{}, opErr(codeUnsupported, fmt.Errorf("unknown backend: %s", ws.Backend))
 	}
 	repo, err := getRepo(hc.Ctx, hc.DB, ws.RepoID)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamLifecycleResult{}, err
 	}
 	teardownErr := tearDownWorkstream(hc.Ctx, bk, repo, ws)
 	if err := markWorkstreamKilled(hc.Ctx, hc.DB, hc.Append, ws); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return workstreamLifecycleResult{}, err
 	}
 	if teardownErr != nil {
-		return daemon.Reply{OK: false, Error: teardownErr.Error()}
+		return workstreamLifecycleResult{}, teardownErr
 	}
-	out, _ := json.Marshal(map[string]string{"workstream_id": ws.ID, "status": string(StatusKilled)})
-	return daemon.Reply{OK: true, Body: out}
+	return workstreamLifecycleResult{WorkstreamID: ws.ID, Status: string(StatusKilled)}, nil
 }
 
 // handleSprintCreate answers sprint-create: it resolves the workstream (by id or
 // name, scoped to a repo when given to disambiguate), inserts a new sprint under it,
 // and reports the sprint id. A sprint shares its workstream's worktree — it has no
 // worktree of its own.
-func handleSprintCreate(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		Workstream string `json:"workstream"`
-		Repo       string `json:"repo"`
-		Name       string `json:"name"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad sprint-create body: " + err.Error()}
-	}
-	ws, err := resolveWorkstreamRef(hc, b.Workstream, b.Repo)
+// sprintCreateRequest creates a sprint in a workstream, scoped to a repo when given to
+// disambiguate the workstream name.
+type sprintCreateRequest struct {
+	Workstream string `json:"workstream,omitempty"`
+	Repo       string `json:"repo,omitempty"`
+	Name       string `json:"name"`
+}
+
+// sprintCreateResult reports the new sprint and the workstream it landed in.
+type sprintCreateResult struct {
+	SprintID     string `json:"sprint_id"`
+	WorkstreamID string `json:"workstream_id"`
+	Name         string `json:"name"`
+}
+
+func handleSprintCreate(hc daemon.HandlerCtx, req sprintCreateRequest) (sprintCreateResult, error) {
+	ws, err := resolveWorkstreamRef(hc, req.Workstream, req.Repo)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return sprintCreateResult{}, err
 	}
 	ccSprint := ""
 	if ws.CCNotesProject != "" && ccnotes.Enabled(hc.Ctx, ws.Worktree) {
-		ccSprint, err = ccnotes.CreateSprint(hc.Ctx, ws.Worktree, ws.CCNotesProject, b.Name)
+		ccSprint, err = ccnotes.CreateSprint(hc.Ctx, ws.Worktree, ws.CCNotesProject, req.Name)
 		if err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return sprintCreateResult{}, err
 		}
 	}
 	sp := sprintRow{
-		ID: sprintSlug(b.Name), WorkstreamID: ws.ID, Name: b.Name,
+		ID: sprintSlug(req.Name), WorkstreamID: ws.ID, Name: req.Name,
 		CCNotesSprint: ccSprint, Status: StatusActive, CreatedAt: nowStamp(),
 	}
 	if err := insertSprint(hc.Ctx, hc.DB, sp); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return sprintCreateResult{}, err
 	}
-	out, _ := json.Marshal(map[string]string{"sprint_id": sp.ID, "workstream_id": ws.ID, "name": sp.Name})
-	return daemon.Reply{OK: true, Body: out}
+	return sprintCreateResult{SprintID: sp.ID, WorkstreamID: ws.ID, Name: sp.Name}, nil
 }
 
-// handleSprintList answers sprint-list with every sprint's flattened view, optionally
-// filtered to one workstream resolved by id or name (scoped to a repo when given).
-func handleSprintList(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		Workstream string `json:"workstream"`
-		Repo       string `json:"repo"`
-	}
-	if len(hc.Env.Body) > 0 {
-		if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-			return daemon.Reply{OK: false, Error: "bad sprint-list body: " + err.Error()}
-		}
+// sprintListRequest lists sprints, optionally filtered by workstream and status.
+type sprintListRequest struct {
+	Workstream string `json:"workstream,omitempty"`
+	Repo       string `json:"repo,omitempty"`
+	Status     string `json:"status,omitempty"`
+}
+
+// handleSprintList answers cco.sprint.list with every sprint's flattened view,
+// optionally filtered to one workstream (by id or name, scoped to a repo when given)
+// and one lifecycle status.
+func handleSprintList(hc daemon.HandlerCtx, req sprintListRequest) ([]sprintView, error) {
+	status, err := parseStatusFilter(req.Status)
+	if err != nil {
+		return nil, err
 	}
 	filter := ""
-	if b.Workstream != "" {
-		ws, err := resolveWorkstreamRef(hc, b.Workstream, b.Repo)
+	if req.Workstream != "" {
+		ws, err := resolveWorkstreamRef(hc, req.Workstream, req.Repo)
 		if err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return nil, err
 		}
 		filter = ws.ID
 	}
-	sprints, err := listSprints(hc.Ctx, hc.DB, filter)
+	sprints, err := listSprints(hc.Ctx, hc.DB, filter, status)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return nil, err
 	}
 	views := make([]sprintView, len(sprints))
 	for i, sp := range sprints {
 		views[i] = newSprintView(sp)
 	}
-	body, err := json.Marshal(views)
-	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+	return views, nil
+}
+
+// sprintShowRequest addresses one sprint by id or name, scoped to a workstream when
+// given to disambiguate the name.
+type sprintShowRequest struct {
+	ID         string `json:"id"`
+	Workstream string `json:"workstream,omitempty"`
+}
+
+// handleSprintShow answers cco.sprint.show with one sprint's flattened view.
+func handleSprintShow(hc daemon.HandlerCtx, req sprintShowRequest) (sprintView, error) {
+	workstreamID := ""
+	if req.Workstream != "" {
+		ws, err := resolveWorkstreamRef(hc, req.Workstream, "")
+		if err != nil {
+			return sprintView{}, err
+		}
+		workstreamID = ws.ID
 	}
-	return daemon.Reply{OK: true, Body: body}
+	sp, err := getSprint(hc.Ctx, hc.DB, req.ID, workstreamID)
+	if err != nil {
+		return sprintView{}, err
+	}
+	return newSprintView(sp), nil
 }
 
 // handleSprintActivate answers sprint-activate: it resolves the sprint (by id or
@@ -1194,60 +1329,69 @@ func handleSprintList(hc daemon.HandlerCtx) daemon.Reply {
 // it. Activating a sprint resets the precedence chain — it sets the active workstream
 // to the sprint's workstream and the active repo to that workstream's repo — so the
 // whole bare-spawn fallback chain points at the most recent activation.
-func handleSprintActivate(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		ID         string `json:"id"`
-		Workstream string `json:"workstream"`
-		Repo       string `json:"repo"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad sprint-activate body: " + err.Error()}
-	}
+// sprintActivateRequest addresses one sprint by id or name, scoped to a workstream
+// when given to disambiguate the name.
+type sprintActivateRequest struct {
+	ID         string `json:"id"`
+	Workstream string `json:"workstream,omitempty"`
+	Repo       string `json:"repo,omitempty"`
+}
+
+// sprintActivateResult reports a sprint's id and its post-op lifecycle status.
+type sprintActivateResult struct {
+	SprintID string `json:"sprint_id"`
+	Status   string `json:"status"`
+}
+
+func handleSprintActivate(hc daemon.HandlerCtx, req sprintActivateRequest) (sprintActivateResult, error) {
 	workstreamID := ""
-	if b.Workstream != "" {
-		ws, err := resolveWorkstreamRef(hc, b.Workstream, b.Repo)
+	if req.Workstream != "" {
+		ws, err := resolveWorkstreamRef(hc, req.Workstream, req.Repo)
 		if err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return sprintActivateResult{}, err
 		}
 		workstreamID = ws.ID
 	}
-	sp, err := getSprint(hc.Ctx, hc.DB, b.ID, workstreamID)
+	sp, err := getSprint(hc.Ctx, hc.DB, req.ID, workstreamID)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return sprintActivateResult{}, err
 	}
 	ws, err := getWorkstream(hc.Ctx, hc.DB, sp.WorkstreamID, "")
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return sprintActivateResult{}, err
 	}
 	if err := setSprintStatus(hc.Ctx, hc.DB, sp.ID, StatusActive); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return sprintActivateResult{}, err
 	}
 	if err := setConfig(hc.Ctx, hc.DB, configActiveSprint, sp.ID); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return sprintActivateResult{}, err
 	}
 	if err := setConfig(hc.Ctx, hc.DB, configActiveWorkstream, sp.WorkstreamID); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return sprintActivateResult{}, err
 	}
 	if err := setConfig(hc.Ctx, hc.DB, configActiveRepo, ws.RepoID); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return sprintActivateResult{}, err
 	}
-	out, _ := json.Marshal(map[string]string{"sprint_id": sp.ID, "status": string(StatusActive)})
-	return daemon.Reply{OK: true, Body: out}
+	return sprintActivateResult{SprintID: sp.ID, Status: string(StatusActive)}, nil
 }
 
-// handleConfigGet answers config-get with one config key's value and whether it
-// is set.
-func handleConfigGet(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		Key string `json:"key"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad config-get body: " + err.Error()}
-	}
-	value, found, err := getConfig(hc.Ctx, hc.DB, b.Key)
+// configGetRequest reads one config key.
+type configGetRequest struct {
+	Key string `json:"key"`
+}
+
+// configGetResult reports one config key's value and whether it is set.
+type configGetResult struct {
+	Value string `json:"value"`
+	Found bool   `json:"found"`
+}
+
+// handleConfigGet answers cco.config.get with one config key's value and whether it is
+// set.
+func handleConfigGet(hc daemon.HandlerCtx, req configGetRequest) (configGetResult, error) {
+	value, found, err := getConfig(hc.Ctx, hc.DB, req.Key)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return configGetResult{}, err
 	}
-	body, _ := json.Marshal(map[string]any{"value": value, "found": found})
-	return daemon.Reply{OK: true, Body: body}
+	return configGetResult{Value: value, Found: found}, nil
 }

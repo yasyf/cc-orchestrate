@@ -77,7 +77,7 @@ func (s *supervisor) run(ctx context.Context, db *sql.DB, appendFn daemon.Append
 // kills the survivor before resuming. A backend it cannot resolve, or one that neither
 // enumerates nor probes, is skipped.
 func (s *supervisor) tick(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc) error {
-	wss, err := listWorkstreams(ctx, db, "")
+	wss, err := listWorkstreams(ctx, db, "", "")
 	if err != nil {
 		return err
 	}

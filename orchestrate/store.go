@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // register the sqlite database/sql driver
@@ -111,6 +112,23 @@ type rowScanner interface {
 // created_at/updated_at column.
 func nowStamp() string { return time.Now().UTC().Format(time.RFC3339) }
 
+// errNotFound marks a lookup that resolved no matching row. The socket adapter
+// (replyError) maps it to a NotFound status; a real query failure stays
+// InternalError, so a missing id and a broken DB never wear the same code.
+var errNotFound = errors.New("not found")
+
+// lookupError is a not-found lookup error that keeps its human message while matching
+// errNotFound through errors.Is, so a caller maps it to NotFound without string
+// matching.
+type lookupError struct{ msg string }
+
+func (e *lookupError) Error() string { return e.msg }
+func (e *lookupError) Is(target error) bool { return target == errNotFound }
+
+func notFoundf(format string, args ...any) error {
+	return &lookupError{msg: fmt.Sprintf(format, args...)}
+}
+
 func scanRepo(s rowScanner) (repoRow, error) {
 	var p repoRow
 	err := s.Scan(&p.ID, &p.Name, &p.Backend, &p.Cwd, &p.Status, &p.CreatedAt)
@@ -153,8 +171,16 @@ func insertRepo(ctx context.Context, db *sql.DB, p repoRow) error {
 	return nil
 }
 
-func listRepos(ctx context.Context, db *sql.DB) ([]repoRow, error) {
-	rows, err := db.QueryContext(ctx, `SELECT `+repoColumns+` FROM repos ORDER BY created_at`)
+// listRepos returns every repo, or only those with status when it is set, ordered by
+// creation.
+func listRepos(ctx context.Context, db *sql.DB, status LifecycleStatus) ([]repoRow, error) {
+	query := `SELECT ` + repoColumns + ` FROM repos`
+	args := []any{}
+	if status != "" {
+		query += ` WHERE status = ?`
+		args = append(args, status)
+	}
+	rows, err := db.QueryContext(ctx, query+` ORDER BY created_at`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list repos: %w", err)
 	}
@@ -180,7 +206,7 @@ func getRepo(ctx context.Context, db *sql.DB, idOrName string) (repoRow, error) 
 		 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1`,
 		idOrName, idOrName, idOrName))
 	if errors.Is(err, sql.ErrNoRows) {
-		return repoRow{}, fmt.Errorf("repo not found: %s", idOrName)
+		return repoRow{}, notFoundf("repo not found: %s", idOrName)
 	}
 	if err != nil {
 		return repoRow{}, fmt.Errorf("get repo %q: %w", idOrName, err)
@@ -209,14 +235,22 @@ func insertWorkstream(ctx context.Context, db *sql.DB, w workstreamRow) error {
 	return nil
 }
 
-// listWorkstreams returns every workstream, or only those of repoFilter when it is
-// set, ordered by creation.
-func listWorkstreams(ctx context.Context, db *sql.DB, repoFilter string) ([]workstreamRow, error) {
+// listWorkstreams returns every workstream, narrowed to repoFilter and/or status when
+// either is set, ordered by creation.
+func listWorkstreams(ctx context.Context, db *sql.DB, repoFilter string, status LifecycleStatus) ([]workstreamRow, error) {
 	query := `SELECT ` + workstreamColumns + ` FROM workstreams`
+	conds := []string{}
 	args := []any{}
 	if repoFilter != "" {
-		query += ` WHERE repo_id = ?`
+		conds = append(conds, `repo_id = ?`)
 		args = append(args, repoFilter)
+	}
+	if status != "" {
+		conds = append(conds, `status = ?`)
+		args = append(args, status)
+	}
+	if len(conds) > 0 {
+		query += ` WHERE ` + strings.Join(conds, ` AND `)
 	}
 	rows, err := db.QueryContext(ctx, query+` ORDER BY created_at`, args...)
 	if err != nil {
@@ -247,7 +281,7 @@ func getWorkstream(ctx context.Context, db *sql.DB, ref, repoID string) (workstr
 		 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1`,
 		ref, ref, repoID, repoID, ref))
 	if errors.Is(err, sql.ErrNoRows) {
-		return workstreamRow{}, fmt.Errorf("workstream not found: %s", ref)
+		return workstreamRow{}, notFoundf("workstream not found: %s", ref)
 	}
 	if err != nil {
 		return workstreamRow{}, fmt.Errorf("get workstream %q: %w", ref, err)
@@ -261,7 +295,7 @@ func getPrimaryWorkstream(ctx context.Context, db *sql.DB, repoID string) (works
 	w, err := scanWorkstream(db.QueryRowContext(ctx,
 		`SELECT `+workstreamColumns+` FROM workstreams WHERE repo_id = ? AND is_primary = 1 LIMIT 1`, repoID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return workstreamRow{}, fmt.Errorf("no primary workstream for repo: %s", repoID)
+		return workstreamRow{}, notFoundf("no primary workstream for repo: %s", repoID)
 	}
 	if err != nil {
 		return workstreamRow{}, fmt.Errorf("get primary workstream for repo %q: %w", repoID, err)
@@ -288,14 +322,22 @@ func insertSprint(ctx context.Context, db *sql.DB, sp sprintRow) error {
 	return nil
 }
 
-// listSprints returns every sprint, or only those of workstreamFilter when it is
-// set, ordered by creation.
-func listSprints(ctx context.Context, db *sql.DB, workstreamFilter string) ([]sprintRow, error) {
+// listSprints returns every sprint, narrowed to workstreamFilter and/or status when
+// either is set, ordered by creation.
+func listSprints(ctx context.Context, db *sql.DB, workstreamFilter string, status LifecycleStatus) ([]sprintRow, error) {
 	query := `SELECT ` + sprintColumns + ` FROM sprints`
+	conds := []string{}
 	args := []any{}
 	if workstreamFilter != "" {
-		query += ` WHERE workstream_id = ?`
+		conds = append(conds, `workstream_id = ?`)
 		args = append(args, workstreamFilter)
+	}
+	if status != "" {
+		conds = append(conds, `status = ?`)
+		args = append(args, status)
+	}
+	if len(conds) > 0 {
+		query += ` WHERE ` + strings.Join(conds, ` AND `)
 	}
 	rows, err := db.QueryContext(ctx, query+` ORDER BY created_at`, args...)
 	if err != nil {
@@ -326,7 +368,7 @@ func getSprint(ctx context.Context, db *sql.DB, ref, workstreamID string) (sprin
 		 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1`,
 		ref, ref, workstreamID, workstreamID, ref))
 	if errors.Is(err, sql.ErrNoRows) {
-		return sprintRow{}, fmt.Errorf("sprint not found: %s", ref)
+		return sprintRow{}, notFoundf("sprint not found: %s", ref)
 	}
 	if err != nil {
 		return sprintRow{}, fmt.Errorf("get sprint %q: %w", ref, err)
@@ -342,7 +384,7 @@ func getDefaultSprint(ctx context.Context, db *sql.DB, workstreamID string) (spr
 	sp, err := scanSprint(db.QueryRowContext(ctx,
 		`SELECT `+sprintColumns+` FROM sprints WHERE workstream_id = ? ORDER BY created_at, rowid LIMIT 1`, workstreamID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return sprintRow{}, fmt.Errorf("no default sprint for workstream: %s", workstreamID)
+		return sprintRow{}, notFoundf("no default sprint for workstream: %s", workstreamID)
 	}
 	if err != nil {
 		return sprintRow{}, fmt.Errorf("get default sprint for workstream %q: %w", workstreamID, err)
@@ -373,13 +415,22 @@ func insertAgent(ctx context.Context, db *sql.DB, a agentRow) error {
 	return nil
 }
 
-// listAgents returns every agent, or only those in sprintFilter when it is set.
-func listAgents(ctx context.Context, db *sql.DB, sprintFilter string) ([]agentRow, error) {
+// listAgents returns every agent, narrowed to sprintFilter and/or status when either
+// is set.
+func listAgents(ctx context.Context, db *sql.DB, sprintFilter string, status LifecycleStatus) ([]agentRow, error) {
 	query := `SELECT ` + agentColumns + ` FROM agents`
+	conds := []string{}
 	args := []any{}
 	if sprintFilter != "" {
-		query += ` WHERE agents.sprint_id = ?`
+		conds = append(conds, `agents.sprint_id = ?`)
 		args = append(args, sprintFilter)
+	}
+	if status != "" {
+		conds = append(conds, `agents.status = ?`)
+		args = append(args, status)
+	}
+	if len(conds) > 0 {
+		query += ` WHERE ` + strings.Join(conds, ` AND `)
 	}
 	return queryAgents(ctx, db, query+` ORDER BY agents.created_at`, args...)
 }
@@ -394,13 +445,18 @@ func listWorkstreamAgents(ctx context.Context, db *sql.DB, workstreamID string) 
 }
 
 // listRepoAgents returns every agent of a repo, joining through its sprints and
-// workstreams, for the repo-level views that aggregate across a repo's streams.
-func listRepoAgents(ctx context.Context, db *sql.DB, repoID string) ([]agentRow, error) {
-	return queryAgents(ctx, db,
-		`SELECT `+agentColumns+` FROM agents
+// workstreams, narrowed to status when it is set.
+func listRepoAgents(ctx context.Context, db *sql.DB, repoID string, status LifecycleStatus) ([]agentRow, error) {
+	query := `SELECT ` + agentColumns + ` FROM agents
 		 JOIN sprints ON agents.sprint_id = sprints.id
 		 JOIN workstreams ON sprints.workstream_id = workstreams.id
-		 WHERE workstreams.repo_id = ? ORDER BY agents.created_at`, repoID)
+		 WHERE workstreams.repo_id = ?`
+	args := []any{repoID}
+	if status != "" {
+		query += ` AND agents.status = ?`
+		args = append(args, status)
+	}
+	return queryAgents(ctx, db, query+` ORDER BY agents.created_at`, args...)
 }
 
 func listActiveAgents(ctx context.Context, db *sql.DB) ([]agentRow, error) {
@@ -430,7 +486,7 @@ func queryAgents(ctx context.Context, db *sql.DB, query string, args ...any) ([]
 func getAgent(ctx context.Context, db *sql.DB, id string) (agentRow, error) {
 	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM agents WHERE agents.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
-		return agentRow{}, fmt.Errorf("agent not found: %s", id)
+		return agentRow{}, notFoundf("agent not found: %s", id)
 	}
 	if err != nil {
 		return agentRow{}, fmt.Errorf("get agent %q: %w", id, err)
@@ -548,4 +604,32 @@ func clearConfig(ctx context.Context, db *sql.DB, key string) error {
 		return fmt.Errorf("clear config %q: %w", key, err)
 	}
 	return nil
+}
+
+// configEntry is one persisted config key-value pair, the shape cco.config.list
+// returns.
+type configEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// listConfig returns every persisted config key-value pair, ordered by key.
+func listConfig(ctx context.Context, db *sql.DB) ([]configEntry, error) {
+	rows, err := db.QueryContext(ctx, `SELECT key, value FROM config ORDER BY key`)
+	if err != nil {
+		return nil, fmt.Errorf("list config: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []configEntry{}
+	for rows.Next() {
+		var e configEntry
+		if err := rows.Scan(&e.Key, &e.Value); err != nil {
+			return nil, fmt.Errorf("scan config: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate config: %w", err)
+	}
+	return out, nil
 }

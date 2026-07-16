@@ -43,7 +43,7 @@ func TestCCNotesDisabledLeavesBindingsEmpty(t *testing.T) {
 	backend.Register(workstreamBackend{manages: false})
 
 	// workstream-create: no cc-notes project, and its default sprint is unbound.
-	wsReply := handleWorkstreamCreate(opCtx(db, mustJSON(t, map[string]string{"repo": "p1", "name": "feat-x"}), nil))
+	wsReply := runTyped(handleWorkstreamCreate,opCtx(db, mustJSON(t, map[string]string{"repo": "p1", "name": "feat-x"}), nil))
 	if !wsReply.OK {
 		t.Fatalf("workstream-create not ok: %s", wsReply.Error)
 	}
@@ -69,7 +69,7 @@ func TestCCNotesDisabledLeavesBindingsEmpty(t *testing.T) {
 	}
 
 	// sprint-create under that workstream: no cc-notes sprint either.
-	spReply := handleSprintCreate(opCtx(db, mustJSON(t, map[string]string{"workstream": ws.ID, "name": "qa"}), nil))
+	spReply := runTyped(handleSprintCreate,opCtx(db, mustJSON(t, map[string]string{"workstream": ws.ID, "name": "qa"}), nil))
 	if !spReply.OK {
 		t.Fatalf("sprint-create not ok: %s", spReply.Error)
 	}
@@ -142,7 +142,7 @@ func TestCCNotesDisabledSpawnLeavesTaskEmpty(t *testing.T) {
 		Scope:  repo, Subjects: subjects, DB: db, Append: appendFn,
 	}
 
-	reply := handleSpawn(hc)
+	reply := runTyped(handleSpawn,hc)
 	if !reply.OK {
 		t.Fatalf("spawn not ok: %s", reply.Error)
 	}
@@ -222,7 +222,7 @@ func TestCCNotesSpawnFailureLeavesNoSubjectOrAgent(t *testing.T) {
 		Subjects: subjects, DB: db, Append: appendFn,
 	}
 
-	reply := handleSpawn(hc)
+	reply := runTyped(handleSpawn,hc)
 	if reply.OK || reply.Error == "" {
 		t.Fatalf("reply = %+v, want ok=false when cc-notes fails", reply)
 	}
@@ -233,7 +233,7 @@ func TestCCNotesSpawnFailureLeavesNoSubjectOrAgent(t *testing.T) {
 		t.Fatalf("backend.Spawn was called despite the cc-notes failure: %+v", gotSpec)
 	}
 	// No agent row was persisted.
-	agents, err := listAgents(ctx, db, "")
+	agents, err := listAgents(ctx, db, "", "")
 	if err != nil {
 		t.Fatalf("listAgents: %v", err)
 	}

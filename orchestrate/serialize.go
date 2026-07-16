@@ -88,32 +88,38 @@ func serializeDir() string { return filepath.Join(appPaths().StateDir(), "serial
 // hierarchy and every active agent's restorable identity and captured terminal screen
 // into a bundle JSON under serializeDir (or an explicit out path), appending an
 // EventSerialized per agent.
-func handleSerialize(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		Out string `json:"out"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad serialize body: " + err.Error()}
-	}
-	path := b.Out
+// fleetSerializeRequest writes the snapshot to Out, or to a stamped file in the
+// default serialize dir when Out is empty.
+type fleetSerializeRequest struct {
+	Out string `json:"out,omitempty"`
+}
+
+// fleetSerializeResult reports the bundle path and the number of agents captured.
+type fleetSerializeResult struct {
+	Path  string `json:"path"`
+	Count int    `json:"count"`
+}
+
+func handleSerialize(hc daemon.HandlerCtx, req fleetSerializeRequest) (fleetSerializeResult, error) {
+	path := req.Out
 	if path == "" {
 		path = filepath.Join(serializeDir(), time.Now().UTC().Format("20060102T150405Z")+".json")
 	}
-	repos, err := listRepos(hc.Ctx, hc.DB)
+	repos, err := listRepos(hc.Ctx, hc.DB, "")
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return fleetSerializeResult{}, err
 	}
-	workstreams, err := listWorkstreams(hc.Ctx, hc.DB, "")
+	workstreams, err := listWorkstreams(hc.Ctx, hc.DB, "", "")
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return fleetSerializeResult{}, err
 	}
-	sprints, err := listSprints(hc.Ctx, hc.DB, "")
+	sprints, err := listSprints(hc.Ctx, hc.DB, "", "")
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return fleetSerializeResult{}, err
 	}
 	agents, err := listActiveAgents(hc.Ctx, hc.DB)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return fleetSerializeResult{}, err
 	}
 	bundle := serializeBundle{
 		Version: serializeBundleVersion, CreatedAt: nowStamp(),
@@ -123,29 +129,28 @@ func handleSerialize(hc daemon.HandlerCtx) daemon.Reply {
 	for _, ag := range agents {
 		sa, err := captureAgent(hc.Ctx, hc.DB, ag)
 		if err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return fleetSerializeResult{}, err
 		}
 		bundle.Agents = append(bundle.Agents, sa)
 	}
 	data, err := json.MarshalIndent(bundle, "", "  ")
 	if err != nil {
-		return daemon.Reply{OK: false, Error: fmt.Errorf("marshal bundle: %w", err).Error()}
+		return fleetSerializeResult{}, fmt.Errorf("marshal bundle: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return daemon.Reply{OK: false, Error: fmt.Errorf("create serialize dir: %w", err).Error()}
+		return fleetSerializeResult{}, fmt.Errorf("create serialize dir: %w", err)
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return daemon.Reply{OK: false, Error: fmt.Errorf("write bundle %q: %w", path, err).Error()}
+		return fleetSerializeResult{}, fmt.Errorf("write bundle %q: %w", path, err)
 	}
 	for _, sa := range bundle.Agents {
 		if _, err := hc.Append(hc.Ctx, &event.Event{
 			SubjectID: sa.SubjectID, Origin: event.OriginSystem, Type: EventSerialized, Payload: serializedPayload(sa.ID, path),
 		}); err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return fleetSerializeResult{}, err
 		}
 	}
-	out, _ := json.Marshal(map[string]any{"path": path, "count": len(bundle.Agents)})
-	return daemon.Reply{OK: true, Body: out}
+	return fleetSerializeResult{Path: path, Count: len(bundle.Agents)}, nil
 }
 
 // captureAgent captures one active agent's terminal screen and copies its restorable
@@ -176,30 +181,33 @@ func captureAgent(ctx context.Context, db *sql.DB, ag agentRow) (serializedAgent
 // handleRestore answers the restore op: it strict-parses a bundle, recreates the
 // repo/workstream/sprint hierarchy it carries, then recreates every agent in it. A
 // malformed bundle fails the whole op, so nothing is restored partially.
-func handleRestore(hc daemon.HandlerCtx) daemon.Reply {
-	var b struct {
-		Path string `json:"path"`
+// fleetRestoreRequest names the bundle to restore.
+type fleetRestoreRequest struct {
+	Path string `json:"path"`
+}
+
+// fleetRestoreResult reports the number of agents restored.
+type fleetRestoreResult struct {
+	Count int `json:"count"`
+}
+
+func handleRestore(hc daemon.HandlerCtx, req fleetRestoreRequest) (fleetRestoreResult, error) {
+	if req.Path == "" {
+		return fleetRestoreResult{}, opErr(codeInvalidRequest, fmt.Errorf("restore requires a bundle path"))
 	}
-	if err := json.Unmarshal(hc.Env.Body, &b); err != nil {
-		return daemon.Reply{OK: false, Error: "bad restore body: " + err.Error()}
-	}
-	if b.Path == "" {
-		return daemon.Reply{OK: false, Error: "restore requires a bundle path"}
-	}
-	bundle, err := readBundle(b.Path)
+	bundle, err := readBundle(req.Path)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return fleetRestoreResult{}, err
 	}
 	if err := restoreHierarchy(hc.Ctx, hc.DB, bundle); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return fleetRestoreResult{}, err
 	}
 	for _, sa := range bundle.Agents {
 		if err := restoreAgent(hc.Ctx, hc.DB, hc.Append, sa); err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return fleetRestoreResult{}, err
 		}
 	}
-	out, _ := json.Marshal(map[string]any{"count": len(bundle.Agents)})
-	return daemon.Reply{OK: true, Body: out}
+	return fleetRestoreResult{Count: len(bundle.Agents)}, nil
 }
 
 // restoreHierarchy re-inserts the bundle's repo, workstream, and sprint rows that are

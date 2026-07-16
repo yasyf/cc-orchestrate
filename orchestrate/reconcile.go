@@ -17,7 +17,7 @@ import (
 // skipped: boot must stay crash-safe and idempotent, and the DB remains the source
 // of truth.
 func reconcileWorkstreams(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc) error {
-	wss, err := listWorkstreams(ctx, db, "")
+	wss, err := listWorkstreams(ctx, db, "", "")
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func reconcileWorkstreams(ctx context.Context, db *sql.DB, appendFn daemon.Appen
 // identical reconcileVanished branch on its ticks, so boot and the supervisor share
 // one actor per agent.
 func reconcileAgents(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc) error {
-	wss, err := listWorkstreams(ctx, db, "")
+	wss, err := listWorkstreams(ctx, db, "", "")
 	if err != nil {
 		return err
 	}

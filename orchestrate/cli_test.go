@@ -129,7 +129,7 @@ func TestAgentWatchObservesReport(t *testing.T) {
 	// Seed an OriginAgent EventReport through the real handler and the s.Append
 	// chokepoint, so the streamed frame carries the exact orchestrate.report payload
 	// a live agent emits.
-	reply := handleReport(daemon.HandlerCtx{
+	reply := runTyped(handleReport,daemon.HandlerCtx{
 		Ctx:      ctx,
 		Env:      daemon.Envelope{Session: "child-sid", Body: mustJSON(t, map[string]string{"text": "halfway done", "state": "working"})},
 		Window:   subject.Window{Session: "child-sid"},

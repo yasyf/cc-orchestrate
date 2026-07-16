@@ -67,7 +67,7 @@ func TestRepoCRUD(t *testing.T) {
 		}
 	})
 	t.Run("list", func(t *testing.T) {
-		got, err := listRepos(ctx, db)
+		got, err := listRepos(ctx, db, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -135,7 +135,7 @@ func TestAgentCRUD(t *testing.T) {
 		}
 	})
 	t.Run("list all", func(t *testing.T) {
-		got, err := listAgents(ctx, db, "")
+		got, err := listAgents(ctx, db, "", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -144,7 +144,7 @@ func TestAgentCRUD(t *testing.T) {
 		}
 	})
 	t.Run("list filtered by sprint", func(t *testing.T) {
-		got, err := listAgents(ctx, db, "s1")
+		got, err := listAgents(ctx, db, "s1", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -231,7 +231,7 @@ func TestWorkstreamCRUD(t *testing.T) {
 		}
 	})
 	t.Run("list filtered by repo", func(t *testing.T) {
-		got, err := listWorkstreams(ctx, db, "p1")
+		got, err := listWorkstreams(ctx, db, "p1", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -312,7 +312,7 @@ func TestSprintCRUD(t *testing.T) {
 		}
 	})
 	t.Run("list filtered by workstream", func(t *testing.T) {
-		got, err := listSprints(ctx, db, "w1")
+		got, err := listSprints(ctx, db, "w1", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -384,7 +384,7 @@ func TestListRepoAgents(t *testing.T) {
 		}
 	}
 
-	got, err := listRepoAgents(ctx, db, "p1")
+	got, err := listRepoAgents(ctx, db, "p1", "")
 	if err != nil {
 		t.Fatal(err)
 	}

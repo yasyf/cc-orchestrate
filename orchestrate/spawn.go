@@ -207,79 +207,89 @@ func resolveSpawnSprint(hc daemon.HandlerCtx, reqSprint, reqWorkstream, reqRepo 
 // child's session id, spawns the claude command into the workstream's backend
 // workspace, persists the agent row bound to the sprint, and starts its transcript
 // tailer.
-func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
-	var body struct {
-		Repo       string `json:"repo"`
-		Workstream string `json:"workstream"`
-		Sprint     string `json:"sprint"`
-		Name       string `json:"name"`
-		Cwd        string `json:"cwd"`
-		Prompt     string `json:"prompt"`
-	}
-	if err := json.Unmarshal(hc.Env.Body, &body); err != nil {
-		return daemon.Reply{OK: false, Error: "bad agent-spawn body: " + err.Error()}
-	}
-	sprint, err := resolveSpawnSprint(hc, body.Sprint, body.Workstream, body.Repo)
+// agentSpawnRequest spawns a child agent into a sprint, a workstream's or repo's
+// default sprint, or the active sprint. Every field is optional; the handler resolves
+// the target hierarchy through the precedence chain.
+type agentSpawnRequest struct {
+	Repo       string `json:"repo,omitempty"`
+	Workstream string `json:"workstream,omitempty"`
+	Sprint     string `json:"sprint,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Cwd        string `json:"cwd,omitempty"`
+	Prompt     string `json:"prompt,omitempty"`
+}
+
+// agentSpawnResult reports the new agent id, its subject, terminal handle, and
+// backend.
+type agentSpawnResult struct {
+	AgentID   string `json:"agent_id"`
+	SubjectID string `json:"subject_id"`
+	Terminal  string `json:"terminal"`
+	Backend   string `json:"backend"`
+}
+
+func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult, error) {
+	sprint, err := resolveSpawnSprint(hc, req.Sprint, req.Workstream, req.Repo)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSpawnResult{}, err
 	}
 	ws, err := getWorkstream(hc.Ctx, hc.DB, sprint.WorkstreamID, "")
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSpawnResult{}, err
 	}
 	repo, err := getRepo(hc.Ctx, hc.DB, ws.RepoID)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSpawnResult{}, err
 	}
 	if sprint.Status != StatusActive {
-		return daemon.Reply{OK: false, Error: fmt.Sprintf("sprint %s is %s, not active", sprint.ID, sprint.Status)}
+		return agentSpawnResult{}, opErr(codeConflict, fmt.Errorf("sprint %s is %s, not active", sprint.ID, sprint.Status))
 	}
 	if ws.Status != StatusActive {
-		return daemon.Reply{OK: false, Error: fmt.Sprintf("workstream %s is %s, not active", ws.ID, ws.Status)}
+		return agentSpawnResult{}, opErr(codeConflict, fmt.Errorf("workstream %s is %s, not active", ws.ID, ws.Status))
 	}
 	if repo.Status != StatusActive {
-		return daemon.Reply{OK: false, Error: fmt.Sprintf("repo %s is %s, not active", repo.ID, repo.Status)}
+		return agentSpawnResult{}, opErr(codeConflict, fmt.Errorf("repo %s is %s, not active", repo.ID, repo.Status))
 	}
 	bname := ws.Backend
 	b, ok := backend.Get(bname)
 	if !ok {
-		return daemon.Reply{OK: false, Error: "unknown backend: " + string(bname)}
+		return agentSpawnResult{}, opErr(codeUnsupported, fmt.Errorf("unknown backend: %s", bname))
 	}
 	if err := b.EnsureReady(hc.Ctx); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSpawnResult{}, err
 	}
-	scope := cmp.Or(body.Cwd, ws.Worktree)
+	scope := cmp.Or(req.Cwd, ws.Worktree)
 	if !filepath.IsAbs(scope) {
 		scope = filepath.Join(hc.Scope, scope)
 	}
 	self, err := os.Executable()
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSpawnResult{}, err
 	}
 
 	sid := uuid.NewString()
 	// herd rejects an empty agent name; other backends tolerate it. Default once,
 	// here, so SpawnSpec and the DB row always agree on the same non-empty name.
-	name := cmp.Or(body.Name, "agent-"+sid[:8])
+	name := cmp.Or(req.Name, "agent-"+sid[:8])
 
 	// cc-notes runs first, before any subject/terminal exists: a cc-notes failure
 	// here leaves no started subject, no live claude process, and no agent row — only
 	// a residual git-ref task, the same tradeoff provisionCCNotes already accepts.
 	ccTask := ""
 	if ws.CCNotesProject != "" && sprint.CCNotesSprint != "" && ccnotes.Enabled(hc.Ctx, ws.Worktree) {
-		ccTask, err = ccnotes.CreateTask(hc.Ctx, ws.Worktree, cmp.Or(body.Name, agentSlug(sid)), ws.Branch, sprint.CCNotesSprint, ws.CCNotesProject)
+		ccTask, err = ccnotes.CreateTask(hc.Ctx, ws.Worktree, cmp.Or(req.Name, agentSlug(sid)), ws.Branch, sprint.CCNotesSprint, ws.CCNotesProject)
 		if err != nil {
-			return daemon.Reply{OK: false, Error: err.Error()}
+			return agentSpawnResult{}, err
 		}
 	}
 
 	sub, _, err := hc.Subjects.Start(hc.Ctx, subject.Window{Session: sid}, scope, agentSlug(sid), lifecycle, true)
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSpawnResult{}, err
 	}
-	command, err := wrapForCapture(self, sid, claudeCommand(self, sid, scope, body.Prompt), b.Caps())
+	command, err := wrapForCapture(self, sid, claudeCommand(self, sid, scope, req.Prompt), b.Caps())
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSpawnResult{}, err
 	}
 	handle, err := b.Spawn(hc.Ctx, backend.SpawnSpec{
 		Workstream: backend.WorkstreamHandle{Backend: ws.Backend, ID: ws.WorkspaceHandle, Name: ws.Name, Cwd: ws.Worktree},
@@ -289,29 +299,26 @@ func handleSpawn(hc daemon.HandlerCtx) daemon.Reply {
 		SessionID:  sid,
 	})
 	if err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSpawnResult{}, err
 	}
 
 	ag := agentRow{
 		ID: sid, SprintID: sprint.ID, Backend: bname, TerminalHandle: handle.ID,
-		SessionID: sid, Scope: scope, Name: name, Prompt: body.Prompt,
+		SessionID: sid, Scope: scope, Name: name, Prompt: req.Prompt,
 		SubjectID: sub.ID, CCNotesTask: ccTask, Status: StatusActive, State: StateUnknown,
 		CreatedAt: nowStamp(),
 	}
 	if err := insertAgent(hc.Ctx, hc.DB, ag); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSpawnResult{}, err
 	}
 	if _, err := hc.Append(hc.Ctx, &event.Event{
 		SubjectID: sub.ID, Origin: event.OriginSystem, Type: EventSpawned, Payload: spawnedPayload(ag),
 	}); err != nil {
-		return daemon.Reply{OK: false, Error: err.Error()}
+		return agentSpawnResult{}, err
 	}
 	tailers.start(hc.DB, hc.Append, ag)
 
-	out, _ := json.Marshal(map[string]string{
-		"agent_id": sid, "subject_id": sub.ID, "terminal": handle.ID, "backend": string(bname),
-	})
-	return daemon.Reply{OK: true, Body: out}
+	return agentSpawnResult{AgentID: sid, SubjectID: sub.ID, Terminal: handle.ID, Backend: string(bname)}, nil
 }
 
 // respawnAgent brings a vanished agent's terminal back: it resumes the agent's

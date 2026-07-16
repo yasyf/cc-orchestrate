@@ -74,7 +74,7 @@ func serializeCmd() *cobra.Command {
 		Short: "Snapshot every active agent into a restorable bundle",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, opSerialize, map[string]string{"out": out})
+			reply, err := runOp(c, mFleetSerialize.op(), map[string]string{"out": out})
 			if err != nil {
 				return err
 			}
@@ -101,7 +101,7 @@ func restoreCmd() *cobra.Command {
 		Short: "Restore agents from a serialized bundle",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opRestore, map[string]string{"path": args[0]})
+			reply, err := runOp(c, mFleetRestore.op(), map[string]string{"path": args[0]})
 			if err != nil {
 				return err
 			}
@@ -130,7 +130,7 @@ func configCmd() *cobra.Command {
 		Short: "Print one config key's value",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opConfigGet, map[string]string{"key": args[0]})
+			reply, err := runOp(c, mConfigGet.op(), map[string]string{"key": args[0]})
 			if err != nil {
 				return err
 			}
@@ -250,7 +250,7 @@ func runBackendsSelect(c *cobra.Command, args []string) error {
 	if err := backend.ValidateBackend(backend.Name(name)); err != nil {
 		return fmt.Errorf("%w; run `%s backends list`", err, AppName)
 	}
-	if _, err := runOp(c, opConfigSet, map[string]string{"key": "backend", "value": name}); err != nil {
+	if _, err := runOp(c, mConfigSet.op(), map[string]string{"key": "backend", "value": name}); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(c.OutOrStdout(), "selected backend: %s\n", name)
@@ -355,7 +355,7 @@ func repoCmd() *cobra.Command {
 		Short: "List repos",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, opRepoList, nil)
+			reply, err := runOp(c, mRepoList.op(), nil)
 			if err != nil {
 				return err
 			}
@@ -378,7 +378,7 @@ func repoCmd() *cobra.Command {
 		Short: "Create a repo and its backend workspace",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opRepoCreate, map[string]string{
+			reply, err := runOp(c, mRepoCreate.op(), map[string]string{
 				"name": args[0], "backend": createBackend, "cwd": createCwd,
 			})
 			if err != nil {
@@ -407,7 +407,7 @@ func repoCmd() *cobra.Command {
 		Short: "Mark a repo active",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opRepoActivate, map[string]string{"id": args[0]})
+			reply, err := runOp(c, mRepoActivate.op(), map[string]string{"id": args[0]})
 			if err != nil {
 				return err
 			}
@@ -427,7 +427,7 @@ func repoCmd() *cobra.Command {
 		Short: "Kill a repo, its backend workspace, and all its agents",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			if _, err := runOp(c, opRepoKill, map[string]string{"id": args[0]}); err != nil {
+			if _, err := runOp(c, mRepoKill.op(), map[string]string{"id": args[0]}); err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintf(c.OutOrStdout(), "killed repo: %s\n", args[0])
@@ -454,7 +454,7 @@ func workstreamCmd() *cobra.Command {
 		Short: "List workstreams",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, opWorkstreamList, map[string]string{"repo": listRepo})
+			reply, err := runOp(c, mWorkstreamList.op(), map[string]string{"repo": listRepo})
 			if err != nil {
 				return err
 			}
@@ -483,7 +483,7 @@ func workstreamCmd() *cobra.Command {
 		Short: "Create a workstream and its backend workspace",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opWorkstreamCreate, map[string]string{
+			reply, err := runOp(c, mWorkstreamCreate.op(), map[string]string{
 				"repo": createRepo, "name": args[0], "branch": createBranch,
 			})
 			if err != nil {
@@ -517,7 +517,7 @@ func workstreamCmd() *cobra.Command {
 		Short: "Mark a workstream active and the spawn default",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opWorkstreamActivate, map[string]string{"id": args[0], "repo": activateRepo})
+			reply, err := runOp(c, mWorkstreamActivate.op(), map[string]string{"id": args[0], "repo": activateRepo})
 			if err != nil {
 				return err
 			}
@@ -539,7 +539,7 @@ func workstreamCmd() *cobra.Command {
 		Short: "Kill a workstream, its backend workspace, worktree, and agents",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			if _, err := runOp(c, opWorkstreamKill, map[string]string{"id": args[0], "repo": killRepo}); err != nil {
+			if _, err := runOp(c, mWorkstreamKill.op(), map[string]string{"id": args[0], "repo": killRepo}); err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintf(c.OutOrStdout(), "killed workstream: %s\n", args[0])
@@ -566,7 +566,7 @@ func sprintCmd() *cobra.Command {
 		Short: "List sprints",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, opSprintList, map[string]string{"workstream": listWorkstream})
+			reply, err := runOp(c, mSprintList.op(), map[string]string{"workstream": listWorkstream})
 			if err != nil {
 				return err
 			}
@@ -591,7 +591,7 @@ func sprintCmd() *cobra.Command {
 		Short: "Create a sprint in a workstream",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opSprintCreate, map[string]string{
+			reply, err := runOp(c, mSprintCreate.op(), map[string]string{
 				"workstream": createWorkstream, "name": args[0],
 			})
 			if err != nil {
@@ -620,7 +620,7 @@ func sprintCmd() *cobra.Command {
 		Short: "Mark a sprint active and the spawn default",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opSprintActivate, map[string]string{"id": args[0], "workstream": activateWorkstream})
+			reply, err := runOp(c, mSprintActivate.op(), map[string]string{"id": args[0], "workstream": activateWorkstream})
 			if err != nil {
 				return err
 			}
@@ -653,7 +653,7 @@ func agentCmd() *cobra.Command {
 		Short: "Spawn a child agent into a sprint",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, opSpawn, map[string]string{
+			reply, err := runOp(c, mAgentSpawn.op(), map[string]string{
 				"repo": spawnRepo, "workstream": spawnWorkstream, "sprint": spawnSprint,
 				"name": spawnName, "cwd": spawnCwd, "prompt": spawnPrompt,
 			})
@@ -688,7 +688,7 @@ func agentCmd() *cobra.Command {
 		Short: "List agents and their sprint and status",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, opList, map[string]string{"repo": listRepo})
+			reply, err := runOp(c, mAgentList.op(), map[string]string{"repo": listRepo})
 			if err != nil {
 				return err
 			}
@@ -712,7 +712,7 @@ func agentCmd() *cobra.Command {
 		Short: "Send a message to a running agent",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opSendMessage, map[string]string{"agent_id": args[0], "text": args[1]})
+			reply, err := runOp(c, mAgentSendMessage.op(), map[string]string{"agent_id": args[0], "text": args[1]})
 			if err != nil {
 				return err
 			}
@@ -737,7 +737,7 @@ func agentCmd() *cobra.Command {
 		Short: "Show a single agent's derived status",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, opStatus, map[string]string{"agent_id": args[0]})
+			reply, err := runOp(c, mAgentShow.op(), map[string]string{"agent_id": args[0]})
 			if err != nil {
 				return err
 			}
@@ -776,7 +776,7 @@ func agentCmd() *cobra.Command {
 		Short: "Kill a running agent",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			if _, err := runOp(c, opAgentKill, map[string]string{"agent_id": args[0]}); err != nil {
+			if _, err := runOp(c, mAgentKill.op(), map[string]string{"agent_id": args[0]}); err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintf(c.OutOrStdout(), "killed agent: %s\n", args[0])
@@ -804,7 +804,7 @@ func runAgentWatch(c *cobra.Command, id string, all bool) error {
 	if all {
 		return watchAllAgents(c, d)
 	}
-	reply, err := runOp(c, opStatus, map[string]string{"agent_id": id})
+	reply, err := runOp(c, mAgentShow.op(), map[string]string{"agent_id": id})
 	if err != nil {
 		return err
 	}
@@ -824,7 +824,7 @@ func runAgentWatch(c *cobra.Command, id string, all bool) error {
 // mutex-guarded writer so concurrent streams never interleave a line. The first
 // real stream error cancels the rest; a clean terminal/ctx end returns nil.
 func watchAllAgents(c *cobra.Command, d cmd.Deps) error {
-	reply, err := runOp(c, opList, map[string]string{"repo": ""})
+	reply, err := runOp(c, mAgentList.op(), map[string]string{"repo": ""})
 	if err != nil {
 		return err
 	}

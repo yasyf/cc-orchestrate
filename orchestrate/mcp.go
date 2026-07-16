@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+	"unicode"
 
 	"github.com/yasyf/cc-interact/channel"
 	"github.com/yasyf/cc-interact/daemon"
@@ -61,21 +63,45 @@ func stringProp(description string) map[string]any {
 	return map[string]any{"type": "string", "description": description}
 }
 
-// opTool builds a pass-through MCP tool whose handler forwards its arguments
-// verbatim to the daemon op.
-func opTool(name, description string, schema map[string]any, op daemon.Op) channel.Tool {
+// mcpName derives a method's MCP tool name: strip the cco. prefix, replace dots with
+// underscores, and break camelCase verbs (cco.agent.sendMessage → agent_send_message).
+func mcpName(method string) string {
+	return camelToSnake(strings.ReplaceAll(strings.TrimPrefix(method, "cco."), ".", "_"))
+}
+
+// camelToSnake lowercases s and inserts an underscore before each interior capital.
+func camelToSnake(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		if unicode.IsUpper(r) {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			r = unicode.ToLower(r)
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// mcpTool builds the MCP tool that forwards to a method's daemon op, its input schema
+// generated from the method's request type.
+func (m method) mcpTool() channel.Tool {
 	return channel.Tool{
-		Name: name, Description: description, InputSchema: schema,
+		Name:        mcpName(m.name),
+		Description: m.desc,
+		InputSchema: schemaFor(m.reqType),
 		Handler: func(ctx context.Context, args json.RawMessage) (string, bool) {
-			return mcpDispatch(ctx, op, args)
+			return mcpDispatch(ctx, m.op(), args)
 		},
 	}
 }
 
-// mcpTools is the parent-facing control surface mapping the orchestration ops
-// onto MCP, in the order tools/list advertises them.
+// mcpTools is the parent-facing control surface: the two daemon-free backend tools
+// plus one generated tool per mcp-exposed registry method, so the surface can never
+// drift from the op registry.
 func mcpTools() []channel.Tool {
-	return []channel.Tool{
+	tools := []channel.Tool{
 		{
 			Name:        "backends_list",
 			Description: "List the agent placement backends, their install status, and the effective default. Needs no running daemon.",
@@ -94,105 +120,13 @@ func mcpTools() []channel.Tool {
 			InputSchema: objectSchema(map[string]any{"backend": stringProp("backend name, e.g. herd, superset, cmux, zellij, tmux")}, "backend"),
 			Handler:     mcpBackendSelect,
 		},
-		opTool("config_get",
-			"Read one persisted config key's value.",
-			objectSchema(map[string]any{"key": stringProp("config key, e.g. backend")}, "key"),
-			opConfigGet),
-		opTool("repo_create",
-			"Create an orchestration repo and its backend workspace.",
-			objectSchema(map[string]any{
-				"name":    stringProp("human-readable repo name"),
-				"backend": stringProp("backend override (defaults to the selected/first available)"),
-				"cwd":     stringProp("working directory for the repo (defaults to the current directory)"),
-			}, "name"),
-			opRepoCreate),
-		opTool("repo_list",
-			"List the orchestration repos.",
-			objectSchema(map[string]any{}),
-			opRepoList),
-		opTool("repo_activate",
-			"Mark a repo active.",
-			objectSchema(map[string]any{"id": stringProp("repo id or name")}, "id"),
-			opRepoActivate),
-		opTool("repo_kill",
-			"Kill a repo, its backend workspace, and all of its agents.",
-			objectSchema(map[string]any{"id": stringProp("repo id or name")}, "id"),
-			opRepoKill),
-		opTool("workstream_create",
-			"Create a workstream — a branch and its worktree — in a repo, backed by a fresh backend workspace.",
-			objectSchema(map[string]any{
-				"repo":   stringProp("repo id or name to create the workstream in"),
-				"name":   stringProp("human-readable workstream name"),
-				"branch": stringProp("git branch for the worktree (defaults to the name)"),
-			}, "name"),
-			opWorkstreamCreate),
-		opTool("workstream_list",
-			"List the workstreams, optionally filtered by repo.",
-			objectSchema(map[string]any{"repo": stringProp("filter by repo id or name")}),
-			opWorkstreamList),
-		opTool("workstream_activate",
-			"Mark a workstream active and record it as the default an agent spawn lands in.",
-			objectSchema(map[string]any{
-				"id":   stringProp("workstream id or name"),
-				"repo": stringProp("repo id or name to disambiguate the workstream name"),
-			}, "id"),
-			opWorkstreamActivate),
-		opTool("workstream_kill",
-			"Kill a workstream: tear down its backend workspace and worktree and exit its agents.",
-			objectSchema(map[string]any{
-				"id":   stringProp("workstream id or name"),
-				"repo": stringProp("repo id or name to disambiguate the workstream name"),
-			}, "id"),
-			opWorkstreamKill),
-		opTool("sprint_create",
-			"Create a sprint — a planning group an agent spawns into — in a workstream. A sprint shares its workstream's worktree.",
-			objectSchema(map[string]any{
-				"workstream": stringProp("workstream id or name to create the sprint in"),
-				"name":       stringProp("human-readable sprint name"),
-			}, "name"),
-			opSprintCreate),
-		opTool("sprint_list",
-			"List the sprints, optionally filtered by workstream.",
-			objectSchema(map[string]any{"workstream": stringProp("filter by workstream id or name")}),
-			opSprintList),
-		opTool("sprint_activate",
-			"Mark a sprint active and record it as the default an agent spawn lands in.",
-			objectSchema(map[string]any{
-				"id":         stringProp("sprint id or name"),
-				"workstream": stringProp("workstream id or name to disambiguate the sprint name"),
-			}, "id"),
-			opSprintActivate),
-		opTool("agent_spawn",
-			"Spawn a child Claude Code agent into a sprint: named explicitly, or a workstream's or repo's default sprint, or the active sprint. The agent reports back via its report tool; watch its progress with agent_list / agent_status, or stream it live with `agent watch` under a Monitor.",
-			objectSchema(map[string]any{
-				"repo":       stringProp("repo id or name to spawn into (uses its primary workstream's default sprint)"),
-				"workstream": stringProp("workstream id or name to spawn into (uses its default sprint)"),
-				"sprint":     stringProp("sprint id or name to spawn into"),
-				"name":       stringProp("human-readable agent name"),
-				"cwd":        stringProp("working directory / scope (defaults to the workstream worktree)"),
-				"prompt":     stringProp("initial prompt for the child agent"),
-			}, "prompt"),
-			opSpawn),
-		opTool("agent_list",
-			"List agents and their derived status, optionally filtered by repo. This is a point-in-time snapshot; for live updates run `cc-orchestrate agent watch` under a Monitor.",
-			objectSchema(map[string]any{"repo": stringProp("filter by repo id or name")}),
-			opList),
-		opTool("agent_send_message",
-			"Send a message (a new instruction) to a running agent; the agent receives it on its watch Monitor.",
-			objectSchema(map[string]any{
-				"agent_id": stringProp("agent id"),
-				"text":     stringProp("message text"),
-			}, "agent_id", "text"),
-			opSendMessage),
-		opTool("agent_status",
-			"Show one agent's derived status. This is a point-in-time snapshot; for live updates run `cc-orchestrate agent watch` under a Monitor.",
-			objectSchema(map[string]any{"agent_id": stringProp("agent id")}, "agent_id"),
-			opStatus),
-		opTool("agent_kill",
-			"Kill a running agent.",
-			objectSchema(map[string]any{"agent_id": stringProp("agent id")}, "agent_id"),
-			opAgentKill),
 	}
+	for _, m := range methods {
+		if m.exposes.has(exposeMCP) {
+			tools = append(tools, m.mcpTool())
+		}
+	}
+	return tools
 }
 
 // mcpBackendSelect validates the named backend is installed (mirroring the CLI's
@@ -208,5 +142,5 @@ func mcpBackendSelect(ctx context.Context, args json.RawMessage) (string, bool) 
 		return fmt.Sprintf("%s; run the backends_list tool", err.Error()), true
 	}
 	body, _ := json.Marshal(map[string]string{"key": "backend", "value": b.Backend})
-	return mcpDispatch(ctx, opConfigSet, body)
+	return mcpDispatch(ctx, mConfigSet.op(), body)
 }

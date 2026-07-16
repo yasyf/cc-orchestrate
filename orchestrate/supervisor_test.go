@@ -360,7 +360,7 @@ func TestSupervisorTick(t *testing.T) {
 		var reply daemon.Reply
 		done := make(chan struct{})
 		go func() {
-			reply = handleAgentKill(opCtx(db, mustJSON(t, map[string]string{"agent_id": "a1"}), log.append))
+			reply = runTyped(handleAgentKill,opCtx(db, mustJSON(t, map[string]string{"agent_id": "a1"}), log.append))
 			close(done)
 		}()
 

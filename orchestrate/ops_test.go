@@ -237,7 +237,7 @@ func TestHandleSendMessage(t *testing.T) {
 		return 7, nil
 	}
 	body := mustJSON(t, map[string]string{"agent_id": "a1", "text": "hello"})
-	reply := handleSendMessage(opCtx(db, body, appendFn))
+	reply := runTyped(handleSendMessage,opCtx(db, body, appendFn))
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
@@ -301,7 +301,7 @@ func TestHandleSendMessageNative(t *testing.T) {
 		return 0, nil
 	}
 	body := mustJSON(t, map[string]string{"agent_id": "a1", "text": "hello"})
-	reply := handleSendMessage(opCtx(db, body, appendFn))
+	reply := runTyped(handleSendMessage,opCtx(db, body, appendFn))
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
@@ -353,7 +353,7 @@ func TestHandleSendMessageMultilineUsesLCD(t *testing.T) {
 		return 3, nil
 	}
 	body := mustJSON(t, map[string]string{"agent_id": "a1", "text": "line one\nline two"})
-	reply := handleSendMessage(opCtx(db, body, appendFn))
+	reply := runTyped(handleSendMessage,opCtx(db, body, appendFn))
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
@@ -391,7 +391,7 @@ func TestHandleSendMessageErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			reply := handleSendMessage(opCtx(db, mustJSON(t, tc.body), appendFn))
+			reply := runTyped(handleSendMessage,opCtx(db, mustJSON(t, tc.body), appendFn))
 			if reply.OK || reply.Error == "" {
 				t.Fatalf("reply = %+v, want ok=false with an error", reply)
 			}
@@ -437,7 +437,7 @@ func TestHandleReport(t *testing.T) {
 		Subjects: subjects, DB: db, Append: appendFn,
 	}
 
-	reply := handleReport(hc)
+	reply := runTyped(handleReport,hc)
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
@@ -483,7 +483,7 @@ func TestHandleReportNoSubject(t *testing.T) {
 		Scope:    "/nowhere",
 		Subjects: subjects, DB: db, Append: appendFn,
 	}
-	reply := handleReport(hc)
+	reply := runTyped(handleReport,hc)
 	if reply.OK || reply.Error == "" {
 		t.Fatalf("reply = %+v, want ok=false with an error", reply)
 	}
@@ -498,7 +498,7 @@ func TestHandleStatus(t *testing.T) {
 		Activity: "Bash: ls", Tokens: 10, UpdatedAt: "2026-06-16T00:00:00Z", CreatedAt: "t0",
 	})
 
-	reply := handleStatus(opCtx(db, mustJSON(t, map[string]string{"agent_id": "a1"}), nil))
+	reply := runTyped(handleStatus,opCtx(db, mustJSON(t, map[string]string{"agent_id": "a1"}), nil))
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
@@ -519,7 +519,7 @@ func TestHandleStatus(t *testing.T) {
 func TestHandleStatusMissing(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(ctx, t)
-	reply := handleStatus(opCtx(db, mustJSON(t, map[string]string{"agent_id": "ghost"}), nil))
+	reply := runTyped(handleStatus,opCtx(db, mustJSON(t, map[string]string{"agent_id": "ghost"}), nil))
 	if reply.OK || reply.Error == "" {
 		t.Fatalf("reply = %+v, want ok=false with an error", reply)
 	}
@@ -556,7 +556,7 @@ func TestHandleList(t *testing.T) {
 	mustInsertAgent(ctx, t, db, agentRow{ID: "a2", SprintID: "s2", Backend: "tmux", Scope: "/s", Status: "active", State: StateIdle, CreatedAt: "t1"})
 
 	t.Run("all with absent body", func(t *testing.T) {
-		reply := handleList(opCtx(db, nil, nil))
+		reply := runTyped(handleList,opCtx(db, nil, nil))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -569,7 +569,7 @@ func TestHandleList(t *testing.T) {
 		}
 	})
 	t.Run("filtered by repo id", func(t *testing.T) {
-		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"repo": "p2"}), nil))
+		reply := runTyped(handleList,opCtx(db, mustJSON(t, map[string]string{"repo": "p2"}), nil))
 		var got []agentView
 		if err := json.Unmarshal(reply.Body, &got); err != nil {
 			t.Fatal(err)
@@ -579,7 +579,7 @@ func TestHandleList(t *testing.T) {
 		}
 	})
 	t.Run("filtered by repo name resolves to its id", func(t *testing.T) {
-		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"repo": "beta"}), nil))
+		reply := runTyped(handleList,opCtx(db, mustJSON(t, map[string]string{"repo": "beta"}), nil))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -592,7 +592,7 @@ func TestHandleList(t *testing.T) {
 		}
 	})
 	t.Run("unknown repo is an error", func(t *testing.T) {
-		reply := handleList(opCtx(db, mustJSON(t, map[string]string{"repo": "ghost"}), nil))
+		reply := runTyped(handleList,opCtx(db, mustJSON(t, map[string]string{"repo": "ghost"}), nil))
 		if reply.OK || reply.Error == "" {
 			t.Fatalf("reply = %+v, want ok=false for an unknown repo", reply)
 		}
@@ -608,7 +608,7 @@ func TestHandleConfigGetSet(t *testing.T) {
 		Value string `json:"value"`
 		Found bool   `json:"found"`
 	}
-	reply := handleConfigGet(opCtx(db, getBody, nil))
+	reply := runTyped(handleConfigGet,opCtx(db, getBody, nil))
 	if err := json.Unmarshal(reply.Body, &got); err != nil {
 		t.Fatal(err)
 	}
@@ -616,11 +616,11 @@ func TestHandleConfigGetSet(t *testing.T) {
 		t.Fatalf("found before set = true, want false")
 	}
 
-	if reply := handleConfigSet(opCtx(db, mustJSON(t, map[string]string{"key": "backend", "value": "superset"}), nil)); !reply.OK {
+	if reply := runTyped(handleConfigSet,opCtx(db, mustJSON(t, map[string]string{"key": "backend", "value": "superset"}), nil)); !reply.OK {
 		t.Fatalf("config-set not ok: %s", reply.Error)
 	}
 
-	reply = handleConfigGet(opCtx(db, getBody, nil))
+	reply = runTyped(handleConfigGet,opCtx(db, getBody, nil))
 	if err := json.Unmarshal(reply.Body, &got); err != nil {
 		t.Fatal(err)
 	}
@@ -638,7 +638,7 @@ func TestHandleRepoCreate(t *testing.T) {
 
 	cwd := canonPath(t, gitRepo(ctx, t, "feature/login"))
 	body := mustJSON(t, map[string]string{"name": "demo", "backend": "optest", "cwd": cwd})
-	reply := handleRepoCreate(opCtx(db, body, nil))
+	reply := runTyped(handleRepoCreate,opCtx(db, body, nil))
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
@@ -704,7 +704,7 @@ func TestHandleRepoCreateResolvesCwdAgainstScope(t *testing.T) {
 		backend.Register(opBackend{createdSpec: &gotSpec})
 		body := mustJSON(t, map[string]string{"name": "demo", "backend": "optest", "cwd": cwd})
 		hc := daemon.HandlerCtx{Ctx: context.Background(), Env: daemon.Envelope{Body: body}, Scope: scope, DB: db}
-		reply := handleRepoCreate(hc)
+		reply := runTyped(handleRepoCreate,hc)
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -745,7 +745,7 @@ func TestHandleRepoList(t *testing.T) {
 		}
 	}
 
-	reply := handleRepoList(opCtx(db, nil, nil))
+	reply := runTyped(handleRepoList,opCtx(db, nil, nil))
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
@@ -777,7 +777,7 @@ func TestHandleRepoActivate(t *testing.T) {
 	}
 
 	t.Run("activates by id", func(t *testing.T) {
-		reply := handleRepoActivate(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), nil))
+		reply := runTyped(handleRepoActivate,opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), nil))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -790,7 +790,7 @@ func TestHandleRepoActivate(t *testing.T) {
 		}
 	})
 	t.Run("missing is an error", func(t *testing.T) {
-		reply := handleRepoActivate(opCtx(db, mustJSON(t, map[string]string{"id": "ghost"}), nil))
+		reply := runTyped(handleRepoActivate,opCtx(db, mustJSON(t, map[string]string{"id": "ghost"}), nil))
 		if reply.OK || reply.Error == "" {
 			t.Fatalf("reply = %+v, want ok=false with an error", reply)
 		}
@@ -829,7 +829,7 @@ func TestHandleAgentKill(t *testing.T) {
 			captured = e
 			return 9, nil
 		}
-		reply := handleAgentKill(opCtx(db, mustJSON(t, map[string]string{"agent_id": "a1"}), appendFn))
+		reply := runTyped(handleAgentKill,opCtx(db, mustJSON(t, map[string]string{"agent_id": "a1"}), appendFn))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -877,7 +877,7 @@ func TestHandleAgentKill(t *testing.T) {
 		backend.Register(opBackend{killErr: errors.New("tmux: no such window")})
 		appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
 
-		reply := handleAgentKill(opCtx(db, mustJSON(t, map[string]string{"agent_id": "a2"}), appendFn))
+		reply := runTyped(handleAgentKill,opCtx(db, mustJSON(t, map[string]string{"agent_id": "a2"}), appendFn))
 		if reply.OK || reply.Error == "" {
 			t.Fatalf("reply = %+v, want ok=false with the kill error", reply)
 		}
@@ -902,7 +902,7 @@ func TestHandleAgentKill(t *testing.T) {
 			t.Fatal("Append must not be called for an already-exited agent")
 			return 0, nil
 		}
-		reply := handleAgentKill(opCtx(db, mustJSON(t, map[string]string{"agent_id": "a3"}), appendFn))
+		reply := runTyped(handleAgentKill,opCtx(db, mustJSON(t, map[string]string{"agent_id": "a3"}), appendFn))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -966,7 +966,7 @@ func TestHandleRepoKill(t *testing.T) {
 		}
 		return 1, nil
 	}
-	reply := handleRepoKill(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
+	reply := runTyped(handleRepoKill,opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}
@@ -1099,7 +1099,7 @@ func TestHandleWorkstreamCreate(t *testing.T) {
 		backend.Register(workstreamBackend{createdSpec: &gotSpec, manages: false})
 
 		body := mustJSON(t, map[string]string{"repo": "p1", "name": "feat-x"})
-		reply := handleWorkstreamCreate(opCtx(db, body, nil))
+		reply := runTyped(handleWorkstreamCreate,opCtx(db, body, nil))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -1186,7 +1186,7 @@ func TestHandleWorkstreamCreate(t *testing.T) {
 		}
 
 		body := mustJSON(t, map[string]string{"repo": "p1", "name": "feat-y"})
-		reply := handleWorkstreamCreate(opCtx(db, body, nil))
+		reply := runTyped(handleWorkstreamCreate,opCtx(db, body, nil))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -1270,7 +1270,7 @@ func TestHandleWorkstreamKill(t *testing.T) {
 			return 1, nil
 		}
 
-		reply := handleWorkstreamKill(opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), appendFn))
+		reply := runTyped(handleWorkstreamKill,opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), appendFn))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -1325,7 +1325,7 @@ func TestHandleWorkstreamKill(t *testing.T) {
 		backend.Register(opBackend{killedWorkstream: &killed})
 		appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
 
-		reply := handleWorkstreamKill(opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), appendFn))
+		reply := runTyped(handleWorkstreamKill,opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), appendFn))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -1391,7 +1391,7 @@ func TestActivateResetsPrecedenceChain(t *testing.T) {
 
 	t.Run("repo-activate sets active-repo and clears workstream+sprint", func(t *testing.T) {
 		seed()
-		reply := handleRepoActivate(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), nil))
+		reply := runTyped(handleRepoActivate,opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), nil))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -1402,7 +1402,7 @@ func TestActivateResetsPrecedenceChain(t *testing.T) {
 
 	t.Run("workstream-activate sets active-repo to its repo and clears the stale sprint", func(t *testing.T) {
 		seed()
-		reply := handleWorkstreamActivate(opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), nil))
+		reply := runTyped(handleWorkstreamActivate,opCtx(db, mustJSON(t, map[string]string{"id": "w1"}), nil))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -1413,7 +1413,7 @@ func TestActivateResetsPrecedenceChain(t *testing.T) {
 
 	t.Run("sprint-activate sets its workstream and repo", func(t *testing.T) {
 		seed()
-		reply := handleSprintActivate(opCtx(db, mustJSON(t, map[string]string{"id": "s1"}), nil))
+		reply := runTyped(handleSprintActivate,opCtx(db, mustJSON(t, map[string]string{"id": "s1"}), nil))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -1457,7 +1457,7 @@ func TestKillClearsActiveSelection(t *testing.T) {
 				t.Fatalf("setConfig: %v", err)
 			}
 		}
-		reply := handleRepoKill(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
+		reply := runTyped(handleRepoKill,opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -1473,7 +1473,7 @@ func TestKillClearsActiveSelection(t *testing.T) {
 				t.Fatalf("setConfig: %v", err)
 			}
 		}
-		reply := handleRepoKill(opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
+		reply := runTyped(handleRepoKill,opCtx(db, mustJSON(t, map[string]string{"id": "p1"}), appendFn))
 		if !reply.OK {
 			t.Fatalf("reply not ok: %s", reply.Error)
 		}
@@ -1494,7 +1494,7 @@ func TestHandleRepoCreateManagesWorktreeAdoptsFork(t *testing.T) {
 	backend.Register(workstreamBackend{manages: true, worktree: forked})
 
 	body := mustJSON(t, map[string]string{"name": "demo", "backend": "wstest", "cwd": repo})
-	reply := handleRepoCreate(opCtx(db, body, nil))
+	reply := runTyped(handleRepoCreate,opCtx(db, body, nil))
 	if !reply.OK {
 		t.Fatalf("reply not ok: %s", reply.Error)
 	}

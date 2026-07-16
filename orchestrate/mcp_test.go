@@ -60,11 +60,12 @@ func TestMCPServer(t *testing.T) {
 		got[tool.Name] = true
 	}
 	want := []string{
-		"backends_list", "backend_select", "config_get",
+		"backends_list", "backend_select", "config_get", "config_set",
 		"repo_create", "repo_list", "repo_activate", "repo_kill",
 		"workstream_create", "workstream_list", "workstream_activate", "workstream_kill",
 		"sprint_create", "sprint_list", "sprint_activate",
-		"agent_spawn", "agent_list", "agent_send_message", "agent_status", "agent_kill",
+		"agent_spawn", "agent_list", "agent_show", "agent_send_message", "agent_kill",
+		"fleet_serialize", "fleet_restore",
 	}
 	if len(listReply.Result.Tools) != len(want) {
 		t.Fatalf("advertised %d tools, want %d: %v", len(listReply.Result.Tools), len(want), got)

@@ -15,34 +15,6 @@ import (
 	"github.com/yasyf/cc-interact/event"
 )
 
-// Domain control-plane ops the daemon routes to the handlers registered in serve.
-// The values are namespaced so they never collide with cc-interact's reserved
-// core ops (health, shutdown, resolve, session-record, guard-edit, channel-ack,
-// status).
-const (
-	opSpawn              daemon.Op = "agent-spawn"
-	opSendMessage        daemon.Op = "agent-send-message"
-	opReport             daemon.Op = "agent-report"
-	opStatus             daemon.Op = "agent-status"
-	opList               daemon.Op = "agent-list"
-	opAgentKill          daemon.Op = "agent-kill"
-	opRepoCreate         daemon.Op = "repo-create"
-	opRepoList           daemon.Op = "repo-list"
-	opRepoActivate       daemon.Op = "repo-activate"
-	opRepoKill           daemon.Op = "repo-kill"
-	opWorkstreamCreate   daemon.Op = "workstream-create"
-	opWorkstreamList     daemon.Op = "workstream-list"
-	opWorkstreamActivate daemon.Op = "workstream-activate"
-	opWorkstreamKill     daemon.Op = "workstream-kill"
-	opSprintCreate       daemon.Op = "sprint-create"
-	opSprintList         daemon.Op = "sprint-list"
-	opSprintActivate     daemon.Op = "sprint-activate"
-	opConfigGet          daemon.Op = "config-get"
-	opConfigSet          daemon.Op = "config-set"
-	opSerialize          daemon.Op = "serialize"
-	opRestore            daemon.Op = "restore"
-)
-
 // scrubClaudeCodeEnv unsets CLAUDE_CODE_* and CLAUDECODE so a claude child spawned
 // by the daemon doesn't inherit them and skip persisting its transcript (see
 // cc-notes note daemon-scrubs-claude-code-env). CLAUDE_CONFIG_DIR is untouched.
@@ -121,27 +93,7 @@ func serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.Register(opSpawn, handleSpawn)
-	s.Register(opSendMessage, handleSendMessage)
-	s.Register(opReport, handleReport)
-	s.Register(opStatus, handleStatus)
-	s.Register(opList, handleList)
-	s.Register(opAgentKill, handleAgentKill)
-	s.Register(opRepoCreate, handleRepoCreate)
-	s.Register(opRepoList, handleRepoList)
-	s.Register(opRepoActivate, handleRepoActivate)
-	s.Register(opRepoKill, handleRepoKill)
-	s.Register(opWorkstreamCreate, handleWorkstreamCreate)
-	s.Register(opWorkstreamList, handleWorkstreamList)
-	s.Register(opWorkstreamActivate, handleWorkstreamActivate)
-	s.Register(opWorkstreamKill, handleWorkstreamKill)
-	s.Register(opSprintCreate, handleSprintCreate)
-	s.Register(opSprintList, handleSprintList)
-	s.Register(opSprintActivate, handleSprintActivate)
-	s.Register(opConfigGet, handleConfigGet)
-	s.Register(opConfigSet, handleConfigSet)
-	s.Register(opSerialize, handleSerialize)
-	s.Register(opRestore, handleRestore)
+	registerOps(s)
 	return s.Serve(ctx)
 }
 

@@ -15,7 +15,7 @@ const channelNotifyMethod = "notifications/claude/channel"
 
 // channelTools advertises the child agent's one domain channel tool — report —
 // the orchestrated agent uses to send progress, results, or questions back to its
-// orchestrator. The handler round-trips to the daemon via opReport because the
+// orchestrator. The handler round-trips to the daemon via cco.agent.report because the
 // channel server is a separate stdio process and cannot Append directly.
 func channelTools(_ context.Context, session, scope string) ([]channel.Tool, string, string, error) {
 	client := newClient()
@@ -33,7 +33,7 @@ func channelTools(_ context.Context, session, scope string) ([]channel.Tool, str
 		},
 		Handler: func(ctx context.Context, args json.RawMessage) (string, bool) {
 			reply, err := client.Do(ctx, daemon.Envelope{
-				Op: opReport, Session: session, ClaudePID: pid, Scope: scope, Body: args,
+				Op: mAgentReport.op(), Session: session, ClaudePID: pid, Scope: scope, Body: args,
 			})
 			if err != nil {
 				return "report failed: " + err.Error(), true
