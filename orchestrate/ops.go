@@ -62,26 +62,32 @@ func agentLock(id string) *sync.Mutex {
 // agentView is the JSON shape every agent-facing op returns: the persisted agent
 // fields a parent inspects, flattened from agentRow.
 type agentView struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	SprintID     string `json:"sprint_id"`
-	Backend      string `json:"backend"`
-	Status       string `json:"status"`
-	State        string `json:"state"`
-	Activity     string `json:"activity"`
-	Tokens       int    `json:"tokens"`
-	UpdatedAt    string `json:"updated_at"`
-	SessionID    string `json:"session_id"`
-	SubjectID    string `json:"subject_id"`
-	Scope        string `json:"scope"`
-	RestartCount int    `json:"restart_count"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	SprintID       string `json:"sprint_id"`
+	Backend        string `json:"backend"`
+	TerminalHandle string `json:"terminal_handle"`
+	Status         string `json:"status"`
+	State          string `json:"state"`
+	Activity       string `json:"activity"`
+	Tokens         int    `json:"tokens"`
+	Prompt         string `json:"prompt"`
+	UpdatedAt      string `json:"updated_at"`
+	CreatedAt      string `json:"created_at"`
+	SessionID      string `json:"session_id"`
+	SubjectID      string `json:"subject_id"`
+	Scope          string `json:"scope"`
+	CCNotesTask    string `json:"ccnotes_task"`
+	RestartCount   int    `json:"restart_count"`
+	LastRestartAt  string `json:"last_restart_at"`
 }
 
 func newAgentView(a agentRow) agentView {
 	return agentView{
-		ID: a.ID, Name: a.Name, SprintID: a.SprintID, Backend: string(a.Backend),
-		Status: string(a.Status), State: string(a.State), Activity: a.Activity, Tokens: a.Tokens,
-		UpdatedAt: a.UpdatedAt, SessionID: a.SessionID, SubjectID: a.SubjectID, Scope: a.Scope, RestartCount: a.RestartCount,
+		ID: a.ID, Name: a.Name, SprintID: a.SprintID, Backend: string(a.Backend), TerminalHandle: a.TerminalHandle,
+		Status: string(a.Status), State: string(a.State), Activity: a.Activity, Tokens: a.Tokens, Prompt: a.Prompt,
+		UpdatedAt: a.UpdatedAt, CreatedAt: a.CreatedAt, SessionID: a.SessionID, SubjectID: a.SubjectID, Scope: a.Scope,
+		CCNotesTask: a.CCNotesTask, RestartCount: a.RestartCount, LastRestartAt: a.LastRestartAt,
 	}
 }
 
@@ -433,21 +439,23 @@ func newRepoView(p repoRow) repoView {
 // workstreamView is the JSON shape every workstream-facing op returns, flattened
 // from workstreamRow so a parent never sees the internal column names.
 type workstreamView struct {
-	ID        string `json:"id"`
-	RepoID    string `json:"repo_id"`
-	Name      string `json:"name"`
-	Backend   string `json:"backend"`
-	Branch    string `json:"branch"`
-	Worktree  string `json:"worktree"`
-	IsPrimary bool   `json:"is_primary"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"created_at"`
+	ID              string `json:"id"`
+	RepoID          string `json:"repo_id"`
+	Name            string `json:"name"`
+	Backend         string `json:"backend"`
+	WorkspaceHandle string `json:"workspace_handle"`
+	Branch          string `json:"branch"`
+	Worktree        string `json:"worktree"`
+	IsPrimary       bool   `json:"is_primary"`
+	CCNotesProject  string `json:"ccnotes_project"`
+	Status          string `json:"status"`
+	CreatedAt       string `json:"created_at"`
 }
 
 func newWorkstreamView(w workstreamRow) workstreamView {
 	return workstreamView{
-		ID: w.ID, RepoID: w.RepoID, Name: w.Name, Backend: string(w.Backend),
-		Branch: w.Branch, Worktree: w.Worktree, IsPrimary: w.IsPrimary,
+		ID: w.ID, RepoID: w.RepoID, Name: w.Name, Backend: string(w.Backend), WorkspaceHandle: w.WorkspaceHandle,
+		Branch: w.Branch, Worktree: w.Worktree, IsPrimary: w.IsPrimary, CCNotesProject: w.CCNotesProject,
 		Status: string(w.Status), CreatedAt: w.CreatedAt,
 	}
 }
@@ -455,16 +463,17 @@ func newWorkstreamView(w workstreamRow) workstreamView {
 // sprintView is the JSON shape every sprint-facing op returns, flattened from
 // sprintRow so a parent never sees the internal column names.
 type sprintView struct {
-	ID           string `json:"id"`
-	WorkstreamID string `json:"workstream_id"`
-	Name         string `json:"name"`
-	Status       string `json:"status"`
-	CreatedAt    string `json:"created_at"`
+	ID            string `json:"id"`
+	WorkstreamID  string `json:"workstream_id"`
+	Name          string `json:"name"`
+	CCNotesSprint string `json:"ccnotes_sprint"`
+	Status        string `json:"status"`
+	CreatedAt     string `json:"created_at"`
 }
 
 func newSprintView(sp sprintRow) sprintView {
 	return sprintView{
-		ID: sp.ID, WorkstreamID: sp.WorkstreamID, Name: sp.Name,
+		ID: sp.ID, WorkstreamID: sp.WorkstreamID, Name: sp.Name, CCNotesSprint: sp.CCNotesSprint,
 		Status: string(sp.Status), CreatedAt: sp.CreatedAt,
 	}
 }

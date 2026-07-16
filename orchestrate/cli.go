@@ -42,6 +42,7 @@ func Root() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	r.PersistentFlags().Bool(jsonFlag, false, "emit the daemon's JSON reply verbatim instead of the human view")
 	r.AddCommand(
 		cmd.DaemonCmd(d),
 		withSessionDefault(cmd.WatchCmd(d)),
@@ -59,6 +60,7 @@ func Root() *cobra.Command {
 		workstreamCmd(),
 		sprintCmd(),
 		agentCmd(),
+		fleetCmd(),
 		serializeCmd(),
 		restoreCmd(),
 		mcpCmd(),
@@ -75,19 +77,11 @@ func serializeCmd() *cobra.Command {
 		Short: "Snapshot every active agent into a restorable bundle",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, mFleetSerialize.op(), map[string]string{"out": out})
-			if err != nil {
-				return err
-			}
-			var res struct {
-				Path  string `json:"path"`
-				Count int    `json:"count"`
-			}
-			if err := json.Unmarshal(reply.Body, &res); err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(c.OutOrStdout(), "serialized %d agent(s) to %s\n", res.Count, res.Path)
-			return nil
+			return runRender(c, mFleetSerialize, map[string]string{"out": out},
+				func(w io.Writer, res fleetSerializeResult) error {
+					_, err := fmt.Fprintf(w, "serialized %d agent(s) to %s\n", res.Count, res.Path)
+					return err
+				})
 		},
 	}
 	c.Flags().StringVar(&out, "out", "", "write the bundle to this path instead of the default serialize dir")
@@ -102,55 +96,84 @@ func restoreCmd() *cobra.Command {
 		Short: "Restore agents from a serialized bundle",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, mFleetRestore.op(), map[string]string{"path": args[0]})
-			if err != nil {
-				return err
-			}
-			var res struct {
-				Count int `json:"count"`
-			}
-			if err := json.Unmarshal(reply.Body, &res); err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(c.OutOrStdout(), "restored %d agent(s) from %s\n", res.Count, args[0])
-			return nil
+			return runRender(c, mFleetRestore, map[string]string{"path": args[0]},
+				func(w io.Writer, res fleetRestoreResult) error {
+					_, err := fmt.Fprintf(w, "restored %d agent(s) from %s\n", res.Count, args[0])
+					return err
+				})
 		},
 	}
 	return c
 }
 
-// configCmd is the `config` group: read the persisted key-value config (the
-// generic reader symmetric with the specialized `backends select` writer).
+// configCmd is the `config` group: read, write, and list the persisted key-value
+// config (the generic verbs symmetric with the specialized `backends select` writer).
 func configCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "config",
-		Short: "Inspect the persisted orchestrator config",
+		Short: "Inspect and edit the persisted orchestrator config",
 	}
 	get := &cobra.Command{
 		Use:   "get <key>",
 		Short: "Print one config key's value",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, mConfigGet.op(), map[string]string{"key": args[0]})
-			if err != nil {
-				return err
-			}
-			var out struct {
-				Value string `json:"value"`
-				Found bool   `json:"found"`
-			}
-			if err := json.Unmarshal(reply.Body, &out); err != nil {
-				return err
-			}
-			if !out.Found {
-				_, _ = fmt.Fprintf(c.OutOrStdout(), "%s: not set\n", args[0])
-				return nil
-			}
-			_, _ = fmt.Fprintln(c.OutOrStdout(), out.Value)
-			return nil
+			return runRender(c, mConfigGet, map[string]string{"key": args[0]},
+				func(w io.Writer, res configGetResult) error {
+					if !res.Found {
+						_, err := fmt.Fprintf(w, "%s: not set\n", args[0])
+						return err
+					}
+					_, err := fmt.Fprintln(w, res.Value)
+					return err
+				})
 		},
 	}
-	c.AddCommand(get)
+	set := &cobra.Command{
+		Use:   "set <key> <value>",
+		Short: "Upsert one config key",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, args []string) error {
+			return runRender(c, mConfigSet, map[string]string{"key": args[0], "value": args[1]},
+				func(w io.Writer, res configSetResult) error {
+					_, err := fmt.Fprintf(w, "%s: %s\n", res.Key, res.Value)
+					return err
+				})
+		},
+	}
+	unset := &cobra.Command{
+		Use:   "unset <key>",
+		Short: "Delete one config key",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			return runRender(c, mConfigUnset, map[string]string{"key": args[0]},
+				func(w io.Writer, res configUnsetResult) error {
+					if !res.Found {
+						_, err := fmt.Fprintf(w, "%s: not set\n", res.Key)
+						return err
+					}
+					_, err := fmt.Fprintf(w, "unset %s\n", res.Key)
+					return err
+				})
+		},
+	}
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List the persisted config key-value pairs",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			return runRender(c, mConfigList, nil,
+				func(w io.Writer, entries []configEntry) error {
+					rows := make([][]string, len(entries))
+					for i, e := range entries {
+						rows[i] = []string{e.Key, e.Value}
+					}
+					_, err := fmt.Fprint(w, renderTable([]string{"KEY", "VALUE"}, rows))
+					return err
+				})
+		},
+	}
+	c.AddCommand(get, set, unset, list)
 	return c
 }
 
@@ -226,12 +249,7 @@ func backendsCmd() *cobra.Command {
 			Short: "List backends and their availability",
 			Args:  cobra.NoArgs,
 			RunE: func(c *cobra.Command, _ []string) error {
-				table, err := backendsTable()
-				if err != nil {
-					return err
-				}
-				_, _ = fmt.Fprint(c.OutOrStdout(), table)
-				return nil
+				return renderBackends(c)
 			},
 		},
 		&cobra.Command{
@@ -294,14 +312,14 @@ type backendRow struct {
 	isDefault bool
 }
 
-// backendsTable renders the `backends list` view: every backend in precedence
-// order with its install status and a marker on the effective default (the
-// persisted selection, or the first available one when none is selected). It
-// reads state straight off disk, so it needs no daemon.
-func backendsTable() (string, error) {
+// backendRows builds the `backends list` view: every backend in precedence order with
+// its install status and a marker on the effective default (the persisted selection, or
+// the first available one when none is selected). It reads state straight off disk, so
+// it needs no daemon.
+func backendRows() ([]backendRow, error) {
 	selected, err := selectedBackend()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	rows := []backendRow{}
 	defaulted := false
@@ -317,6 +335,16 @@ func backendsTable() (string, error) {
 		}
 		defaulted = defaulted || isDefault
 		rows = append(rows, backendRow{name: name, available: available, isDefault: isDefault})
+	}
+	return rows, nil
+}
+
+// backendsTable renders the `backends list` view as an aligned text table — the
+// daemon-free text surface the parent-facing MCP backends_list tool returns.
+func backendsTable() (string, error) {
+	rows, err := backendRows()
+	if err != nil {
+		return "", err
 	}
 	return formatBackends(rows), nil
 }
@@ -351,25 +379,37 @@ func repoCmd() *cobra.Command {
 		Short: "Manage orchestration repos (backend workspaces)",
 	}
 
+	var listStatus string
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List repos",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, mRepoList.op(), nil)
-			if err != nil {
-				return err
-			}
-			var views []repoView
-			if err := json.Unmarshal(reply.Body, &views); err != nil {
-				return err
-			}
-			rows := make([][]string, len(views))
-			for i, p := range views {
-				rows[i] = []string{p.ID, p.Name, p.Backend, p.Status, p.Cwd}
-			}
-			_, _ = fmt.Fprint(c.OutOrStdout(), renderTable([]string{"ID", "NAME", "BACKEND", "STATUS", "CWD"}, rows))
-			return nil
+			return runRender(c, mRepoList, map[string]string{"status": listStatus},
+				func(w io.Writer, views []repoView) error {
+					rows := make([][]string, len(views))
+					for i, p := range views {
+						rows[i] = []string{p.ID, p.Name, p.Backend, p.Status, p.Cwd}
+					}
+					_, err := fmt.Fprint(w, renderTable([]string{"ID", "NAME", "BACKEND", "STATUS", "CWD"}, rows))
+					return err
+				})
+		},
+	}
+	list.Flags().StringVar(&listStatus, "status", "", "filter by lifecycle status (active, exited, killed)")
+
+	show := &cobra.Command{
+		Use:   "show <id|name>",
+		Short: "Show one repo",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			return runRender(c, mRepoShow, map[string]string{"id": args[0]},
+				func(w io.Writer, p repoView) error {
+					return renderKV(w, [][2]string{
+						{"id", p.ID}, {"name", p.Name}, {"backend", p.Backend},
+						{"cwd", p.Cwd}, {"status", p.Status}, {"created", p.CreatedAt},
+					})
+				})
 		},
 	}
 
@@ -379,25 +419,14 @@ func repoCmd() *cobra.Command {
 		Short: "Create a repo and its backend workspace",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, mRepoCreate.op(), map[string]string{
+			return runRender(c, mRepoCreate, map[string]string{
 				"name": args[0], "backend": createBackend, "cwd": createCwd,
+			}, func(w io.Writer, out repoCreateResult) error {
+				_, _ = fmt.Fprintf(w, "repo:      %s\n", out.RepoID)
+				_, _ = fmt.Fprintf(w, "backend:   %s\n", out.Backend)
+				_, err := fmt.Fprintf(w, "workspace: %s\n", out.Workspace)
+				return err
 			})
-			if err != nil {
-				return err
-			}
-			var out struct {
-				RepoID    string `json:"repo_id"`
-				Workspace string `json:"workspace"`
-				Backend   string `json:"backend"`
-			}
-			if err := json.Unmarshal(reply.Body, &out); err != nil {
-				return err
-			}
-			w := c.OutOrStdout()
-			_, _ = fmt.Fprintf(w, "repo:      %s\n", out.RepoID)
-			_, _ = fmt.Fprintf(w, "backend:   %s\n", out.Backend)
-			_, _ = fmt.Fprintf(w, "workspace: %s\n", out.Workspace)
-			return nil
 		},
 	}
 	create.Flags().StringVar(&createBackend, "backend", "", "backend to place the repo on (defaults to the selected/first available)")
@@ -408,18 +437,11 @@ func repoCmd() *cobra.Command {
 		Short: "Mark a repo active",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, mRepoActivate.op(), map[string]string{"id": args[0]})
-			if err != nil {
-				return err
-			}
-			var out struct {
-				RepoID string `json:"repo_id"`
-			}
-			if err := json.Unmarshal(reply.Body, &out); err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(c.OutOrStdout(), "activated repo: %s\n", out.RepoID)
-			return nil
+			return runRender(c, mRepoActivate, map[string]string{"id": args[0]},
+				func(w io.Writer, out repoLifecycleResult) error {
+					_, err := fmt.Fprintf(w, "activated repo: %s\n", out.RepoID)
+					return err
+				})
 		},
 	}
 
@@ -428,15 +450,15 @@ func repoCmd() *cobra.Command {
 		Short: "Kill a repo, its backend workspace, and all its agents",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			if _, err := runOp(c, mRepoKill.op(), map[string]string{"id": args[0]}); err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(c.OutOrStdout(), "killed repo: %s\n", args[0])
-			return nil
+			return runRender(c, mRepoKill, map[string]string{"id": args[0]},
+				func(w io.Writer, _ repoLifecycleResult) error {
+					_, err := fmt.Fprintf(w, "killed repo: %s\n", args[0])
+					return err
+				})
 		},
 	}
 
-	c.AddCommand(list, create, activate, kill)
+	c.AddCommand(list, show, create, activate, kill)
 	return c
 }
 
@@ -449,34 +471,49 @@ func workstreamCmd() *cobra.Command {
 		Short:   "Manage workstreams (a repo's branches and their backend workspaces)",
 	}
 
-	var listRepo string
+	var listRepo, listStatus string
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List workstreams",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, mWorkstreamList.op(), map[string]string{"repo": listRepo})
-			if err != nil {
-				return err
-			}
-			var views []workstreamView
-			if err := json.Unmarshal(reply.Body, &views); err != nil {
-				return err
-			}
-			rows := make([][]string, len(views))
-			for i, w := range views {
-				primary := ""
-				if w.IsPrimary {
-					primary = "yes"
-				}
-				rows[i] = []string{w.ID, w.Name, w.RepoID, w.Branch, w.Worktree, primary, w.Status}
-			}
-			_, _ = fmt.Fprint(c.OutOrStdout(), renderTable(
-				[]string{"ID", "NAME", "REPO", "BRANCH", "WORKTREE", "PRIMARY", "STATUS"}, rows))
-			return nil
+			return runRender(c, mWorkstreamList, map[string]string{"repo": listRepo, "status": listStatus},
+				func(w io.Writer, views []workstreamView) error {
+					rows := make([][]string, len(views))
+					for i, ws := range views {
+						primary := ""
+						if ws.IsPrimary {
+							primary = "yes"
+						}
+						rows[i] = []string{ws.ID, ws.Name, ws.RepoID, ws.Branch, ws.Worktree, primary, ws.Status}
+					}
+					_, err := fmt.Fprint(w, renderTable(
+						[]string{"ID", "NAME", "REPO", "BRANCH", "WORKTREE", "PRIMARY", "STATUS"}, rows))
+					return err
+				})
 		},
 	}
 	list.Flags().StringVar(&listRepo, "repo", "", "filter by repo id or name")
+	list.Flags().StringVar(&listStatus, "status", "", "filter by lifecycle status (active, exited, killed)")
+
+	var showRepo string
+	show := &cobra.Command{
+		Use:   "show <id|name>",
+		Short: "Show one workstream",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			return runRender(c, mWorkstreamShow, map[string]string{"id": args[0], "repo": showRepo},
+				func(w io.Writer, ws workstreamView) error {
+					return renderKV(w, [][2]string{
+						{"id", ws.ID}, {"repo", ws.RepoID}, {"name", ws.Name}, {"backend", ws.Backend},
+						{"workspace", ws.WorkspaceHandle}, {"branch", ws.Branch}, {"worktree", ws.Worktree},
+						{"primary", strconv.FormatBool(ws.IsPrimary)}, {"ccnotes", ws.CCNotesProject},
+						{"status", ws.Status}, {"created", ws.CreatedAt},
+					})
+				})
+		},
+	}
+	show.Flags().StringVar(&showRepo, "repo", "", "repo id or name to disambiguate the workstream name")
 
 	var createRepo, createBranch string
 	create := &cobra.Command{
@@ -484,29 +521,16 @@ func workstreamCmd() *cobra.Command {
 		Short: "Create a workstream and its backend workspace",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, mWorkstreamCreate.op(), map[string]string{
+			return runRender(c, mWorkstreamCreate, map[string]string{
 				"repo": createRepo, "name": args[0], "branch": createBranch,
+			}, func(w io.Writer, out workstreamCreateResult) error {
+				_, _ = fmt.Fprintf(w, "workstream: %s\n", out.WorkstreamID)
+				_, _ = fmt.Fprintf(w, "repo:       %s\n", out.RepoID)
+				_, _ = fmt.Fprintf(w, "branch:     %s\n", out.Branch)
+				_, _ = fmt.Fprintf(w, "worktree:   %s\n", out.Worktree)
+				_, err := fmt.Fprintf(w, "workspace:  %s\n", out.Workspace)
+				return err
 			})
-			if err != nil {
-				return err
-			}
-			var out struct {
-				WorkstreamID string `json:"workstream_id"`
-				RepoID       string `json:"repo_id"`
-				Workspace    string `json:"workspace"`
-				Branch       string `json:"branch"`
-				Worktree     string `json:"worktree"`
-			}
-			if err := json.Unmarshal(reply.Body, &out); err != nil {
-				return err
-			}
-			w := c.OutOrStdout()
-			_, _ = fmt.Fprintf(w, "workstream: %s\n", out.WorkstreamID)
-			_, _ = fmt.Fprintf(w, "repo:       %s\n", out.RepoID)
-			_, _ = fmt.Fprintf(w, "branch:     %s\n", out.Branch)
-			_, _ = fmt.Fprintf(w, "worktree:   %s\n", out.Worktree)
-			_, _ = fmt.Fprintf(w, "workspace:  %s\n", out.Workspace)
-			return nil
 		},
 	}
 	create.Flags().StringVar(&createRepo, "repo", "", "repo id or name to create the workstream in")
@@ -518,18 +542,11 @@ func workstreamCmd() *cobra.Command {
 		Short: "Mark a workstream active and the spawn default",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, mWorkstreamActivate.op(), map[string]string{"id": args[0], "repo": activateRepo})
-			if err != nil {
-				return err
-			}
-			var out struct {
-				WorkstreamID string `json:"workstream_id"`
-			}
-			if err := json.Unmarshal(reply.Body, &out); err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(c.OutOrStdout(), "activated workstream: %s\n", out.WorkstreamID)
-			return nil
+			return runRender(c, mWorkstreamActivate, map[string]string{"id": args[0], "repo": activateRepo},
+				func(w io.Writer, out workstreamLifecycleResult) error {
+					_, err := fmt.Fprintf(w, "activated workstream: %s\n", out.WorkstreamID)
+					return err
+				})
 		},
 	}
 	activate.Flags().StringVar(&activateRepo, "repo", "", "repo id or name to disambiguate the workstream name")
@@ -540,16 +557,16 @@ func workstreamCmd() *cobra.Command {
 		Short: "Kill a workstream, its backend workspace, worktree, and agents",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			if _, err := runOp(c, mWorkstreamKill.op(), map[string]string{"id": args[0], "repo": killRepo}); err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(c.OutOrStdout(), "killed workstream: %s\n", args[0])
-			return nil
+			return runRender(c, mWorkstreamKill, map[string]string{"id": args[0], "repo": killRepo},
+				func(w io.Writer, _ workstreamLifecycleResult) error {
+					_, err := fmt.Fprintf(w, "killed workstream: %s\n", args[0])
+					return err
+				})
 		},
 	}
 	kill.Flags().StringVar(&killRepo, "repo", "", "repo id or name to disambiguate the workstream name")
 
-	c.AddCommand(list, create, activate, kill)
+	c.AddCommand(list, show, create, activate, kill)
 	return c
 }
 
@@ -561,30 +578,43 @@ func sprintCmd() *cobra.Command {
 		Short: "Manage sprints (a workstream's planning groups that agents spawn into)",
 	}
 
-	var listWorkstream string
+	var listWorkstream, listStatus string
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List sprints",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, mSprintList.op(), map[string]string{"workstream": listWorkstream})
-			if err != nil {
-				return err
-			}
-			var views []sprintView
-			if err := json.Unmarshal(reply.Body, &views); err != nil {
-				return err
-			}
-			rows := make([][]string, len(views))
-			for i, s := range views {
-				rows[i] = []string{s.ID, s.Name, s.WorkstreamID, s.Status}
-			}
-			_, _ = fmt.Fprint(c.OutOrStdout(), renderTable(
-				[]string{"ID", "NAME", "WORKSTREAM", "STATUS"}, rows))
-			return nil
+			return runRender(c, mSprintList, map[string]string{"workstream": listWorkstream, "status": listStatus},
+				func(w io.Writer, views []sprintView) error {
+					rows := make([][]string, len(views))
+					for i, s := range views {
+						rows[i] = []string{s.ID, s.Name, s.WorkstreamID, s.Status}
+					}
+					_, err := fmt.Fprint(w, renderTable(
+						[]string{"ID", "NAME", "WORKSTREAM", "STATUS"}, rows))
+					return err
+				})
 		},
 	}
 	list.Flags().StringVar(&listWorkstream, "workstream", "", "filter by workstream id or name")
+	list.Flags().StringVar(&listStatus, "status", "", "filter by lifecycle status (active, exited, killed)")
+
+	var showWorkstream string
+	show := &cobra.Command{
+		Use:   "show <id|name>",
+		Short: "Show one sprint",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			return runRender(c, mSprintShow, map[string]string{"id": args[0], "workstream": showWorkstream},
+				func(w io.Writer, s sprintView) error {
+					return renderKV(w, [][2]string{
+						{"id", s.ID}, {"workstream", s.WorkstreamID}, {"name", s.Name},
+						{"ccnotes", s.CCNotesSprint}, {"status", s.Status}, {"created", s.CreatedAt},
+					})
+				})
+		},
+	}
+	show.Flags().StringVar(&showWorkstream, "workstream", "", "workstream id or name to disambiguate the sprint name")
 
 	var createWorkstream string
 	create := &cobra.Command{
@@ -592,25 +622,14 @@ func sprintCmd() *cobra.Command {
 		Short: "Create a sprint in a workstream",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, mSprintCreate.op(), map[string]string{
+			return runRender(c, mSprintCreate, map[string]string{
 				"workstream": createWorkstream, "name": args[0],
+			}, func(w io.Writer, out sprintCreateResult) error {
+				_, _ = fmt.Fprintf(w, "sprint:     %s\n", out.SprintID)
+				_, _ = fmt.Fprintf(w, "workstream: %s\n", out.WorkstreamID)
+				_, err := fmt.Fprintf(w, "name:       %s\n", out.Name)
+				return err
 			})
-			if err != nil {
-				return err
-			}
-			var out struct {
-				SprintID     string `json:"sprint_id"`
-				WorkstreamID string `json:"workstream_id"`
-				Name         string `json:"name"`
-			}
-			if err := json.Unmarshal(reply.Body, &out); err != nil {
-				return err
-			}
-			w := c.OutOrStdout()
-			_, _ = fmt.Fprintf(w, "sprint:     %s\n", out.SprintID)
-			_, _ = fmt.Fprintf(w, "workstream: %s\n", out.WorkstreamID)
-			_, _ = fmt.Fprintf(w, "name:       %s\n", out.Name)
-			return nil
 		},
 	}
 	create.Flags().StringVar(&createWorkstream, "workstream", "", "workstream id or name to create the sprint in")
@@ -621,23 +640,31 @@ func sprintCmd() *cobra.Command {
 		Short: "Mark a sprint active and the spawn default",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, mSprintActivate.op(), map[string]string{"id": args[0], "workstream": activateWorkstream})
-			if err != nil {
-				return err
-			}
-			var out struct {
-				SprintID string `json:"sprint_id"`
-			}
-			if err := json.Unmarshal(reply.Body, &out); err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(c.OutOrStdout(), "activated sprint: %s\n", out.SprintID)
-			return nil
+			return runRender(c, mSprintActivate, map[string]string{"id": args[0], "workstream": activateWorkstream},
+				func(w io.Writer, out sprintActivateResult) error {
+					_, err := fmt.Fprintf(w, "activated sprint: %s\n", out.SprintID)
+					return err
+				})
 		},
 	}
 	activate.Flags().StringVar(&activateWorkstream, "workstream", "", "workstream id or name to disambiguate the sprint name")
 
-	c.AddCommand(list, create, activate)
+	var killWorkstream string
+	kill := &cobra.Command{
+		Use:   "kill <id|name>",
+		Short: "Kill a sprint: exit its agents and tear down their terminals",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			return runRender(c, mSprintKill, map[string]string{"id": args[0], "workstream": killWorkstream},
+				func(w io.Writer, _ sprintKillResult) error {
+					_, err := fmt.Fprintf(w, "killed sprint: %s\n", args[0])
+					return err
+				})
+		},
+	}
+	kill.Flags().StringVar(&killWorkstream, "workstream", "", "workstream id or name to disambiguate the sprint name")
+
+	c.AddCommand(list, show, create, activate, kill)
 	return c
 }
 
@@ -654,26 +681,15 @@ func agentCmd() *cobra.Command {
 		Short: "Spawn a child agent into a sprint",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, mAgentSpawn.op(), map[string]string{
+			return runRender(c, mAgentSpawn, map[string]string{
 				"repo": spawnRepo, "workstream": spawnWorkstream, "sprint": spawnSprint,
 				"name": spawnName, "cwd": spawnCwd, "prompt": spawnPrompt,
+			}, func(w io.Writer, out agentSpawnResult) error {
+				_, _ = fmt.Fprintf(w, "agent:    %s\n", out.AgentID)
+				_, _ = fmt.Fprintf(w, "backend:  %s\n", out.Backend)
+				_, err := fmt.Fprintf(w, "terminal: %s\n", out.Terminal)
+				return err
 			})
-			if err != nil {
-				return err
-			}
-			var out struct {
-				AgentID  string `json:"agent_id"`
-				Backend  string `json:"backend"`
-				Terminal string `json:"terminal"`
-			}
-			if err := json.Unmarshal(reply.Body, &out); err != nil {
-				return err
-			}
-			w := c.OutOrStdout()
-			_, _ = fmt.Fprintf(w, "agent:    %s\n", out.AgentID)
-			_, _ = fmt.Fprintf(w, "backend:  %s\n", out.Backend)
-			_, _ = fmt.Fprintf(w, "terminal: %s\n", out.Terminal)
-			return nil
 		},
 	}
 	spawn.Flags().StringVar(&spawnRepo, "repo", "", "repo id or name to spawn into (uses its primary workstream's default sprint)")
@@ -683,81 +699,106 @@ func agentCmd() *cobra.Command {
 	spawn.Flags().StringVar(&spawnCwd, "cwd", "", "working directory / scope (defaults to the workstream worktree)")
 	spawn.Flags().StringVar(&spawnPrompt, "prompt", "", "initial prompt for the child agent")
 
-	var listRepo string
+	var listRepo, listStatus string
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List agents and their sprint and status",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
-			reply, err := runOp(c, mAgentList.op(), map[string]string{"repo": listRepo})
-			if err != nil {
-				return err
-			}
-			var views []agentView
-			if err := json.Unmarshal(reply.Body, &views); err != nil {
-				return err
-			}
-			rows := make([][]string, len(views))
-			for i, a := range views {
-				rows[i] = []string{a.ID, a.Name, a.SprintID, a.Backend, a.State, a.Status, strconv.Itoa(a.Tokens), strconv.Itoa(a.RestartCount), a.Activity}
-			}
-			_, _ = fmt.Fprint(c.OutOrStdout(), renderTable(
-				[]string{"ID", "NAME", "SPRINT", "BACKEND", "STATE", "STATUS", "TOKENS", "RESTARTS", "ACTIVITY"}, rows))
-			return nil
+			return runRender(c, mAgentList, map[string]string{"repo": listRepo, "status": listStatus},
+				func(w io.Writer, views []agentView) error {
+					rows := make([][]string, len(views))
+					for i, a := range views {
+						rows[i] = []string{a.ID, a.Name, a.SprintID, a.Backend, a.State, a.Status, strconv.Itoa(a.Tokens), strconv.Itoa(a.RestartCount), a.Activity}
+					}
+					_, err := fmt.Fprint(w, renderTable(
+						[]string{"ID", "NAME", "SPRINT", "BACKEND", "STATE", "STATUS", "TOKENS", "RESTARTS", "ACTIVITY"}, rows))
+					return err
+				})
 		},
 	}
 	list.Flags().StringVar(&listRepo, "repo", "", "filter by repo id or name")
+	list.Flags().StringVar(&listStatus, "status", "", "filter by lifecycle status (active, exited, killed)")
 
 	sendMessage := &cobra.Command{
 		Use:   "send-message <id> <text>",
 		Short: "Send a message to a running agent",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, mAgentSendMessage.op(), map[string]string{"agent_id": args[0], "text": args[1]})
-			if err != nil {
-				return err
-			}
-			var out struct {
-				Seq       int64  `json:"seq"`
-				Transport string `json:"transport"`
-			}
-			if err := json.Unmarshal(reply.Body, &out); err != nil {
-				return err
-			}
-			if out.Transport == "native" {
-				_, _ = fmt.Fprintf(c.OutOrStdout(), "sent to %s (native)\n", args[0])
-			} else {
-				_, _ = fmt.Fprintf(c.OutOrStdout(), "sent to %s (seq %d)\n", args[0], out.Seq)
-			}
-			return nil
+			return runRender(c, mAgentSendMessage, map[string]string{"agent_id": args[0], "text": args[1]},
+				func(w io.Writer, out agentSendMessageResult) error {
+					if out.Transport == "native" {
+						_, err := fmt.Fprintf(w, "sent to %s (native)\n", args[0])
+						return err
+					}
+					_, err := fmt.Fprintf(w, "sent to %s (seq %d)\n", args[0], out.Seq)
+					return err
+				})
 		},
 	}
 
-	status := &cobra.Command{
-		Use:   "status <id>",
-		Short: "Show a single agent's derived status",
-		Args:  cobra.ExactArgs(1),
+	show := &cobra.Command{
+		Use:     "show <id>",
+		Aliases: []string{"status"},
+		Short:   "Show a single agent's derived status",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			reply, err := runOp(c, mAgentShow.op(), map[string]string{"agent_id": args[0]})
-			if err != nil {
-				return err
-			}
-			var a agentView
-			if err := json.Unmarshal(reply.Body, &a); err != nil {
-				return err
-			}
-			w := c.OutOrStdout()
-			_, _ = fmt.Fprintf(w, "agent:    %s\n", a.ID)
-			_, _ = fmt.Fprintf(w, "name:     %s\n", a.Name)
-			_, _ = fmt.Fprintf(w, "status:   %s\n", a.Status)
-			_, _ = fmt.Fprintf(w, "state:    %s\n", a.State)
-			_, _ = fmt.Fprintf(w, "activity: %s\n", a.Activity)
-			_, _ = fmt.Fprintf(w, "tokens:   %d\n", a.Tokens)
-			_, _ = fmt.Fprintf(w, "restart:  %d\n", a.RestartCount)
-			_, _ = fmt.Fprintf(w, "updated:  %s\n", a.UpdatedAt)
-			return nil
+			return runRender(c, mAgentShow, map[string]string{"agent_id": args[0]},
+				func(w io.Writer, a agentView) error {
+					return renderKV(w, [][2]string{
+						{"agent", a.ID}, {"name", a.Name}, {"status", a.Status}, {"state", a.State},
+						{"activity", a.Activity}, {"tokens", strconv.Itoa(a.Tokens)},
+						{"restart", strconv.Itoa(a.RestartCount)}, {"updated", a.UpdatedAt},
+					})
+				})
 		},
 	}
+
+	capture := &cobra.Command{
+		Use:   "capture <id>",
+		Short: "Capture an active agent's current terminal screen",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			return runRender(c, mAgentCapture, map[string]string{"agent_id": args[0]},
+				func(w io.Writer, res agentCaptureResult) error {
+					_, err := fmt.Fprint(w, res.Content)
+					return err
+				})
+		},
+	}
+
+	var respawnDead bool
+	respawn := &cobra.Command{
+		Use:   "respawn [<id>]",
+		Short: "Respawn one exited agent, or every eligible exited agent with --dead",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			if (len(args) == 1) == respawnDead {
+				return errors.New("pass exactly one of <id> or --dead")
+			}
+			req := map[string]any{}
+			if respawnDead {
+				req["dead"] = true
+			} else {
+				req["agent_id"] = args[0]
+			}
+			return runRender(c, mAgentRespawn, req, func(w io.Writer, res agentRespawnResult) error {
+				rows := make([][]string, len(res.Respawned))
+				for i, a := range res.Respawned {
+					rows[i] = []string{a.ID, a.Name, a.SprintID, a.Backend, a.State, a.Status}
+				}
+				if _, err := fmt.Fprint(w, renderTable(
+					[]string{"ID", "NAME", "SPRINT", "BACKEND", "STATE", "STATUS"}, rows)); err != nil {
+					return err
+				}
+				for _, f := range res.Failed {
+					_, _ = fmt.Fprintf(c.ErrOrStderr(), "failed to respawn %s: %s\n", f.AgentID, f.Error)
+				}
+				return nil
+			})
+		},
+	}
+	respawn.Flags().BoolVar(&respawnDead, "dead", false, "respawn every eligible exited agent")
 
 	var watchAll bool
 	var watchID string
@@ -777,15 +818,15 @@ func agentCmd() *cobra.Command {
 		Short: "Kill a running agent",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			if _, err := runOp(c, mAgentKill.op(), map[string]string{"agent_id": args[0]}); err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(c.OutOrStdout(), "killed agent: %s\n", args[0])
-			return nil
+			return runRender(c, mAgentKill, map[string]string{"agent_id": args[0]},
+				func(w io.Writer, _ agentKillResult) error {
+					_, err := fmt.Fprintf(w, "killed agent: %s\n", args[0])
+					return err
+				})
 		},
 	}
 
-	c.AddCommand(spawn, list, sendMessage, status, watch, kill)
+	c.AddCommand(spawn, list, sendMessage, show, capture, respawn, watch, kill)
 	return c
 }
 
@@ -814,8 +855,13 @@ func runAgentWatch(c *cobra.Command, id string, all bool) error {
 		return err
 	}
 	out := c.OutOrStdout()
+	asJSON := jsonOutput(c)
 	return streamAgent(ctx, d, a, func(data string) error {
-		_, err := fmt.Fprintln(out, data)
+		line := data
+		if !asJSON {
+			line = formatEventLine(data)
+		}
+		_, err := fmt.Fprintln(out, line)
 		return err
 	})
 }
@@ -836,6 +882,7 @@ func watchAllAgents(c *cobra.Command, d cmd.Deps) error {
 	ctx, cancel := context.WithCancel(c.Context())
 	defer cancel()
 	out := c.OutOrStdout()
+	asJSON := jsonOutput(c)
 	var writeMu, errMu sync.Mutex
 	var wg sync.WaitGroup
 	var firstErr error
@@ -847,7 +894,10 @@ func watchAllAgents(c *cobra.Command, d cmd.Deps) error {
 		go func() {
 			defer wg.Done()
 			err := streamAgent(ctx, d, a, func(data string) error {
-				return emitTagged(out, &writeMu, a.ID, data)
+				if asJSON {
+					return emitTagged(out, &writeMu, a.ID, data)
+				}
+				return emitLine(out, &writeMu, a.ID+"  "+formatEventLine(data))
 			})
 			if err != nil {
 				errMu.Lock()
@@ -904,6 +954,15 @@ func emitTagged(out io.Writer, mu *sync.Mutex, id, data string) error {
 	return err
 }
 
+// emitLine writes one already-formatted line, serialized through mu so concurrent
+// agent streams never interleave — the human-mode counterpart to emitTagged.
+func emitLine(out io.Writer, mu *sync.Mutex, line string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := fmt.Fprintln(out, line)
+	return err
+}
+
 // resolveAgentSubject polls the daemon until a subject exists for the agent's
 // session+scope, returning its id and the daemon's HTTP handshake port. It
 // replicates cc-interact's unexported cmd.resolveSubject — unreachable across the
@@ -950,6 +1009,215 @@ func eventType(data string) string {
 	}
 	_ = json.Unmarshal([]byte(data), &e)
 	return e.Type
+}
+
+// The fleet-stream consumer names `fleet watch` and `fleet status --watch` register
+// under, keeping their resume cursors distinct from each other and from agent watch.
+const (
+	fleetWatchConsumer  = "fleet-watch"
+	fleetStatusConsumer = "fleet-status"
+)
+
+// fleetRepaintDebounce coalesces a burst of fleet frames into a single fleet-status
+// repaint, so a spawn storm redraws once rather than per frame.
+const fleetRepaintDebounce = 250 * time.Millisecond
+
+// fleetCmd is the `fleet` group: the fleet-wide status snapshot and the live event
+// stream. The root `watch`/`status` verbs belong to the cc-interact substrate, so the
+// fleet views live under their own noun.
+func fleetCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "fleet",
+		Short: "Inspect and stream the whole agent fleet",
+	}
+
+	var watch bool
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "Show the fleet: counts, the resume cursor, and a joined agent table",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, args []string) error {
+			if watch {
+				return runFleetStatusWatch(c)
+			}
+			return runRender(c, mFleetStatus, nil, renderFleetStatus)
+		},
+	}
+	status.Flags().BoolVar(&watch, "watch", false, "repaint the status as fleet events arrive")
+
+	watchCmd := &cobra.Command{
+		Use:   "watch",
+		Short: "Stream the fleet event subject live (one line per frame)",
+		Args:  cobra.NoArgs,
+		RunE:  runFleetWatch,
+	}
+
+	c.AddCommand(status, watchCmd)
+	return c
+}
+
+// runFleetWatch streams the fleet subject live: each frame renders as one line — the
+// raw NDJSON payload under --json (the canonical wire shape cc-pane also sees), a
+// compact formatted line otherwise. It bootstraps the subject id and HTTP port from
+// cco.fleet.status, never from OpResolve, so it attaches to the exact fleet subject the
+// catalog publishes.
+func runFleetWatch(c *cobra.Command, _ []string) error {
+	ctx := c.Context()
+	d := deps()
+	if err := d.EnsureCurrent(ctx); err != nil {
+		return err
+	}
+	subjectID, port, err := fleetStreamTarget(c)
+	if err != nil {
+		return err
+	}
+	out := c.OutOrStdout()
+	asJSON := jsonOutput(c)
+	return consumeFleet(ctx, d, subjectID, port, fleetWatchConsumer, func(data string) error {
+		line := data
+		if !asJSON {
+			line = formatFleetFrame(data)
+		}
+		_, err := fmt.Fprintln(out, line)
+		return err
+	})
+}
+
+// runFleetStatusWatch paints the fleet status once, then repaints it on every fleet
+// frame, debounced so a burst coalesces into one redraw. The consume loop only pokes a
+// buffered channel; the repaint loop re-fetches the whole snapshot (the source of
+// truth), so a dropped or replayed frame never diverges the view.
+func runFleetStatusWatch(c *cobra.Command) error {
+	ctx, cancel := context.WithCancel(c.Context())
+	defer cancel()
+	d := deps()
+	if err := d.EnsureCurrent(ctx); err != nil {
+		return err
+	}
+	if err := paintFleetStatus(c); err != nil {
+		return err
+	}
+	subjectID, port, err := fleetStreamTarget(c)
+	if err != nil {
+		return err
+	}
+	poke := make(chan struct{}, 1)
+	go func() {
+		_ = consumeFleet(ctx, d, subjectID, port, fleetStatusConsumer, func(string) error {
+			select {
+			case poke <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+		cancel()
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-poke:
+			if !debounceQuiet(ctx, poke) {
+				return nil
+			}
+			if err := paintFleetStatus(c); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// debounceQuiet waits out one fleetRepaintDebounce window, coalescing further pokes, so
+// the caller repaints once after a burst settles. It returns false when ctx is
+// cancelled mid-wait, signaling the repaint loop to stop.
+func debounceQuiet(ctx context.Context, poke <-chan struct{}) bool {
+	timer := time.NewTimer(fleetRepaintDebounce)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-poke:
+		case <-timer.C:
+			return true
+		}
+	}
+}
+
+// paintFleetStatus fetches the current fleet status and renders it: an NDJSON snapshot
+// under --json, or a screen-clearing human repaint otherwise.
+func paintFleetStatus(c *cobra.Command) error {
+	reply, err := runOp(c, mFleetStatus.op(), nil)
+	if err != nil {
+		return err
+	}
+	out := c.OutOrStdout()
+	if jsonOutput(c) {
+		return writeJSONLine(out, reply.Body)
+	}
+	var res fleetStatusResult
+	if err := json.Unmarshal(reply.Body, &res); err != nil {
+		return err
+	}
+	_, _ = io.WriteString(out, "\033[H\033[2J")
+	return renderFleetStatus(out, res)
+}
+
+// fleetStreamTarget reads the fleet subject id and the daemon's HTTP port off one
+// cco.fleet.status call — the atomic bootstrap a stream attaches with.
+func fleetStreamTarget(c *cobra.Command) (subjectID string, port int, err error) {
+	reply, err := runOp(c, mFleetStatus.op(), nil)
+	if err != nil {
+		return "", 0, err
+	}
+	var res fleetStatusResult
+	if err := json.Unmarshal(reply.Body, &res); err != nil {
+		return "", 0, err
+	}
+	if res.FleetSubject == "" {
+		return "", 0, errors.New("fleet subject not yet bootstrapped")
+	}
+	return res.FleetSubject, res.HTTPPort, nil
+}
+
+// consumeFleet streams the fleet subject's events to emit, one at a time, until ctx is
+// cancelled. It reuses cc-interact's consumer machinery — the same path agent watch
+// drives — refreshing the port through cco.fleet.status so a daemon swap never strands
+// the stream.
+func consumeFleet(ctx context.Context, d cmd.Deps, subjectID string, port int, consumer string, emit func(string) error) error {
+	src := consume.StreamSource{
+		Port: port, SubjectID: subjectID, Consumer: consumer, ClaudePID: os.Getpid(),
+		Paths: d.Paths, WindowAlive: d.WindowAlive,
+		Refresh: refreshFleetPort(newClient()),
+	}
+	return consume.ConsumeEvents(ctx, src, func(_ int64, data string) (bool, error) {
+		if err := emit(data); err != nil {
+			return false, err
+		}
+		return false, nil
+	})
+}
+
+// refreshFleetPort re-reads the daemon's current HTTP port through cco.fleet.status, so
+// a version-skew daemon swap doesn't strand the fleet SSE consumer. It avoids OpResolve
+// (which would mint a subject) by reusing the status op that returns the live port.
+func refreshFleetPort(client *daemon.Client) func(context.Context) (int, error) {
+	return func(ctx context.Context) (int, error) {
+		reply, err := client.Do(ctx, daemon.Envelope{
+			Op: mFleetStatus.op(), Session: AppName, ClaudePID: os.Getpid(), Scope: fleetScope,
+		})
+		if err != nil {
+			return 0, err
+		}
+		if !reply.OK {
+			return 0, errors.New(reply.Error)
+		}
+		var res fleetStatusResult
+		if err := json.Unmarshal(reply.Body, &res); err != nil {
+			return 0, err
+		}
+		return res.HTTPPort, nil
+	}
 }
 
 // mcpCmd is the parent-facing MCP control server entry point: a stdio JSON-RPC
