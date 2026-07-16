@@ -7,7 +7,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
-	github.com/yasyf/cc-interact v0.7.1
+	github.com/yasyf/cc-interact v0.8.0
 	github.com/yasyf/cc-notes v0.31.1
 	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6
 	modernc.org/sqlite v1.52.0

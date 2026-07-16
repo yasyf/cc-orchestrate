@@ -123,8 +123,8 @@ github.com/xanzy/ssh-agent v0.3.3 h1:+/15pJfg/RsTxqYcX6fHqOXZwwMP+2VyYWJeWM2qQFM
 github.com/xanzy/ssh-agent v0.3.3/go.mod h1:6dzNDKs0J9rVPHPhaGCukekBHKqfl+L3KghI1Bc68Uw=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e/go.mod h1:RbqR21r5mrJuqunuUZ/Dhy/avygyECGrLceyNeo4LiM=
-github.com/yasyf/cc-interact v0.7.1 h1:W1UkECiO+r44GuWpzU5nm7QhGZZppbeIa4aPG/YOuF4=
-github.com/yasyf/cc-interact v0.7.1/go.mod h1:RievdGL+pZaZ+yIUNz9Jfe3GQ30WwkanEjy6S+temoo=
+github.com/yasyf/cc-interact v0.8.0 h1:XM+qrtWiIeyf+c3jYHBL8GtcBIZ801a8HTr0oeKA9Qk=
+github.com/yasyf/cc-interact v0.8.0/go.mod h1:RievdGL+pZaZ+yIUNz9Jfe3GQ30WwkanEjy6S+temoo=
 github.com/yasyf/cc-notes v0.31.1 h1:KKtVy9PHhCK5qB/JW+2w/EiKPFRhhkYXGNZJmCsHqLU=
 github.com/yasyf/cc-notes v0.31.1/go.mod h1:ozaCHRQL1KMgOEywobSaFQcalyQfqGsWWcx9ZexSads=
 go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6 h1:LT4Uj+66TADciHrl4qqc8U2rFcNZ6rqzvN0ZaBRsWoo=
