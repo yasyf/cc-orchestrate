@@ -21,6 +21,9 @@ const (
 	Plugin = "cc-orchestrate"
 	// ChannelID is the Claude channel identifier for the cc-orchestrate plugin.
 	ChannelID = "plugin:" + Plugin + "@" + Marketplace
+	// ChannelSource is the source attribute Claude renders on this plugin's
+	// channel tags: plugin:<plugin>:<mcp server name>.
+	ChannelSource = "plugin:" + Plugin + ":cc-orchestrate"
 )
 
 // ManagedSettingsPath returns Claude's machine-wide managed settings path.

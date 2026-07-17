@@ -93,7 +93,7 @@ session's `.mcp.json` to drive the fleet from another agent. See *MCP tools* bel
 
 | Command | Flags | Description |
 |---|---|---|
-| `cco setup-channels` | `--check` (default), `--apply`, `--decline` | `--check` prints `{"offer": bool, "reason": "…"}`. `--apply` adds the cc-orchestrate plugin to Claude's managed channel allowlist (one-time macOS admin prompt) so spawned agents receive `<channel source="cc-orchestrate">` tags. `--decline` records the refusal so the offer is not repeated. |
+| `cco setup-channels` | `--check` (default), `--apply`, `--decline` | `--check` prints `{"offer": bool, "reason": "…"}`. `--apply` adds the cc-orchestrate plugin to Claude's managed channel allowlist (one-time macOS admin prompt) so spawned agents receive `<channel source="plugin:cc-orchestrate:cc-orchestrate">` tags. `--decline` records the refusal so the offer is not repeated. |
 
 ## Substrate commands (cc-interact plane)
 
@@ -110,7 +110,7 @@ Claude session.
 | `cco watch` | Stream events from a session (`--session`, `--subject-id`, `--consumer`, `--exclude-origin`). |
 | `cco session record` | Record a transcript/events for a session (`--session`, `--output`). |
 | `cco guard-edit` | Edit a guard-style prompt (`--session`, `--name`, `--edit`). |
-| `cco channel` | Run the channel MCP server over stdio (`--session`, default `$CLAUDE_CODE_SESSION_ID`; `--cwd`, default the current directory). Loaded into every session by the cc-orchestrate plugin; pushes the session's events as channel tags and serves the `report` tool. |
+| `cco channel` | Run the channel MCP server over stdio (`--session`, default `$CLAUDE_CODE_SESSION_ID`; `--cwd`, default the current directory). Loaded by the cc-orchestrate plugin; pushes the session's events as channel tags (rendered only in `--channels` sessions — every spawned child) and serves the `report` tool. |
 | `cco channel-ack` | Prove the channel round trip when the first tag arrives (`--session`, `--cwd`). |
 
 ## MCP tools

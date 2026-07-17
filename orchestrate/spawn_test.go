@@ -46,8 +46,7 @@ func TestChildSettings(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := childSettings(tc.self)
 			var got struct {
-				Channels []string                 `json:"channels"`
-				Hooks    map[string][]hookMatcher `json:"hooks"`
+				Hooks map[string][]hookMatcher `json:"hooks"`
 			}
 			if err := json.Unmarshal([]byte(raw), &got); err != nil {
 				t.Fatalf("childSettings produced invalid JSON: %v\n%s", err, raw)
@@ -70,8 +69,8 @@ func TestChildSettings(t *testing.T) {
 				guard[0].Hooks[0].Command != tc.wantGuard {
 				t.Errorf("PreToolUse hook = %+v, want command %q", guard[0].Hooks, tc.wantGuard)
 			}
-			if want := []string{channelsetup.ChannelID}; !slices.Equal(got.Channels, want) {
-				t.Errorf("channels = %v, want %v", got.Channels, want)
+			if strings.Contains(raw, "channels") {
+				t.Errorf("childSettings carries a channels key (opt-in rides --channels): %s", raw)
 			}
 		})
 	}
@@ -93,6 +92,7 @@ func TestClaudeCommand(t *testing.T) {
 		want := []string{
 			"claude",
 			"--session-id", sid,
+			"--channels", channelsetup.ChannelID,
 			"--settings", childSettings(self),
 			"--append-system-prompt", spawnBrief(self, sid, scope),
 			"fix the bug",
@@ -106,6 +106,7 @@ func TestClaudeCommand(t *testing.T) {
 		want := []string{
 			"claude",
 			"--session-id", sid,
+			"--channels", channelsetup.ChannelID,
 			"--settings", childSettings(self),
 			"--append-system-prompt", spawnBrief(self, sid, scope),
 		}
@@ -129,6 +130,7 @@ func TestResumeCommand(t *testing.T) {
 	want := []string{
 		"claude",
 		"--resume", sid,
+		"--channels", channelsetup.ChannelID,
 		"--settings", childSettings(self),
 		"--append-system-prompt", spawnBrief(self, sid, scope),
 	}
@@ -154,6 +156,7 @@ func TestPooledClaudeCommands(t *testing.T) {
 			want: []string{
 				"/opt/homebrew/bin/ccp", "run",
 				"--session-id", sid,
+				"--channels", channelsetup.ChannelID,
 				"--settings", childSettings(self),
 				"--append-system-prompt", spawnBrief(self, sid, scope),
 				"fix the bug",
@@ -165,6 +168,7 @@ func TestPooledClaudeCommands(t *testing.T) {
 			want: []string{
 				"/opt/homebrew/bin/ccp", "run",
 				"--resume", sid,
+				"--channels", channelsetup.ChannelID,
 				"--settings", childSettings(self),
 				"--append-system-prompt", spawnBrief(self, sid, scope),
 			},
@@ -203,7 +207,7 @@ func TestSpawnBrief(t *testing.T) {
 	}{
 		{name: "watch command", want: "/opt/cc-orchestrate watch --session sid-1 --cwd /work"},
 		{name: "channel ack command", want: "/opt/cc-orchestrate channel-ack --session sid-1 --cwd /work"},
-		{name: "channel tag", want: `<channel source="cc-orchestrate">`},
+		{name: "channel tag", want: `<channel source="plugin:cc-orchestrate:cc-orchestrate">`},
 		{name: "directive event", want: "orchestrate.message"},
 		{name: "report tool", want: `"report"`},
 		{name: "message id dedupe", want: `Deduplicate by the message's "id" field`},

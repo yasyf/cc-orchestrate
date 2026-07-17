@@ -48,15 +48,12 @@ type hookMatcher struct {
 
 // childSettings is the child's --settings: a SessionStart hook that records the
 // child's window for session-rotation rebind, and a PreToolUse edit gate over
-// the file-mutating tools. It also opts the child into the plugin-riding channel.
+// the file-mutating tools. Channel opt-in rides the --channels flag, not here —
+// the settings channels key does not feed the session channel gate.
 func childSettings(self string) string {
 	q := backend.ShellQuote(self)
-	b, _ := json.Marshal(struct {
-		Channels []string                 `json:"channels"`
-		Hooks    map[string][]hookMatcher `json:"hooks"`
-	}{
-		Channels: []string{channelsetup.ChannelID},
-		Hooks: map[string][]hookMatcher{
+	b, _ := json.Marshal(map[string]map[string][]hookMatcher{
+		"hooks": {
 			"SessionStart": {{Hooks: []hookCommand{{Type: "command", Command: q + " session-record"}}}},
 			"PreToolUse":   {{Matcher: "Edit|Write|NotebookEdit", Hooks: []hookCommand{{Type: "command", Command: q + " guard-edit"}}}},
 		},
@@ -71,6 +68,7 @@ func childSettings(self string) string {
 func claudeCommand(self, sid, scope, prompt string) []string {
 	argv := append(claudeInvocation(),
 		"--session-id", sid,
+		"--channels", channelsetup.ChannelID,
 		"--settings", childSettings(self),
 		"--append-system-prompt", spawnBrief(self, sid, scope),
 	)
@@ -89,6 +87,7 @@ func claudeCommand(self, sid, scope, prompt string) []string {
 func resumeCommand(self, sid, scope string) []string {
 	return append(claudeInvocation(),
 		"--resume", sid,
+		"--channels", channelsetup.ChannelID,
 		"--settings", childSettings(self),
 		"--append-system-prompt", spawnBrief(self, sid, scope),
 	)
@@ -114,7 +113,7 @@ RECEIVE:
 
     %s watch --session %s --cwd %s
 
-2. Messages may also arrive as <channel source="cc-orchestrate"> tags. On the FIRST such tag, run this command exactly once:
+2. Messages may also arrive as <channel source="%s"> tags. On the FIRST such tag, run this command exactly once:
 
     %s channel-ack --session %s --cwd %s
 
@@ -126,6 +125,7 @@ Then stop the watch Monitor with TaskStop and rely on channel tags from then on.
 
 REPORT: to send progress, a result, or a question back to your orchestrator, call the "report" tool from the cc-orchestrate MCP server with a short "text" and an optional "state" of "working", "blocked", or "done". Report when you start, when you finish, and whenever you are blocked or need a decision.`,
 		backend.ShellQuote(self), sid, backend.ShellQuote(scope),
+		channelsetup.ChannelSource,
 		backend.ShellQuote(self), sid, backend.ShellQuote(scope))
 }
 

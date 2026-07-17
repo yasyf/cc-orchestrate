@@ -21,8 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `transport` field is gone from the CLI output, the MCP tool, and the XRPC
   `cco.agent.sendMessage` result.
 - Spawned children run with the full user environment: `--mcp-config` and
-  `--strict-mcp-config` are dropped, and children opt into the channel via a
-  `channels` key in their `--settings`.
+  `--strict-mcp-config` are dropped, and children opt into the channel via the
+  `--channels` flag (the settings `channels` key does not feed the session
+  channel gate).
 
 ### Removed
 - The native terminal-typing send path; backend `SendText` now serves only the
