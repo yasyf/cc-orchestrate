@@ -19,7 +19,6 @@ import (
 	"github.com/yasyf/cc-interact/subject"
 
 	"github.com/yasyf/cc-orchestrate/backend"
-	"github.com/yasyf/cc-orchestrate/channelsetup"
 )
 
 func TestChildSettings(t *testing.T) {
@@ -92,7 +91,7 @@ func TestClaudeCommand(t *testing.T) {
 		want := []string{
 			"claude",
 			"--session-id", sid,
-			"--channels", channelsetup.ChannelID,
+			"--channels", channelPlugin.ChannelID(),
 			"--settings", childSettings(self),
 			"--append-system-prompt", spawnBrief(self, sid, scope),
 			"fix the bug",
@@ -106,7 +105,7 @@ func TestClaudeCommand(t *testing.T) {
 		want := []string{
 			"claude",
 			"--session-id", sid,
-			"--channels", channelsetup.ChannelID,
+			"--channels", channelPlugin.ChannelID(),
 			"--settings", childSettings(self),
 			"--append-system-prompt", spawnBrief(self, sid, scope),
 		}
@@ -130,7 +129,7 @@ func TestResumeCommand(t *testing.T) {
 	want := []string{
 		"claude",
 		"--resume", sid,
-		"--channels", channelsetup.ChannelID,
+		"--channels", channelPlugin.ChannelID(),
 		"--settings", childSettings(self),
 		"--append-system-prompt", spawnBrief(self, sid, scope),
 	}
@@ -156,7 +155,7 @@ func TestPooledClaudeCommands(t *testing.T) {
 			want: []string{
 				"/opt/homebrew/bin/ccp", "run",
 				"--session-id", sid,
-				"--channels", channelsetup.ChannelID,
+				"--channels", channelPlugin.ChannelID(),
 				"--settings", childSettings(self),
 				"--append-system-prompt", spawnBrief(self, sid, scope),
 				"fix the bug",
@@ -168,7 +167,7 @@ func TestPooledClaudeCommands(t *testing.T) {
 			want: []string{
 				"/opt/homebrew/bin/ccp", "run",
 				"--resume", sid,
-				"--channels", channelsetup.ChannelID,
+				"--channels", channelPlugin.ChannelID(),
 				"--settings", childSettings(self),
 				"--append-system-prompt", spawnBrief(self, sid, scope),
 			},

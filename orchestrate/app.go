@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/yasyf/cc-interact/channelsetup"
 	"github.com/yasyf/cc-interact/cmd"
 	"github.com/yasyf/cc-interact/daemon"
 	"github.com/yasyf/cc-interact/paths"
@@ -25,6 +26,10 @@ const (
 	// appDir is the state-directory basename under the user's home (~/.cc-orchestrate).
 	appDir = ".cc-orchestrate"
 )
+
+var channelPlugin = channelsetup.Plugin{Marketplace: "cc-orchestrate", Name: "cc-orchestrate"}
+
+const channelServer = "cc-orchestrate"
 
 // Version is the binary's build version, advertised in the channel handshake. It is
 // a var (not const) so the release build can inject the tag via

@@ -7,19 +7,19 @@ import (
 
 	"github.com/yasyf/cc-interact/channel"
 	"github.com/yasyf/cc-interact/daemon"
-
-	"github.com/yasyf/cc-orchestrate/channelsetup"
 )
 
 // channelNotifyMethod is the JSON-RPC method each subject event is pushed under
 // to a child agent's MCP channel.
 const channelNotifyMethod = "notifications/claude/channel"
 
-const channelInstructions = `This MCP server is the cc-orchestrate channel. Orchestrator directives arrive as <channel source="` + channelsetup.ChannelSource + `" type="..."> tags whose inner JSON has a "type" field identifying the event.
-
-An orchestrate.message event is a directive: its "text" field is an instruction from the orchestrator to act on. Other event types, such as status frames, are informational and need no reply.
-
-Outside an orchestrated child session the channel is silent, and silence needs nothing from you.`
+var channelInstructions = channel.Instructions(channel.InstructionsSpec{
+	Desc:          "the cc-orchestrate channel",
+	Traffic:       "Orchestrator directives arrive",
+	Source:        channelPlugin.Source(channelServer),
+	Guide:         `An orchestrate.message event is a directive: its "text" field is an instruction from the orchestrator to act on. Other event types, such as status frames, are informational and need no reply.`,
+	SilentOutside: "an orchestrated child session",
+})
 
 // channelTools advertises the child agent's one domain channel tool — report —
 // the orchestrated agent uses to send progress, results, or questions back to its

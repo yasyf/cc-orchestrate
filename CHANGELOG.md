@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `channels` entries), so children load the channel from the installed plugin.
 
 ### Changed
+- Channel setup now comes from cc-interact v0.10.0: the local `channelsetup`
+  package and hand-rolled `setup-channels` command are deleted in favor of
+  `channelsetup.Plugin` + `cmd.SetupChannelsCmd`, and the channel instructions
+  and spawn brief's receive protocol render through
+  `channel.Instructions`/`channel.ReceiveProtocol`. Behavior is unchanged except
+  the channel-instructions closer now carries the standard "never speaks
+  unsolicited" sentence.
 - `agent send-message` always appends to the event log; the reply is `{seq}` — the
   `transport` field is gone from the CLI output, the MCP tool, and the XRPC
   `cco.agent.sendMessage` result.

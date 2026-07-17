@@ -13,13 +13,13 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/yasyf/cc-interact/channel"
 	"github.com/yasyf/cc-interact/daemon"
 	"github.com/yasyf/cc-interact/event"
 	"github.com/yasyf/cc-interact/subject"
 
 	"github.com/yasyf/cc-orchestrate/backend"
 	"github.com/yasyf/cc-orchestrate/ccnotes"
-	"github.com/yasyf/cc-orchestrate/channelsetup"
 )
 
 // lifecycle is the subject lifecycle the orchestrator writes: a spawned agent's
@@ -68,7 +68,7 @@ func childSettings(self string) string {
 func claudeCommand(self, sid, scope, prompt string) []string {
 	argv := append(claudeInvocation(),
 		"--session-id", sid,
-		"--channels", channelsetup.ChannelID,
+		"--channels", channelPlugin.ChannelID(),
 		"--settings", childSettings(self),
 		"--append-system-prompt", spawnBrief(self, sid, scope),
 	)
@@ -87,7 +87,7 @@ func claudeCommand(self, sid, scope, prompt string) []string {
 func resumeCommand(self, sid, scope string) []string {
 	return append(claudeInvocation(),
 		"--resume", sid,
-		"--channels", channelsetup.ChannelID,
+		"--channels", channelPlugin.ChannelID(),
 		"--settings", childSettings(self),
 		"--append-system-prompt", spawnBrief(self, sid, scope),
 	)
@@ -106,27 +106,20 @@ func claudeInvocation() []string {
 // watch command is the exact line the agent must run; self and scope are
 // POSIX-shell-quoted so the Monitor's shell split sees one token each.
 func spawnBrief(self, sid, scope string) string {
-	return fmt.Sprintf(`You are a cc-orchestrate agent: a Claude Code instance spawned and supervised by an orchestrator. Two channels connect you to it.
+	receive := channel.ReceiveProtocol(channel.ReceiveProtocolSpec{
+		Watch:      fmt.Sprintf("%s watch --session %s --cwd %s", backend.ShellQuote(self), sid, backend.ShellQuote(scope)),
+		Source:     channelPlugin.Source(channelServer),
+		Ack:        fmt.Sprintf("%s channel-ack --session %s --cwd %s", backend.ShellQuote(self), sid, backend.ShellQuote(scope)),
+		DedupeHint: `Deduplicate by the message's "id" field: the same message may arrive on both paths around the switchover.`,
+	})
+	return `You are a cc-orchestrate agent: a Claude Code instance spawned and supervised by an orchestrator. Two channels connect you to it.
 
 RECEIVE:
-1. Immediately, before doing anything else, arm a persistent Monitor running exactly this command:
-
-    %s watch --session %s --cwd %s
-
-2. Messages may also arrive as <channel source="%s"> tags. On the FIRST such tag, run this command exactly once:
-
-    %s channel-ack --session %s --cwd %s
-
-Then stop the watch Monitor with TaskStop and rely on channel tags from then on.
-
-3. Delivery is at-least-once, and the watch and channel have independent cursors. Deduplicate by the message's "id" field: the same message may arrive on both paths around the switchover.
+` + receive + `
 
 4. Only "orchestrate.message" events are directives to act on. Their "text" field is an instruction from your orchestrator. The channel also pushes other event types, such as status frames; ignore them.
 
-REPORT: to send progress, a result, or a question back to your orchestrator, call the "report" tool from the cc-orchestrate MCP server with a short "text" and an optional "state" of "working", "blocked", or "done". Report when you start, when you finish, and whenever you are blocked or need a decision.`,
-		backend.ShellQuote(self), sid, backend.ShellQuote(scope),
-		channelsetup.ChannelSource,
-		backend.ShellQuote(self), sid, backend.ShellQuote(scope))
+REPORT: to send progress, a result, or a question back to your orchestrator, call the "report" tool from the cc-orchestrate MCP server with a short "text" and an optional "state" of "working", "blocked", or "done". Report when you start, when you finish, and whenever you are blocked or need a decision.`
 }
 
 // agentSlug is a spawned subject's stable, unique URL name, derived from the
