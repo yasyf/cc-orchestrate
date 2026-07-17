@@ -175,6 +175,7 @@ var (
 	mRepoShow     = query("cco.repo.show", "Show one repo by id or name.", rpc, handleRepoShow)
 	mRepoActivate = procedure("cco.repo.activate", "Mark a repo active.", full, handleRepoActivate)
 	mRepoKill     = procedure("cco.repo.kill", "Kill a repo, its backend workspace, and all of its agents.", full, handleRepoKill)
+	mRegistryList = query("cco.registry.list", "List repos from the reposync registry and their activated orchestration repo ids.", full, handleRegistryList)
 
 	mWorkstreamCreate   = procedure("cco.workstream.create", "Create a workstream — a branch and its worktree — in a repo, backed by a fresh backend workspace.", full, handleWorkstreamCreate)
 	mWorkstreamList     = query("cco.workstream.list", "List the workstreams, optionally filtered by repo.", full, handleWorkstreamList)
@@ -202,12 +203,12 @@ var (
 	mConfigList  = query("cco.config.list", "List the persisted config key-value pairs.", rpc, handleConfigList)
 	mConfigUnset = procedure("cco.config.unset", "Delete one persisted config key.", rpc, handleConfigUnset)
 
-	mFleetStatus    = query("cco.fleet.status", "The atomic fleet bootstrap: the fleet subject and its resume seq, the HTTP port, and every repo, workstream, sprint, and agent view.", full, handleFleetStatus)
+	mFleetStatus    = query("cco.fleet.status", "The atomic fleet bootstrap: the fleet subject and its resume seq, the HTTP port, and every repo, registry, workstream, sprint, and agent view.", full, handleFleetStatus)
 	mFleetSerialize = procedure("cco.fleet.serialize", "Snapshot every active agent into a restorable bundle.", full, handleSerialize)
 	mFleetRestore   = procedure("cco.fleet.restore", "Restore agents from a serialized bundle.", full, handleRestore)
 
 	methods = []method{
-		mRepoCreate, mRepoList, mRepoShow, mRepoActivate, mRepoKill,
+		mRepoCreate, mRepoList, mRepoShow, mRepoActivate, mRepoKill, mRegistryList,
 		mWorkstreamCreate, mWorkstreamList, mWorkstreamShow, mWorkstreamActivate, mWorkstreamKill,
 		mSprintCreate, mSprintList, mSprintShow, mSprintActivate, mSprintKill,
 		mAgentSpawn, mAgentList, mAgentShow, mAgentSendMessage, mAgentKill, mAgentRespawn, mAgentCapture, mAgentReport,

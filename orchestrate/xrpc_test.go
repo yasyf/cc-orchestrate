@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/yasyf/cc-interact/daemon"
+	"github.com/yasyf/reposync/registry"
 )
 
 // newXRPCServer builds a registered daemon with the /xrpc routes mounted and an
@@ -136,6 +137,16 @@ func TestXRPCCatalog(t *testing.T) {
 	if list.Output["type"] != "object" && list.Output["type"] != "array" {
 		t.Errorf("cco.repo.list output schema type = %v, want object/array", list.Output["type"])
 	}
+	registryList, ok := byName["cco.registry.list"]
+	if !ok {
+		t.Fatal("catalog missing cco.registry.list")
+	}
+	if registryList.Type != string(kindQuery) {
+		t.Errorf("cco.registry.list type = %q, want query", registryList.Type)
+	}
+	if registryList.Output["type"] != "array" {
+		t.Errorf("cco.registry.list output schema type = %v, want array", registryList.Output["type"])
+	}
 	if spawn, ok := byName["cco.agent.spawn"]; !ok || spawn.Type != string(kindProcedure) {
 		t.Errorf("cco.agent.spawn = %+v, ok=%v, want a procedure", spawn, ok)
 	}
@@ -189,6 +200,48 @@ func TestXRPCGetQueryRoundTrip(t *testing.T) {
 	}
 	if !out.Found || out.Value != "local" {
 		t.Fatalf("get = %+v, want value=local found=true", out)
+	}
+}
+
+func TestXRPCRegistryListRoundTrip(t *testing.T) {
+	path := t.TempDir()
+	previous := loadRegistry
+	loadRegistry = func() (registry.Registry, error) {
+		return registry.Registry{Repos: []registry.Repo{{
+			Relpath: "registered", Path: path, Origin: "git@example.com:registered.git", Trunk: "main",
+		}}}, nil
+	}
+	t.Cleanup(func() { loadRegistry = previous })
+	_, ts := newXRPCServer(t)
+
+	resp := doReq(t, ts, http.MethodGet, "/xrpc/cco.registry.list", "")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []registryRepoView
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := registryRepoView{Relpath: "registered", Path: path, Origin: "git@example.com:registered.git", Trunk: "main"}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("registry list = %+v, want [%+v]", got, want)
+	}
+	var shape []map[string]json.RawMessage
+	if err := json.Unmarshal(body, &shape); err != nil {
+		t.Fatal(err)
+	}
+	if len(shape) != 1 || len(shape[0]) != 4 {
+		t.Fatalf("registry list JSON shape = %s, want one entry with four fields", body)
+	}
+	for _, field := range []string{"relpath", "path", "origin", "trunk"} {
+		if _, ok := shape[0][field]; !ok {
+			t.Fatalf("registry list JSON shape = %s, missing %q", body, field)
+		}
 	}
 }
 

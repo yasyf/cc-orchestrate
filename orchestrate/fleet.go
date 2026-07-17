@@ -393,15 +393,16 @@ type fleetStatusRequest struct{}
 // fleetStatusResult is the atomic bootstrap a TUI reads once before connecting the SSE
 // stream: the fleet subject and its current seq (the last_event_id to resume from, so
 // the stream is never replayed from zero), the live HTTP port, and the full current
-// repo/workstream/sprint/agent views (every status, unfiltered).
+// repo/registry/workstream/sprint/agent views (every status, unfiltered).
 type fleetStatusResult struct {
-	FleetSubject string           `json:"fleet_subject"`
-	Seq          int64            `json:"seq"`
-	HTTPPort     int              `json:"http_port"`
-	Repos        []repoView       `json:"repos"`
-	Workstreams  []workstreamView `json:"workstreams"`
-	Sprints      []sprintView     `json:"sprints"`
-	Agents       []agentView      `json:"agents"`
+	FleetSubject string             `json:"fleet_subject"`
+	Seq          int64              `json:"seq"`
+	HTTPPort     int                `json:"http_port"`
+	Repos        []repoView         `json:"repos"`
+	Registry     []registryRepoView `json:"registry"`
+	Workstreams  []workstreamView   `json:"workstreams"`
+	Sprints      []sprintView       `json:"sprints"`
+	Agents       []agentView        `json:"agents"`
 }
 
 // fleetStatusMidRead is a test seam fired between the cursor read and the views read, so
@@ -422,6 +423,10 @@ func handleFleetStatus(hc daemon.HandlerCtx, _ fleetStatusRequest) (fleetStatusR
 	if err != nil {
 		return fleetStatusResult{}, err
 	}
+	registry, err := registryRepoViews(repos)
+	if err != nil {
+		return fleetStatusResult{}, err
+	}
 	workstreams, err := listWorkstreams(hc.Ctx, hc.DB, "", "")
 	if err != nil {
 		return fleetStatusResult{}, err
@@ -439,6 +444,7 @@ func handleFleetStatus(hc daemon.HandlerCtx, _ fleetStatusRequest) (fleetStatusR
 		Seq:          seq,
 		HTTPPort:     hc.HTTPPort,
 		Repos:        make([]repoView, len(repos)),
+		Registry:     registry,
 		Workstreams:  make([]workstreamView, len(workstreams)),
 		Sprints:      make([]sprintView, len(sprints)),
 		Agents:       make([]agentView, len(agents)),

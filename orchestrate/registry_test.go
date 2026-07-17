@@ -167,7 +167,8 @@ func TestMCPToolParity(t *testing.T) {
 	want := map[string]bool{
 		"backends_list": true, "backend_select": true,
 		"config_get": true, "config_set": true,
-		"repo_create": true, "repo_list": true, "repo_activate": true, "repo_kill": true,
+		"registry_list": true,
+		"repo_create":   true, "repo_list": true, "repo_activate": true, "repo_kill": true,
 		"workstream_create": true, "workstream_list": true, "workstream_activate": true, "workstream_kill": true,
 		"sprint_create": true, "sprint_list": true, "sprint_activate": true, "sprint_kill": true,
 		"agent_spawn": true, "agent_list": true, "agent_show": true, "agent_send_message": true, "agent_kill": true,
