@@ -1,6 +1,7 @@
 package orchestrate
 
 import (
+	"bytes"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -87,13 +88,14 @@ type transcriptLine struct {
 // malformed lines, skips sidechains, and counts each assistant message's usage
 // exactly once even when the message spans several lines.
 type statusAcc struct {
-	pending    map[string]string // tool_use_id -> tool name, awaiting a tool_result
-	seenMsg    map[string]bool   // message ids whose usage is already counted
-	lastTool   string
-	lastTarget string
-	lastText   string
-	stopReason string
-	tokens     int
+	pending       map[string]string // tool_use_id -> tool name, awaiting a tool_result
+	seenMsg       map[string]bool   // message ids whose usage is already counted
+	lastTool      string
+	lastTarget    string
+	lastText      string
+	stopReason    string
+	tokens        int
+	pendingPrompt bool // a human prompt landed and no assistant turn has answered it yet
 }
 
 func newStatusAcc() *statusAcc {
@@ -111,8 +113,13 @@ func (a *statusAcc) feed(line []byte) {
 	case "assistant":
 		a.feedAssistant(l.Message)
 	case "user":
-		blocks := decodeBlocks(l.Message.Content)
-		for _, b := range blocks {
+		if isHumanPrompt(l.Message.Content) {
+			// A just-submitted human prompt: the session is working the turn until the
+			// next assistant activity clears it, even though no tool_use is pending yet.
+			a.pendingPrompt = true
+			return
+		}
+		for _, b := range decodeBlocks(l.Message.Content) {
 			if b.Type == "tool_result" {
 				delete(a.pending, b.ToolUseID)
 			}
@@ -121,6 +128,7 @@ func (a *statusAcc) feed(line []byte) {
 }
 
 func (a *statusAcc) feedAssistant(m *message) {
+	a.pendingPrompt = false
 	if m.Usage != nil && !a.seenMsg[m.ID] {
 		a.seenMsg[m.ID] = true
 		a.tokens += m.Usage.InputTokens + m.Usage.OutputTokens
@@ -165,6 +173,9 @@ func (a *statusAcc) state() State {
 		}
 		return StateWorking
 	}
+	if a.pendingPrompt {
+		return StateWorking
+	}
 	switch a.stopReason {
 	case "":
 		return StateUnknown
@@ -173,6 +184,14 @@ func (a *statusAcc) state() State {
 	default:
 		return StateWorking
 	}
+}
+
+// isHumanPrompt reports whether a user message's content is a bare JSON string — a
+// typed human prompt rather than a tool_result block array or a null/absent body. A
+// string literal is the only content shape that starts with a double quote.
+func isHumanPrompt(raw json.RawMessage) bool {
+	content := bytes.TrimSpace(raw)
+	return len(content) > 0 && content[0] == '"'
 }
 
 // decodeBlocks reads a message's content as a block array, returning nil when the

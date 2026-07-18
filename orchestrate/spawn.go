@@ -355,6 +355,9 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 		CreatedAt: nowStamp(),
 	}
 	if err := insertAgent(hc.Ctx, hc.DB, ag); err != nil {
+		// The terminal is live but has no row; the supervisor only reconciles agents that
+		// have one, so tear it down rather than leak an unmanaged claude forever.
+		_ = b.Kill(hc.Ctx, handle)
 		return agentSpawnResult{}, err
 	}
 	spawnAfterInsert()
@@ -392,12 +395,29 @@ func compensateSpawn(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc
 	mu := agentLock(ag.ID)
 	mu.Lock()
 	defer mu.Unlock()
-	cur, err := getAgent(ctx, db, ag.ID)
-	if err != nil {
-		return err
+	return compensateSpawnLocked(ctx, db, appendFn, ag)
+}
+
+// compensateSpawnLocked is compensateSpawn's body for a caller that already holds
+// agentLock(ag.ID) — the path handleAdopt takes, since it holds the lock across its
+// whole op body and re-acquiring it here would deadlock.
+func compensateSpawnLocked(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow) error {
+	cur, readErr := getAgent(ctx, db, ag.ID)
+	// Flip off Active first and unconditionally — even when the read failed — so an
+	// Active-but-dead orphan needs two independent failures (this write AND the teardown
+	// below) rather than a single getAgent blip. This is what lets a workstream teardown
+	// that follows skip a still-Active sid without leaving a live orphan.
+	flipErr := setAgentLifecycle(ctx, db, ag.ID, StatusExited)
+	if readErr != nil {
+		return errors.Join(readErr, flipErr)
 	}
 	if cur.Status != StatusActive {
-		return nil
+		// Already exited by another path before our flip: EventExited and the terminal
+		// teardown already happened once, so don't repeat them.
+		return flipErr
+	}
+	if flipErr != nil {
+		return flipErr
 	}
 	if err := softExitAgent(ctx, db, appendFn, cur); err != nil {
 		return err

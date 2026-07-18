@@ -87,6 +87,7 @@ func TestTerminalEventOnlyExited(t *testing.T) {
 		{EventRestored, false},
 		{EventStatus, false},
 		{EventSpawned, false},
+		{EventAdopted, false},
 	} {
 		t.Run(tc.event, func(t *testing.T) {
 			if got := isTerminal(tc.event); got != tc.want {

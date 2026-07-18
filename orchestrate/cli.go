@@ -61,6 +61,7 @@ func Root() *cobra.Command {
 		workstreamCmd(),
 		sprintCmd(),
 		agentCmd(),
+		adoptCmd(),
 		fleetCmd(),
 		serializeCmd(),
 		restoreCmd(),
@@ -194,7 +195,13 @@ func withSessionDefault(c *cobra.Command) *cobra.Command {
 // return the reply (turning a non-ok reply into an error). A nil body sends no
 // domain payload.
 func runOp(c *cobra.Command, op daemon.Op, body any) (daemon.Reply, error) {
-	ctx := c.Context()
+	return runOpCtx(c.Context(), op, body)
+}
+
+// runOpCtx is runOp bound to an explicit context, so a caller with a deadline (the
+// adopt wait loop's --timeout) can cancel the round trip rather than ride the
+// command's base context.
+func runOpCtx(ctx context.Context, op daemon.Op, body any) (daemon.Reply, error) {
 	d := deps()
 	if err := d.EnsureCurrent(ctx); err != nil {
 		return daemon.Reply{}, err
@@ -854,6 +861,28 @@ func agentCmd() *cobra.Command {
 	}
 
 	c.AddCommand(spawn, list, sendMessage, show, capture, respawn, watch, kill, attach)
+	return c
+}
+
+// adoptCmd is the top-level `adopt` command: list hand-started Claude Code sessions
+// under --cwd that cc-orchestrate could adopt, or adopt one — by a unique
+// session-id prefix, or the newest under --latest — once it becomes ready.
+func adoptCmd() *cobra.Command {
+	opt := adoptOptions{cwd: ".", timeout: 10 * time.Minute}
+	c := &cobra.Command{
+		Use:   "adopt [session-id]",
+		Short: "List or adopt a hand-started Claude Code session into the fleet",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			return runAdopt(c, args, opt)
+		},
+	}
+	c.Flags().StringVar(&opt.cwd, "cwd", opt.cwd, "directory to list or adopt sessions under")
+	c.Flags().BoolVar(&opt.latest, "latest", false, "adopt the most recently active candidate")
+	c.Flags().StringVar(&opt.name, "name", "", "human-readable agent name")
+	c.Flags().BoolVar(&opt.relocate, "relocate", false, "move the session into a fresh cco worktree")
+	c.Flags().IntVar(&opt.pid, "pid", 0, "the foreign claude process id to stop (disambiguates an ambiguous match)")
+	c.Flags().DurationVar(&opt.timeout, "timeout", opt.timeout, "how long to wait for the session to become ready before giving up")
 	return c
 }
 

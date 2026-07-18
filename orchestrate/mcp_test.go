@@ -66,7 +66,7 @@ func TestMCPServer(t *testing.T) {
 		"workstream_create", "workstream_list", "workstream_activate", "workstream_kill",
 		"sprint_create", "sprint_list", "sprint_activate", "sprint_kill",
 		"agent_spawn", "agent_list", "agent_show", "agent_send_message", "agent_kill",
-		"agent_respawn", "agent_capture",
+		"agent_respawn", "agent_adopt", "agent_capture", "adopt_list",
 		"fleet_status", "fleet_serialize", "fleet_restore",
 	}
 	if len(listReply.Result.Tools) != len(want) {

@@ -75,6 +75,7 @@ const (
 	EventAbandoned  = "orchestrate.abandoned"  // restart budget exhausted; precedes the terminal EventExited (non-terminal)
 	EventSerialized = "orchestrate.serialized" // a snapshot bundle was written (non-terminal)
 	EventRestored   = "orchestrate.restored"   // an agent was restored from a bundle (non-terminal)
+	EventAdopted    = "orchestrate.adopted"    // a hand-started session was adopted into the fleet (non-terminal)
 )
 
 // LifecycleStatus is the lifecycle state stored on a repo or agent row. It is a

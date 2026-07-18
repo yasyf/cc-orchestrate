@@ -44,12 +44,32 @@ func TestTmux(t *testing.T) {
 				if err != nil {
 					t.Fatalf("CreateWorkstream: %v", err)
 				}
-				want := WorkstreamHandle{Backend: "tmux", ID: "my_proj_1", Name: "my.proj:1", Cwd: "/work", Worktree: "/work"}
+				want := WorkstreamHandle{Backend: "tmux", ID: "my_proj_1-0c9a453f", Name: "my.proj:1", Cwd: "/work", Worktree: "/work"}
 				if got != want {
 					t.Fatalf("handle = %+v, want %+v", got, want)
 				}
 			},
-			wantCalls: [][]string{{"tmux", "new-session", "-d", "-s", "my_proj_1", "-c", "/work"}},
+			wantCalls: [][]string{{"tmux", "new-session", "-d", "-s", "my_proj_1-0c9a453f", "-c", "/work"}},
+		},
+		{
+			name: "CreateWorkstream disambiguates same-name workstreams by cwd",
+			do: func(t *testing.T, b tmux) {
+				a, err := b.CreateWorkstream(ctx, WorkstreamSpec{Name: "main", Cwd: "/repos/a"})
+				if err != nil {
+					t.Fatalf("CreateWorkstream(a): %v", err)
+				}
+				repo2, err := b.CreateWorkstream(ctx, WorkstreamSpec{Name: "main", Cwd: "/repos/b"})
+				if err != nil {
+					t.Fatalf("CreateWorkstream(b): %v", err)
+				}
+				if a.ID == repo2.ID {
+					t.Fatalf("two repos' primary workstreams both named %q collided on session id %q", "main", a.ID)
+				}
+			},
+			wantCalls: [][]string{
+				{"tmux", "new-session", "-d", "-s", "main-95b628e2", "-c", "/repos/a"},
+				{"tmux", "new-session", "-d", "-s", "main-5199bb15", "-c", "/repos/b"},
+			},
 		},
 		{
 			name: "ListWorkstreams parses one session name per line",

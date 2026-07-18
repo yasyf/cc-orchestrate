@@ -19,6 +19,7 @@ const (
 	codeInvalidRequest opCode = "InvalidRequest"
 	codeNotFound       opCode = "NotFound"
 	codeConflict       opCode = "Conflict"
+	codeNotReady       opCode = "NotReady"
 	codeUnsupported    opCode = "Unsupported"
 	codeInternalError  opCode = "InternalError"
 )
@@ -195,8 +196,10 @@ var (
 	mAgentSendMessage = procedure("cco.agent.sendMessage", "Append a message to an agent's event log for delivery through its channel or watch.", full, handleSendMessage)
 	mAgentKill        = procedure("cco.agent.kill", "Kill a running agent.", full, handleAgentKill)
 	mAgentRespawn     = procedure("cco.agent.respawn", "Respawn one exited agent, or every eligible exited agent when dead is set, back into its existing session.", full, handleAgentRespawn)
+	mAgentAdopt       = procedure("cco.agent.adopt", "Adopt a hand-started Claude Code session: place it in the hierarchy, stop the original process, and relaunch it as a managed agent.", full, handleAdopt)
 	mAgentCapture     = query("cco.agent.capture", "Capture an active agent's current terminal screen.", full, handleAgentCapture)
 	mAgentReport      = procedure("cco.agent.report", "Append a child agent's report to its subject log (the child channel's tool).", sock, handleReport)
+	mAdoptList        = query("cco.adopt.list", "List hand-started Claude Code sessions in a directory that can be adopted.", full, handleAdoptList)
 
 	mConfigGet   = query("cco.config.get", "Read one persisted config key's value.", full, handleConfigGet)
 	mConfigSet   = procedure("cco.config.set", "Upsert one persisted config key.", full, handleConfigSet)
@@ -211,7 +214,7 @@ var (
 		mRepoCreate, mRepoList, mRepoShow, mRepoActivate, mRepoKill, mRegistryList,
 		mWorkstreamCreate, mWorkstreamList, mWorkstreamShow, mWorkstreamActivate, mWorkstreamKill,
 		mSprintCreate, mSprintList, mSprintShow, mSprintActivate, mSprintKill,
-		mAgentSpawn, mAgentList, mAgentShow, mAgentSendMessage, mAgentKill, mAgentRespawn, mAgentCapture, mAgentReport,
+		mAgentSpawn, mAgentList, mAgentShow, mAgentSendMessage, mAgentKill, mAgentRespawn, mAgentAdopt, mAgentCapture, mAgentReport, mAdoptList,
 		mConfigGet, mConfigSet, mConfigList, mConfigUnset,
 		mFleetStatus, mFleetSerialize, mFleetRestore,
 	}

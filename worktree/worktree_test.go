@@ -123,6 +123,127 @@ func TestCurrentBranch(t *testing.T) {
 	})
 }
 
+func TestToplevel(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	ctx := context.Background()
+	repo := t.TempDir()
+	initGitRepo(ctx, t, repo)
+	nested := filepath.Join(repo, "nested", "dir")
+	if err := os.MkdirAll(nested, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		dir     string
+		want    string
+		wantErr bool
+	}{
+		{name: "repo root", dir: repo, want: repo},
+		{name: "nested directory", dir: nested, want: repo},
+		{name: "non-repository directory", dir: t.TempDir(), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Toplevel(ctx, tc.dir)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("Toplevel: want error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Toplevel: %v", err)
+			}
+			if evalSymlinks(t, got) != evalSymlinks(t, tc.want) {
+				t.Fatalf("Toplevel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCommonDir(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	ctx := context.Background()
+	repo := t.TempDir()
+	initGitRepo(ctx, t, repo)
+	linked := filepath.Join(t.TempDir(), "linked")
+	mustRun(ctx, t, repo, "git", "worktree", "add", "-b", "linked-test", linked)
+	want := filepath.Join(repo, ".git")
+
+	for _, tc := range []struct {
+		name string
+		dir  string
+	}{
+		{name: "main worktree", dir: repo},
+		{name: "linked worktree", dir: linked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := CommonDir(ctx, tc.dir)
+			if err != nil {
+				t.Fatalf("CommonDir: %v", err)
+			}
+			if !filepath.IsAbs(got) {
+				t.Fatalf("CommonDir = %q, want absolute path", got)
+			}
+			if evalSymlinks(t, got) != evalSymlinks(t, want) {
+				t.Fatalf("CommonDir = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestDirty(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, repo string)
+		want  bool
+	}{
+		{
+			name:  "clean repository",
+			setup: func(*testing.T, string) {},
+		},
+		{
+			name: "untracked file",
+			setup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("new\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: true,
+		},
+		{
+			name: "modified tracked file",
+			setup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("changed\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			initGitRepo(ctx, t, repo)
+			tc.setup(t, repo)
+			got, err := Dirty(ctx, repo)
+			if err != nil {
+				t.Fatalf("Dirty: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("Dirty = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRemoveDirIfEmpty(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -177,13 +298,11 @@ func TestRemoveDirIfEmpty(t *testing.T) {
 func initGitRepo(ctx context.Context, t *testing.T, dir string) {
 	t.Helper()
 	mustRun(ctx, t, dir, "git", "init")
-	mustRun(ctx, t, dir, "git", "config", "user.email", "test@example.com")
-	mustRun(ctx, t, dir, "git", "config", "user.name", "cc-orchestrate test")
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustRun(ctx, t, dir, "git", "add", "README.md")
-	mustRun(ctx, t, dir, "git", "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", "init")
+	mustRun(ctx, t, dir, "git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "--no-verify", "-m", "init")
 }
 
 func mustRun(ctx context.Context, t *testing.T, dir, name string, args ...string) string {

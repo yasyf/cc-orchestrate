@@ -43,7 +43,7 @@ func TestTmuxIntegration(t *testing.T) {
 	// Raw name carries the '.' and ':' tmux reserves so the sanitized round trip is
 	// observable; unique per run via t.Name with no rand/date needed.
 	rawName := t.Name() + ".integ:0"
-	wantSession := tmuxNameReplacer.Replace(rawName)
+	wantSession := tmuxSessionName(WorkstreamSpec{Name: rawName, Cwd: cwd})
 
 	// Force-kill the private server no matter how the test exits so a failed
 	// assertion never leaks a tmux session or socket.

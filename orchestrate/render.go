@@ -275,6 +275,7 @@ type agentEventFields struct {
 	Text     string `json:"text"`
 	Backend  string `json:"backend"`
 	Terminal string `json:"terminal"`
+	Origin   string `json:"origin"`
 	Attempt  int    `json:"attempt"`
 	Attempts int    `json:"attempts"`
 }
@@ -293,6 +294,7 @@ func formatEventLine(data string) string {
 	e.Text = sanitizeLine(e.Text)
 	e.Backend = sanitizeLine(e.Backend)
 	e.Terminal = sanitizeLine(e.Terminal)
+	e.Origin = sanitizeLine(e.Origin)
 	var label, detail string
 	switch e.Type {
 	case EventStatus:
@@ -305,6 +307,8 @@ func formatEventLine(data string) string {
 		label = "exited"
 	case EventSpawned:
 		label, detail = "spawned", fmt.Sprintf("backend=%s terminal=%s", e.Backend, e.Terminal)
+	case EventAdopted:
+		label, detail = "adopted", fmt.Sprintf("backend=%s terminal=%s from=%s", e.Backend, e.Terminal, e.Origin)
 	case EventRestarted:
 		label, detail = "restarted", fmt.Sprintf("terminal=%s attempt=%d", e.Terminal, e.Attempt)
 	case EventAbandoned:

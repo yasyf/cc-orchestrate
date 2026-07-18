@@ -250,7 +250,7 @@ func splitErrorCode(errStr string) (opCode, string) {
 // serializes as a reply-error prefix.
 func knownCode(s string) (opCode, bool) {
 	switch opCode(s) {
-	case codeInvalidRequest, codeNotFound, codeConflict, codeUnsupported, codeInternalError:
+	case codeInvalidRequest, codeNotFound, codeConflict, codeNotReady, codeUnsupported, codeInternalError:
 		return opCode(s), true
 	}
 	return "", false
@@ -263,7 +263,7 @@ func statusForCode(code opCode) int {
 		return http.StatusBadRequest
 	case codeNotFound:
 		return http.StatusNotFound
-	case codeConflict:
+	case codeConflict, codeNotReady:
 		return http.StatusConflict
 	case codeUnsupported:
 		return http.StatusNotImplemented

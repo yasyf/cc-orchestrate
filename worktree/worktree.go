@@ -73,6 +73,45 @@ func CurrentBranch(ctx context.Context, repoRoot string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Toplevel returns the absolute root of the git worktree containing dir, via
+// git rev-parse --show-toplevel. A non-repository dir propagates as a wrapped
+// git error.
+func Toplevel(ctx context.Context, dir string) (string, error) {
+	out, err := run(ctx, dir, "git rev-parse --show-toplevel", "git", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// CommonDir returns the absolute path to the git directory shared by every
+// worktree containing dir. Git's relative output is resolved against dir.
+func CommonDir(ctx context.Context, dir string) (string, error) {
+	out, err := run(ctx, dir, "git rev-parse --git-common-dir", "git", "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	commonDir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(dir, commonDir)
+	}
+	abs, err := filepath.Abs(commonDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve git common dir: %w", err)
+	}
+	return abs, nil
+}
+
+// Dirty reports whether dir's git worktree has tracked or untracked changes,
+// via git status --porcelain.
+func Dirty(ctx context.Context, dir string) (bool, error) {
+	out, err := run(ctx, dir, "git status --porcelain", "git", "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
 // UsesJJ reports whether repoRoot is a jj repository, i.e. it holds a .jj entry.
 func UsesJJ(repoRoot string) bool {
 	_, err := os.Stat(filepath.Join(repoRoot, ".jj"))

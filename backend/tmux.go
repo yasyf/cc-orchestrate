@@ -2,6 +2,8 @@ package backend
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 )
 
@@ -33,8 +35,16 @@ func (b tmux) Caps() Caps { return Capabilities(CanSendText, CanCapture, CanEnum
 
 func (b tmux) EnsureReady(_ context.Context) error { return nil }
 
+// tmuxSessionName appends a short hash of Cwd to the sanitized name, since two
+// workstreams in different repos can share a display name (e.g. "main") but
+// never share a worktree.
+func tmuxSessionName(spec WorkstreamSpec) string {
+	sum := sha256.Sum256([]byte(spec.Cwd))
+	return tmuxNameReplacer.Replace(spec.Name) + "-" + hex.EncodeToString(sum[:4])
+}
+
 func (b tmux) CreateWorkstream(ctx context.Context, spec WorkstreamSpec) (WorkstreamHandle, error) {
-	session := tmuxNameReplacer.Replace(spec.Name)
+	session := tmuxSessionName(spec)
 	if _, err := b.run(ctx, tmuxBin, "new-session", "-d", "-s", session, "-c", spec.Cwd); err != nil {
 		return WorkstreamHandle{}, err
 	}

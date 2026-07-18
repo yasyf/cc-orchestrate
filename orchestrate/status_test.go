@@ -91,9 +91,21 @@ func TestStatusAccumulator(t *testing.T) {
 			want:  Status{State: StateWorking, Tool: "Bash", Target: "go test ./...", Tokens: 12},
 		},
 		{
-			name:  "string user content does not disturb state",
+			name:  "string user content does not disturb a pending tool_use",
 			lines: []string{lineBash, lineUserPrompt},
 			want:  Status{State: StateWorking, Tool: "Bash", Target: "go test ./...", Tokens: 12},
+		},
+		{
+			// A human prompt after an idle end_turn means the session is working the turn,
+			// even before the assistant emits its first tool_use.
+			name:  "human prompt after idle turn is working",
+			lines: []string{lineText, lineUserPrompt},
+			want:  Status{State: StateWorking, LastText: "All done.", Tokens: 30},
+		},
+		{
+			name:  "assistant activity clears a pending human prompt back to idle",
+			lines: []string{lineText, lineUserPrompt, lineText},
+			want:  Status{State: StateIdle, LastText: "All done.", Tokens: 30},
 		},
 	}
 	for _, tc := range cases {

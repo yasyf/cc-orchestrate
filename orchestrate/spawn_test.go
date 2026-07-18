@@ -409,8 +409,9 @@ func TestTailerManagerStartStop(t *testing.T) {
 // spawnBackend is a registered test backend that records the SpawnSpec it
 // receives, so handleSpawn's wiring can be asserted without a live claude.
 type spawnBackend struct {
-	spec   *backend.SpawnSpec
-	killed *[]backend.AgentHandle
+	spec    *backend.SpawnSpec
+	killed  *[]backend.AgentHandle
+	onSpawn func(backend.SpawnSpec)
 }
 
 func (spawnBackend) Name() backend.Name                { return "spawntest" }
@@ -425,7 +426,12 @@ func (spawnBackend) CreateWorkstream(context.Context, backend.WorkstreamSpec) (b
 }
 
 func (b spawnBackend) Spawn(_ context.Context, spec backend.SpawnSpec) (backend.AgentHandle, error) {
-	*b.spec = spec
+	if b.spec != nil {
+		*b.spec = spec
+	}
+	if b.onSpawn != nil {
+		b.onSpawn(spec)
+	}
 	return backend.AgentHandle{Backend: "spawntest", ID: "term-1", SessionID: spec.SessionID}, nil
 }
 
@@ -697,6 +703,66 @@ func TestHandleSpawn(t *testing.T) {
 	}
 	if last := gotSpec.Command[len(gotSpec.Command)-1]; last != "fix it" {
 		t.Errorf("spawn command trailing arg = %q, want the prompt", last)
+	}
+}
+
+// TestHandleSpawnKillsTerminalOnInsertFailure proves the fix-11 stewardship gap is closed
+// for handleSpawn too: a post-spawn insert failure tears down the just-spawned terminal so
+// no unmanaged claude is left running without a row.
+func TestHandleSpawnKillsTerminalOnInsertFailure(t *testing.T) {
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	oldLookup := lookupPath
+	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { lookupPath = oldLookup })
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	db := st.DB()
+
+	if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "spawntest", Cwd: "/tmp/alpha", Status: "active", CreatedAt: "t0"}); err != nil {
+		t.Fatalf("insertRepo: %v", err)
+	}
+	if err := insertWorkstream(ctx, db, workstreamRow{ID: "w1", RepoID: "p1", Name: "main", Backend: "spawntest", WorkspaceHandle: "ws-1", Branch: "main", Worktree: "/tmp/alpha", IsPrimary: true, Status: "active", CreatedAt: "t0"}); err != nil {
+		t.Fatalf("insertWorkstream: %v", err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: "active", CreatedAt: "t0"}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
+	}
+
+	killed := &[]backend.AgentHandle{}
+	backend.Register(spawnBackend{
+		killed: killed,
+		onSpawn: func(backend.SpawnSpec) {
+			if _, err := db.ExecContext(ctx, `DROP TABLE agents`); err != nil {
+				t.Errorf("drop agents: %v", err)
+			}
+		},
+	})
+
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db)}
+	appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+	body := mustJSON(t, map[string]string{"repo": "p1", "prompt": "fix it"})
+	hc := daemon.HandlerCtx{
+		Ctx: ctx, Env: daemon.Envelope{Body: body},
+		Window: subject.Window{Session: "parent", ClaudePID: 4242},
+		Scope:  "/parent", Subjects: subjects, DB: db, Append: appendFn,
+	}
+
+	if reply := runTyped(handleSpawn, hc); reply.OK {
+		t.Fatal("handleSpawn succeeded despite a dropped agents table")
+	}
+	if len(*killed) != 1 {
+		t.Errorf("terminal kills = %d, want 1 (the orphaned terminal was torn down)", len(*killed))
 	}
 }
 

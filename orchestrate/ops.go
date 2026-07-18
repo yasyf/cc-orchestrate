@@ -153,6 +153,25 @@ func spawnedPayload(ag agentRow) json.RawMessage {
 	return b
 }
 
+// adoptedEvent is the EventAdopted body appended when a hand-started session is
+// adopted into the fleet; Origin describes the original terminal the session was
+// pulled from (the killed foreign pid, or that none was live). Type discriminates the
+// frame.
+type adoptedEvent struct {
+	Type     string `json:"type"`
+	AgentID  string `json:"agent_id"`
+	Backend  string `json:"backend"`
+	Terminal string `json:"terminal"`
+	Origin   string `json:"origin"`
+}
+
+func adoptedPayload(ag agentRow, origin string) json.RawMessage {
+	b, _ := json.Marshal(adoptedEvent{
+		Type: EventAdopted, AgentID: ag.ID, Backend: string(ag.Backend), Terminal: ag.TerminalHandle, Origin: origin,
+	})
+	return b
+}
+
 // restartedEvent is the EventRestarted body appended when the supervisor re-spawns
 // a vanished agent: the new terminal handle and the attempt count it reached. Type
 // discriminates the frame.
@@ -882,8 +901,11 @@ func clearActiveSelection(ctx context.Context, db *sql.DB, key, killedID string)
 // own post-insert re-check — the two cases that close the spawn/kill orphan window. A
 // loser of a concurrent flip returns (nil, false, nil) and touches nothing. It never
 // calls the backend nor removes a worktree — a sprint has none, it shares its
-// workstream's. Reused by the repo- and workstream-kill cascades and boot reconcile.
-func markSprintKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, sp sprintRow) ([]agentRow, bool, error) {
+// workstream's. skipAgentID, when non-empty, excludes one agent from the cascade — the
+// in-flight adopt whose caller already holds agentLock(skipAgentID) and owns its
+// compensation, so re-locking it here would self-deadlock. Reused by the repo- and
+// workstream-kill cascades and boot reconcile.
+func markSprintKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, sp sprintRow, skipAgentID string) ([]agentRow, bool, error) {
 	won, err := casSprintKilled(ctx, db, sp.ID)
 	if err != nil {
 		return nil, false, err
@@ -897,6 +919,9 @@ func markSprintKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFun
 	}
 	flipped := make([]agentRow, 0, len(agents))
 	for _, ag := range agents {
+		if ag.ID == skipAgentID {
+			continue
+		}
 		row, err := flipAgentExited(ctx, db, appendFn, ag.ID)
 		if err != nil {
 			return nil, false, err
@@ -964,7 +989,7 @@ func teardownAgents(ctx context.Context, db *sql.DB, agents []agentRow) error {
 // the backend nor removes the worktree — a caller that must also tear those down does so
 // after these row writes. Reused by the repo-kill cascade and boot reconcile when a
 // workspace has vanished out-of-band.
-func markWorkstreamKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ws workstreamRow) ([]agentRow, bool, error) {
+func markWorkstreamKilled(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ws workstreamRow, skipAgentID string) ([]agentRow, bool, error) {
 	won, err := casWorkstreamKilled(ctx, db, ws.ID)
 	if err != nil {
 		return nil, false, err
@@ -978,7 +1003,7 @@ func markWorkstreamKilled(ctx context.Context, db *sql.DB, appendFn daemon.Appen
 	}
 	var flipped []agentRow
 	for _, sp := range sprints {
-		rows, _, err := markSprintKilled(ctx, db, appendFn, sp)
+		rows, _, err := markSprintKilled(ctx, db, appendFn, sp, skipAgentID)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1036,7 +1061,7 @@ func killRepo(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, repo 
 		return nil, nil, false, err
 	}
 	for _, ws := range wss {
-		rows, wsWon, err := markWorkstreamKilled(ctx, db, appendFn, ws)
+		rows, wsWon, err := markWorkstreamKilled(ctx, db, appendFn, ws, "")
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -1310,6 +1335,13 @@ func handleWorkstreamKill(hc daemon.HandlerCtx, req workstreamKillRequest) (work
 	if err != nil {
 		return workstreamLifecycleResult{}, err
 	}
+	return killWorkstreamResolved(hc, ws, "")
+}
+
+// killWorkstreamResolved is handleWorkstreamKill's body for an already-resolved workstream.
+// skipAgentID excludes one agent from the kill cascade — the adopt-teardown path passes the
+// in-flight sid, whose agentLock the caller already holds, so the cascade never re-locks it.
+func killWorkstreamResolved(hc daemon.HandlerCtx, ws workstreamRow, skipAgentID string) (workstreamLifecycleResult, error) {
 	if ws.Status != StatusActive {
 		return workstreamLifecycleResult{}, opErr(codeConflict, fmt.Errorf("workstream %s is %s, not active", ws.ID, ws.Status))
 	}
@@ -1321,7 +1353,7 @@ func handleWorkstreamKill(hc daemon.HandlerCtx, req workstreamKillRequest) (work
 	if err != nil {
 		return workstreamLifecycleResult{}, err
 	}
-	flipped, won, err := markWorkstreamKilled(hc.Ctx, hc.DB, hc.Append, ws)
+	flipped, won, err := markWorkstreamKilled(hc.Ctx, hc.DB, hc.Append, ws, skipAgentID)
 	if err != nil {
 		return workstreamLifecycleResult{}, err
 	}
@@ -1527,7 +1559,7 @@ func handleSprintKill(hc daemon.HandlerCtx, req sprintKillRequest) (sprintKillRe
 	if sp.Status != StatusActive {
 		return sprintKillResult{}, opErr(codeConflict, fmt.Errorf("sprint %s is %s, not active", sp.ID, sp.Status))
 	}
-	flipped, won, err := markSprintKilled(hc.Ctx, hc.DB, hc.Append, sp)
+	flipped, won, err := markSprintKilled(hc.Ctx, hc.DB, hc.Append, sp, "")
 	if err != nil {
 		return sprintKillResult{}, err
 	}
