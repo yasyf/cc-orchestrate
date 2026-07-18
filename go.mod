@@ -10,6 +10,7 @@ require (
 	github.com/spf13/pflag v1.0.9
 	github.com/yasyf/cc-interact v0.11.0
 	github.com/yasyf/cc-notes v0.31.1
+	github.com/yasyf/daemonkit v0.1.0
 	github.com/yasyf/reposync v0.16.0
 	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6
 	golang.org/x/sys v0.46.0
@@ -33,7 +34,7 @@ require (
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/ebitengine/purego v0.10.0 // indirect
+	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect

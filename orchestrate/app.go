@@ -5,17 +5,14 @@ package orchestrate
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"path/filepath"
-	"sync"
-	"time"
 
 	"github.com/yasyf/cc-interact/channelsetup"
 	"github.com/yasyf/cc-interact/cmd"
 	"github.com/yasyf/cc-interact/daemon"
 	"github.com/yasyf/cc-interact/paths"
 	"github.com/yasyf/cc-interact/procs"
+	"github.com/yasyf/daemonkit/version"
 )
 
 const (
@@ -35,33 +32,9 @@ const channelServer = "cc-orchestrate"
 // -ldflags "-X github.com/yasyf/cc-orchestrate/orchestrate.Version=<tag>".
 var Version = "dev"
 
-// buildVersion makes dev builds win daemon eviction against releases and orders
-// dev builds by binary mtime (nanoseconds, so same-second rebuilds still evict)
-// without re-statting a replaced executable.
-var buildVersion = sync.OnceValue(func() string {
-	if Version != "dev" {
-		return resolveBuildVersion(Version, time.Time{}, false)
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		return resolveBuildVersion(Version, time.Time{}, false)
-	}
-	info, err := os.Stat(executable)
-	if err != nil {
-		return resolveBuildVersion(Version, time.Time{}, false)
-	}
-	return resolveBuildVersion(Version, info.ModTime(), true)
-})
-
-func resolveBuildVersion(stamped string, mtime time.Time, ok bool) string {
-	if stamped != "dev" {
-		return stamped
-	}
-	if !ok {
-		return "dev"
-	}
-	return fmt.Sprintf("9999.%d.0-dev", mtime.UnixNano())
-}
+// buildVersion is the memoized build version for daemon eviction: a stamped release
+// passes through, an unstamped dev build resolves to "9999.<mtime-nanos>.0-dev".
+func buildVersion() string { return version.Running(Version) }
 
 // Domain event types appended to a subject's cc-interact event log.
 const (
