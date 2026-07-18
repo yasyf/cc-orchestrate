@@ -116,11 +116,11 @@ func TestTmuxIntegration(t *testing.T) {
 	if err := b.KillWorkstream(ctx, proj); err != nil {
 		t.Fatalf("KillWorkstream: %v", err)
 	}
-	// Killing the last session shuts the private server down, so ListWorkstreams either
-	// succeeds without the session or fails with "no server running"; both prove gone.
+	// Killing the last session shuts the private server down; success without the
+	// session or either server-gone error string proves teardown.
 	switch afterKillProj, err := b.ListWorkstreams(ctx); {
 	case err != nil:
-		if !strings.Contains(err.Error(), "no server running") {
+		if !strings.Contains(err.Error(), "no server running") && !strings.Contains(err.Error(), "server exited unexpectedly") {
 			t.Fatalf("ListWorkstreams after KillWorkstream: unexpected error: %v", err)
 		}
 	case containsWorkstream(afterKillProj, proj.ID):

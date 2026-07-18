@@ -176,6 +176,17 @@ func (b zellij) AgentAlive(ctx context.Context, agent AgentHandle) (bool, error)
 	return false, fmt.Errorf("zellij: pane %s not found in session %s", agent.ID, agent.WorkstreamID)
 }
 
+// AttachArgv focuses the agent's pane in its zellij session, then returns the argv
+// that attaches this terminal to that session. agent.ID is the terminal_N pane id
+// paneID builds and agent.WorkstreamID is the session; the caller execs the returned
+// argv so zellij's client owns the TTY.
+func (b zellij) AttachArgv(ctx context.Context, agent AgentHandle) ([]string, error) {
+	if _, err := b.run(ctx, zellijBin, "--session", agent.WorkstreamID, "action", "focus-pane-id", agent.ID); err != nil {
+		return nil, err
+	}
+	return []string{zellijBin, "attach", agent.WorkstreamID}, nil
+}
+
 func paneID(p pane) string {
 	if p.IsPlugin {
 		return "plugin_" + strconv.Itoa(p.ID)

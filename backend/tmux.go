@@ -127,3 +127,18 @@ func (b tmux) AgentAlive(ctx context.Context, agent AgentHandle) (bool, error) {
 	}
 	return strings.TrimSpace(string(out)) != "1", nil
 }
+
+// AttachArgv focuses the agent's pane, then returns the argv that attaches this
+// terminal to the agent's tmux session. agent.ID is the pane id (%N), a global target
+// select-window/select-pane resolve to the window and pane holding the agent, and
+// agent.WorkstreamID is the tmux session the returned attach-session joins. The caller
+// execs the argv so tmux's client owns the TTY.
+func (b tmux) AttachArgv(ctx context.Context, agent AgentHandle) ([]string, error) {
+	if _, err := b.run(ctx, tmuxBin, "select-window", "-t", agent.ID); err != nil {
+		return nil, err
+	}
+	if _, err := b.run(ctx, tmuxBin, "select-pane", "-t", agent.ID); err != nil {
+		return nil, err
+	}
+	return []string{tmuxBin, "attach-session", "-t", agent.WorkstreamID}, nil
+}

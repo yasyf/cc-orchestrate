@@ -323,6 +323,45 @@ func TestZellijKillWorkstream(t *testing.T) {
 	}
 }
 
+// TestZellijAttachArgv asserts the focus pre-step targets the terminal_N pane in its
+// session and the returned argv attaches this terminal to that session, and that a
+// focus failure propagates without yielding an argv.
+func TestZellijAttachArgv(t *testing.T) {
+	ctx := context.Background()
+	agent := AgentHandle{Backend: "zellij", ID: "terminal_1", WorkstreamID: "proj-1"}
+
+	t.Run("focuses the pane then returns the attach argv", func(t *testing.T) {
+		calls, r := recorder("")
+		argv, err := zellij{run: r}.AttachArgv(ctx, agent)
+		if err != nil {
+			t.Fatalf("AttachArgv: %v", err)
+		}
+		if len(*calls) != 1 {
+			t.Fatalf("want exactly 1 pre-step call, got %d: %v", len(*calls), *calls)
+		}
+		got := append([]string{(*calls)[0].name}, (*calls)[0].args...)
+		wantCall := []string{"zellij", "--session", "proj-1", "action", "focus-pane-id", "terminal_1"}
+		if !slices.Equal(got, wantCall) {
+			t.Fatalf("pre-step call = %v, want %v", got, wantCall)
+		}
+		want := []string{"zellij", "attach", "proj-1"}
+		if !slices.Equal(argv, want) {
+			t.Fatalf("argv = %v, want %v", argv, want)
+		}
+	})
+
+	t.Run("a focus pre-step error propagates", func(t *testing.T) {
+		_, r := seqRecorder(nil, []error{errors.New("no such pane")})
+		argv, err := zellij{run: r}.AttachArgv(ctx, agent)
+		if err == nil {
+			t.Fatal("AttachArgv err = nil, want the pre-step error")
+		}
+		if argv != nil {
+			t.Fatalf("argv = %v, want nil on error", argv)
+		}
+	})
+}
+
 func TestZellijListWorkstreamsParsesRealList(t *testing.T) {
 	_, r := recorder(realSessionsList)
 	projects, err := zellij{run: r}.ListWorkstreams(context.Background())

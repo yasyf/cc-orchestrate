@@ -207,3 +207,41 @@ func TestTmuxAgentAlive(t *testing.T) {
 		})
 	}
 }
+
+// TestTmuxAttachArgv asserts the focus pre-steps target the pane id and the returned
+// argv attaches this terminal to the agent's session, and that a pre-step failure
+// propagates without yielding an argv.
+func TestTmuxAttachArgv(t *testing.T) {
+	ctx := context.Background()
+	agent := AgentHandle{Backend: "tmux", ID: "%3", WorkstreamID: "proj_one"}
+
+	t.Run("focuses the pane then returns the attach-session argv", func(t *testing.T) {
+		rec := &tmuxRecorder{}
+		argv, err := (tmux{run: rec.run}).AttachArgv(ctx, agent)
+		if err != nil {
+			t.Fatalf("AttachArgv: %v", err)
+		}
+		wantCalls := [][]string{
+			{"tmux", "select-window", "-t", "%3"},
+			{"tmux", "select-pane", "-t", "%3"},
+		}
+		if !reflect.DeepEqual(rec.calls, wantCalls) {
+			t.Fatalf("pre-step calls = %v, want %v", rec.calls, wantCalls)
+		}
+		want := []string{"tmux", "attach-session", "-t", "proj_one"}
+		if !reflect.DeepEqual(argv, want) {
+			t.Fatalf("argv = %v, want %v", argv, want)
+		}
+	})
+
+	t.Run("a focus pre-step error propagates", func(t *testing.T) {
+		rec := &tmuxRecorder{err: errors.New("can't find pane")}
+		argv, err := (tmux{run: rec.run}).AttachArgv(ctx, agent)
+		if err == nil {
+			t.Fatal("AttachArgv err = nil, want the pre-step error")
+		}
+		if argv != nil {
+			t.Fatalf("argv = %v, want nil on error", argv)
+		}
+	})
+}

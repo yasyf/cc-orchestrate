@@ -160,8 +160,8 @@ func TestAgentWatchObservesReport(t *testing.T) {
 	// The identical StreamSource streamAgent builds: a zero-value ExcludeOrigin, so
 	// the observer streams agent-origin frames.
 	src := consume.StreamSource{
-		Port: port, SubjectID: sub.ID, Consumer: watchConsumer, ClaudePID: os.Getpid(),
-		Paths: appPaths(), WindowAlive: windowAlive,
+		Port: port, SubjectID: sub.ID, Consumer: watchConsumer, ClaudePID: 4242,
+		Paths: appPaths(), WindowAlive: func(int) bool { return true },
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -352,7 +352,7 @@ func TestWatchFleetStatusPropagatesStreamErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse port from %q: %v", ts.URL, err)
 	}
-	d := cmd.Deps{Paths: appPaths(), WindowAlive: windowAlive}
+	d := cmd.Deps{Paths: appPaths(), ClaudePID: func() int { return 4242 }, WindowAlive: func(int) bool { return true }}
 
 	t.Run("fatal stream error", func(t *testing.T) {
 		parent := context.Background()

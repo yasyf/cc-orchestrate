@@ -3,10 +3,10 @@ package orchestrate
 import (
 	"context"
 	"encoding/json"
-	"os"
 
 	"github.com/yasyf/cc-interact/channel"
 	"github.com/yasyf/cc-interact/daemon"
+	"github.com/yasyf/cc-interact/procs"
 )
 
 // channelNotifyMethod is the JSON-RPC method each subject event is pushed under
@@ -27,7 +27,7 @@ var channelInstructions = channel.Instructions(channel.InstructionsSpec{
 // channel server is a separate stdio process and cannot Append directly.
 func channelTools(_ context.Context, session, scope string) ([]channel.Tool, string, string, error) {
 	client := newClient()
-	pid := os.Getpid()
+	pid := procs.ClaudePID()
 	report := channel.Tool{
 		Name:        "report",
 		Description: "Report progress, a result, or a question to your orchestrator; appends an orchestrate.report event (OriginAgent) to your subject's log.",

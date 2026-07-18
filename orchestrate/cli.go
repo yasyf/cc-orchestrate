@@ -844,7 +844,16 @@ func agentCmd() *cobra.Command {
 		},
 	}
 
-	c.AddCommand(spawn, list, sendMessage, show, capture, respawn, watch, kill)
+	attach := &cobra.Command{
+		Use:   "attach <id>",
+		Short: "Attach this terminal to a running agent's backend session",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, args []string) error {
+			return runAgentAttach(c, args[0])
+		},
+	}
+
+	c.AddCommand(spawn, list, sendMessage, show, capture, respawn, watch, kill, attach)
 	return c
 }
 
@@ -934,15 +943,16 @@ func watchAllAgents(c *cobra.Command, d cmd.Deps) error {
 // event or when ctx is cancelled.
 func streamAgent(ctx context.Context, d cmd.Deps, a agentView, emit func(string) error) error {
 	client := newClient()
-	subjectID, port, err := resolveAgentSubject(ctx, client, a.SessionID, a.Scope)
+	pid := d.ClaudePID()
+	subjectID, port, err := resolveAgentSubject(ctx, client, a.SessionID, a.Scope, pid)
 	if err != nil {
 		return err
 	}
 	// No ExcludeOrigin: the parent watch is an observer and must see every origin, including agent orchestrate.report events.
 	src := consume.StreamSource{
-		Port: port, SubjectID: subjectID, Consumer: watchConsumer, ClaudePID: os.Getpid(),
+		Port: port, SubjectID: subjectID, Consumer: watchConsumer, ClaudePID: pid,
 		Paths: d.Paths, WindowAlive: d.WindowAlive,
-		Refresh: refreshAgentPort(client, a.SessionID, a.Scope),
+		Refresh: refreshAgentPort(client, a.SessionID, a.Scope, pid),
 	}
 	return consume.ConsumeEvents(ctx, src, func(_ int64, data string) (bool, error) {
 		if err := emit(data); err != nil {
@@ -985,10 +995,10 @@ func emitLine(out io.Writer, mu *sync.Mutex, line string) error {
 // session+scope, returning its id and the daemon's HTTP handshake port. It
 // replicates cc-interact's unexported cmd.resolveSubject — unreachable across the
 // package boundary — differing only in the orchestrate consumer name.
-func resolveAgentSubject(ctx context.Context, client *daemon.Client, session, scope string) (string, int, error) {
+func resolveAgentSubject(ctx context.Context, client *daemon.Client, session, scope string, pid int) (string, int, error) {
 	for {
 		reply, err := client.Do(ctx, daemon.Envelope{
-			Op: daemon.OpResolve, Session: session, ClaudePID: os.Getpid(), Scope: scope, Consumer: watchConsumer,
+			Op: daemon.OpResolve, Session: session, ClaudePID: pid, Scope: scope, Consumer: watchConsumer,
 		})
 		if err != nil {
 			return "", 0, err
@@ -1007,10 +1017,10 @@ func resolveAgentSubject(ctx context.Context, client *daemon.Client, session, sc
 // refreshAgentPort re-resolves the daemon's current HTTP port for a streaming
 // agent, so a version-skew daemon swap doesn't strand the SSE consumer. It
 // replicates cc-interact's unexported cmd.refreshHandshake.
-func refreshAgentPort(client *daemon.Client, session, scope string) func(context.Context) (int, error) {
+func refreshAgentPort(client *daemon.Client, session, scope string, pid int) func(context.Context) (int, error) {
 	return func(ctx context.Context) (int, error) {
 		reply, err := client.Do(ctx, daemon.Envelope{
-			Op: daemon.OpResolve, Session: session, ClaudePID: os.Getpid(), Scope: scope, Consumer: watchConsumer,
+			Op: daemon.OpResolve, Session: session, ClaudePID: pid, Scope: scope, Consumer: watchConsumer,
 		})
 		if err != nil {
 			return 0, err
@@ -1231,10 +1241,11 @@ func fleetStreamTarget(c *cobra.Command) (subjectID string, port int, err error)
 // drives — refreshing the port through cco.fleet.status so a daemon swap never strands
 // the stream.
 func consumeFleet(ctx context.Context, d cmd.Deps, subjectID string, port int, consumer string, emit func(string) error) error {
+	pid := d.ClaudePID()
 	src := consume.StreamSource{
-		Port: port, SubjectID: subjectID, Consumer: consumer, ClaudePID: os.Getpid(),
+		Port: port, SubjectID: subjectID, Consumer: consumer, ClaudePID: pid,
 		Paths: d.Paths, WindowAlive: d.WindowAlive,
-		Refresh: refreshFleetPort(newClient()),
+		Refresh: refreshFleetPort(newClient(), pid),
 	}
 	return consume.ConsumeEvents(ctx, src, func(_ int64, data string) (bool, error) {
 		if err := emit(data); err != nil {
@@ -1247,10 +1258,10 @@ func consumeFleet(ctx context.Context, d cmd.Deps, subjectID string, port int, c
 // refreshFleetPort re-reads the daemon's current HTTP port through cco.fleet.status, so
 // a version-skew daemon swap doesn't strand the fleet SSE consumer. It avoids OpResolve
 // (which would mint a subject) by reusing the status op that returns the live port.
-func refreshFleetPort(client *daemon.Client) func(context.Context) (int, error) {
+func refreshFleetPort(client *daemon.Client, pid int) func(context.Context) (int, error) {
 	return func(ctx context.Context) (int, error) {
 		reply, err := client.Do(ctx, daemon.Envelope{
-			Op: mFleetStatus.op(), Session: AppName, ClaudePID: os.Getpid(), Scope: fleetScope,
+			Op: mFleetStatus.op(), Session: AppName, ClaudePID: pid, Scope: fleetScope,
 		})
 		if err != nil {
 			return 0, err

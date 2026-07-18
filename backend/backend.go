@@ -151,6 +151,19 @@ type AgentProber interface {
 	AgentAlive(ctx context.Context, agent AgentHandle) (bool, error)
 }
 
+// Attacher is a Backend that can hand this process's terminal to a running agent's
+// backend session, so a human takes over the agent's live terminal. AttachArgv runs
+// the backend's own focus pre-steps — selecting the window and pane holding the agent
+// — through the driver's run seam in-package, then returns the argv of the
+// multiplexer's foreground attach client. The TTY takeover never happens here: the
+// caller execs the returned argv to replace its own process, so the multiplexer
+// client owns the TTY, signals, and exit code. Like AgentProber it carries no Caps
+// bit — there is no LCD fallback for a terminal takeover, so the caller type-asserts
+// the interface directly rather than dispatching off a capability.
+type Attacher interface {
+	AttachArgv(ctx context.Context, agent AgentHandle) ([]string, error)
+}
+
 // registry holds the registered backends keyed by Name. registryMu guards it: drivers
 // Register from init, but Get is read concurrently from many tailer/prober goroutines,
 // so the map needs synchronization like the stdlib's sql.Register / image registries.

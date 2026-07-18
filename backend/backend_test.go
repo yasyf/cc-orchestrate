@@ -65,6 +65,25 @@ func TestValidateBackend(t *testing.T) {
 	}
 }
 
+// TestAttacherSet pins the exact set of backends implementing the optional Attacher
+// interface to {tmux, zellij}: attach hands a real multiplexer client this process's
+// TTY, which only a local pane-multiplexer backend can do. A driver that gains or
+// loses AttachArgv must update this guard deliberately, not drift silently — the same
+// contract caps_test enforces for Sender/Capturer.
+func TestAttacherSet(t *testing.T) {
+	want := map[Name]bool{tmuxName: true, zellijName: true}
+	for _, name := range Precedence {
+		b, ok := Get(name)
+		if !ok {
+			t.Fatalf("backend %q in Precedence is not registered", name)
+		}
+		_, isAttacher := b.(Attacher)
+		if isAttacher != want[name] {
+			t.Errorf("%s: implements Attacher = %v, want %v", name, isAttacher, want[name])
+		}
+	}
+}
+
 func names(bs []Backend) []Name {
 	out := make([]Name, len(bs))
 	for i, b := range bs {
