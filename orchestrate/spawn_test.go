@@ -1,9 +1,12 @@
 package orchestrate
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -977,6 +980,145 @@ func TestRespawnAgentPooling(t *testing.T) {
 				t.Fatalf("respawn command head = %v, want %v", gotSpec.Command, wantHead)
 			}
 		})
+	}
+}
+
+// respawnPersistFixture builds the world respawnAgent's persist-failure tests
+// share: a short poll interval, a test tailer manager, and a DB carrying the
+// spawn-pooling hierarchy plus one active spawntest agent.
+func respawnPersistFixture(t *testing.T) (context.Context, context.CancelFunc, *sql.DB, agentRow) {
+	t.Helper()
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+
+	db := newTestDB(ctx, t)
+	spawnPoolingHierarchy(ctx, t, db)
+	ag := agentRow{
+		ID: "a1", SprintID: "s1", Backend: "spawntest", TerminalHandle: "term-0",
+		SessionID: "sess-1", Scope: "/tmp/alpha", Name: "worker",
+		Status: StatusActive, State: StateUnknown, CreatedAt: "t0",
+	}
+	mustInsertAgent(ctx, t, db, ag)
+	return ctx, cancel, db, ag
+}
+
+// ctxKillBackend fails Kill under a canceled context, the way a real RPC-backed
+// backend would, so the compensation kill's cancel-detachment is observable.
+type ctxKillBackend struct {
+	spawnBackend
+}
+
+func (b ctxKillBackend) Kill(ctx context.Context, agent backend.AgentHandle) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return b.spawnBackend.Kill(ctx, agent)
+}
+
+// failingKillBackend fails every Kill, driving respawnAgent's leaked-terminal path.
+type failingKillBackend struct {
+	spawnBackend
+	killErr error
+}
+
+func (b failingKillBackend) Kill(context.Context, backend.AgentHandle) error { return b.killErr }
+
+// TestRespawnAgentKillsTerminalOnPersistFailure proves respawnAgent compensates a
+// spawn that succeeds but fails to persist: the just-spawned terminal (not the
+// prior incarnation's) is killed, so it never survives untracked.
+func TestRespawnAgentKillsTerminalOnPersistFailure(t *testing.T) {
+	ctx, _, db, ag := respawnPersistFixture(t)
+
+	killed := &[]backend.AgentHandle{}
+	backend.Register(spawnBackend{
+		killed: killed,
+		onSpawn: func(backend.SpawnSpec) {
+			if _, err := db.ExecContext(ctx, `DROP TABLE agents`); err != nil {
+				t.Errorf("drop agents: %v", err)
+			}
+		},
+	})
+
+	appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+	if _, err := respawnAgent(ctx, db, appendFn, ag); err == nil {
+		t.Fatal("respawnAgent succeeded despite a dropped agents table")
+	}
+	if len(*killed) != 1 {
+		t.Fatalf("terminal kills = %d, want 1 (the orphaned new terminal was torn down)", len(*killed))
+	}
+	if got, want := (*killed)[0].ID, "term-1"; got != want {
+		t.Errorf("killed terminal = %q, want %q (the new terminal, not the prior %q)", got, want, ag.TerminalHandle)
+	}
+}
+
+// TestRespawnAgentCanceledCtxPersistFailureStillKills proves the compensating kill
+// shares no fate with the failed persist: with the caller's ctx canceled mid-spawn
+// (failing the persist and any DB read), the kill still lands on the fresh terminal
+// from in-hand values under a cancel-detached ctx.
+func TestRespawnAgentCanceledCtxPersistFailureStillKills(t *testing.T) {
+	ctx, cancel, db, ag := respawnPersistFixture(t)
+
+	killed := &[]backend.AgentHandle{}
+	backend.Register(ctxKillBackend{spawnBackend{
+		killed:  killed,
+		onSpawn: func(backend.SpawnSpec) { cancel() },
+	}})
+
+	appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+	_, err := respawnAgent(ctx, db, appendFn, ag)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("respawnAgent error = %v, want context.Canceled", err)
+	}
+	if len(*killed) != 1 {
+		t.Fatalf("terminal kills = %d, want 1 despite the canceled ctx", len(*killed))
+	}
+	if got, want := (*killed)[0].ID, "term-1"; got != want {
+		t.Errorf("killed terminal = %q, want the fresh %q", got, want)
+	}
+	if got, want := (*killed)[0].WorkstreamID, "ws-1"; got != want {
+		t.Errorf("kill WorkstreamID = %q, want the backend workspace %q resolved without DB reads", got, want)
+	}
+}
+
+// TestRespawnAgentKillFailureSurfacesLeakedTerminal proves a compensation kill that
+// itself fails is never silent: both errors come back joined, carrying the leaked
+// terminal's id, and the leak is logged with enough identity for manual cleanup.
+func TestRespawnAgentKillFailureSurfacesLeakedTerminal(t *testing.T) {
+	ctx, _, db, ag := respawnPersistFixture(t)
+
+	var logs bytes.Buffer
+	oldOut := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldOut) })
+
+	killErr := errors.New("cmux gone")
+	backend.Register(failingKillBackend{spawnBackend{onSpawn: func(backend.SpawnSpec) {
+		if _, err := db.ExecContext(ctx, `DROP TABLE agents`); err != nil {
+			t.Errorf("drop agents: %v", err)
+		}
+	}}, killErr})
+
+	appendFn := func(context.Context, *event.Event) (int64, error) { return 1, nil }
+	_, err := respawnAgent(ctx, db, appendFn, ag)
+	if !errors.Is(err, killErr) {
+		t.Fatalf("respawnAgent error = %v, want it to join the kill failure %v", err, killErr)
+	}
+	if !strings.Contains(err.Error(), "no such table") {
+		t.Errorf("error %q lacks the persist failure", err)
+	}
+	if !strings.Contains(err.Error(), "term-1") {
+		t.Errorf("error %q lacks the leaked terminal id term-1", err)
+	}
+	for _, want := range []string{`"a1"`, "spawntest/term-1", "workspace ws-1", "session sess-1"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("leak log %q lacks %q", logs.String(), want)
+		}
 	}
 }
 

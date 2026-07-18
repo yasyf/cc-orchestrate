@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -439,7 +440,12 @@ func compensateSpawnLocked(ctx context.Context, db *sql.DB, appendFn daemon.Appe
 // resumeCommand rather than claudeCommand, and it updates the agent's existing row
 // instead of inserting a new one. It mints no new subject and writes no lifecycle
 // event: the caller (the supervisor) owns markRestartAttempt and the EventRestarted
-// it appends, and holds agentLock(ag.ID) across the whole sequence.
+// it appends, and holds agentLock(ag.ID) across the whole sequence. A persist
+// failure kills the new terminal rather than leaving it untracked: the kill is
+// built from the values already in hand under a cancel-detached context, so it
+// cannot share fate with whatever failed the persist (a canceled ctx, a dead DB),
+// and a kill that itself fails logs the terminal's full identity for manual
+// cleanup before surfacing both errors.
 func respawnAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow) (backend.AgentHandle, error) {
 	b, ok := backend.Get(ag.Backend)
 	if !ok {
@@ -480,12 +486,22 @@ func respawnAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, a
 	if err != nil {
 		return backend.AgentHandle{}, fmt.Errorf("respawn agent %q: %w", ag.ID, err)
 	}
-	if err := setAgentIncarnation(ctx, db, ag.ID, handle.ID, spawnNonce); err != nil {
-		return backend.AgentHandle{}, err
-	}
 	fresh := ag
 	fresh.TerminalHandle = handle.ID
 	fresh.SpawnNonce = spawnNonce
+	if err := setAgentIncarnation(ctx, db, ag.ID, handle.ID, spawnNonce); err != nil {
+		// Compensate from values in hand, never killAgentTerminal's DB reads (fate-shared with the persist).
+		kill := backend.AgentHandle{
+			Backend: ag.Backend, ID: handle.ID,
+			WorkstreamID: ws.WorkspaceHandle, Name: ag.Name, SessionID: ag.SessionID,
+		}
+		if kerr := b.Kill(context.WithoutCancel(ctx), kill); kerr != nil {
+			log.Printf("cc-orchestrate: respawn of %q leaked terminal %s/%s (workspace %s, session %s): persist: %v; kill: %v",
+				ag.ID, ag.Backend, handle.ID, ws.WorkspaceHandle, ag.SessionID, err, kerr)
+			return backend.AgentHandle{}, errors.Join(err, fmt.Errorf("kill respawned terminal %s/%s: %w", ag.Backend, handle.ID, kerr))
+		}
+		return backend.AgentHandle{}, err
+	}
 	//nolint:contextcheck // tailer intentionally derives from the daemon-lifetime base ctx, not this caller's ctx (see tailerManager doc)
 	tailers.start(db, appendFn, fresh)
 	return handle, nil
