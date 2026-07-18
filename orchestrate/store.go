@@ -555,7 +555,8 @@ func getAgentBySubject(ctx context.Context, db *sql.DB, subjectID string) (agent
 
 // getAgentBySession returns the agent whose claude --session-id matches — the pty-host's
 // child-exit report resolves the agent from the session id it carries. A session id is a
-// per-spawn uuid unique across agents, so at most one row matches.
+// per-spawn uuid unique across agents (enforced by agents_session_id_unique), so at most
+// one row matches.
 func getAgentBySession(ctx context.Context, db *sql.DB, sessionID string) (agentRow, error) {
 	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM agents WHERE agents.session_id = ?`, sessionID))
 	if errors.Is(err, sql.ErrNoRows) {

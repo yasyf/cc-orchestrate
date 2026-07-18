@@ -99,6 +99,16 @@ func resumeCommand(self, sid, scope string) []string {
 // childLauncherKey is the config key holding a JSON string-array argv prefix that
 // wraps every child agent's launch — spawn and resume alike. Unset or empty runs
 // children bare, byte-for-byte as if the key were absent.
+//
+// Contract: the launcher MUST exec into the claude invocation it is handed
+// (replacing itself, as cc-runtime's `wrap` does via syscall.Exec) — never fork
+// claude and exit. Under a pty-host the child-exit liveness report fires when the
+// host's direct child — the launcher head — exits, so a fork-and-exit launcher
+// makes a live session report as dead: the daemon kills its terminal and respawns
+// --resume against a session still running. The violation is not detectable at
+// runtime — an exit tells the host nothing about whether the launcher exec'd or
+// forked, and no reliable process-table check attributes a surviving claude to the
+// session (a `ccp run` or shim head hides it) — so the contract holds by prose.
 const childLauncherKey = "child.launcher"
 
 // childLauncher reads the configured child-launcher argv prefix. An unset or empty

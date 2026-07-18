@@ -273,8 +273,10 @@ func restoreHierarchy(ctx context.Context, db *sql.DB, bundle serializeBundle) e
 	return nil
 }
 
-// readBundle strict-parses a serialize bundle: an unknown field, trailing garbage, or
-// malformed JSON fails loud, so a corrupt bundle restores nothing rather than partially.
+// readBundle strict-parses a serialize bundle: an unknown field, trailing garbage,
+// malformed JSON, or two agents sharing one session id fails loud, so a corrupt
+// bundle restores nothing rather than partially (tripping the agents_session_id_unique
+// index mid-loop would leave earlier agents restored).
 func readBundle(path string) (serializeBundle, error) {
 	f, err := os.Open(path) //nolint:gosec // G304: user supplies the bundle path to restore by design
 	if err != nil {
@@ -289,6 +291,13 @@ func readBundle(path string) (serializeBundle, error) {
 	}
 	if dec.More() {
 		return serializeBundle{}, fmt.Errorf("decode bundle %q: trailing data after the bundle object", path)
+	}
+	owner := make(map[string]string, len(bundle.Agents))
+	for _, sa := range bundle.Agents {
+		if prev, dup := owner[sa.SessionID]; dup {
+			return serializeBundle{}, fmt.Errorf("decode bundle %q: agents %s and %s share session id %q", path, prev, sa.ID, sa.SessionID)
+		}
+		owner[sa.SessionID] = sa.ID
 	}
 	return bundle, nil
 }

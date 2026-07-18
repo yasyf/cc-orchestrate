@@ -42,7 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pty-host the launcher head and the claude token both resolve at spawn time, so
   a bare `claude` still skips the superset wrapper shim behind a prefix. Unset or
   empty runs children bare, byte-for-byte as before; a malformed value (anything
-  but a JSON array of non-empty strings) fails the spawn loudly.
+  but a JSON array of non-empty strings) fails the spawn loudly. The launcher
+  MUST exec into the claude invocation it is handed (replace itself, the way
+  `cc-runtime wrap` does), never fork claude and exit: under a pty-host the
+  child-exit liveness report fires when the host's direct child — the launcher —
+  exits, so a fork-and-exit launcher makes a live session report as dead and get
+  killed and respawned mid-flight. The violation is not detectable at runtime, so
+  the exec contract is a hard requirement on any custom launcher.
 - Channel delivery: spawned agents receive orchestrator messages as
   `<channel source="cc-orchestrate">` tags pushed by the plugin-loaded `cco channel`
   MCP server, with the watch Monitor as the fallback until the agent's first
@@ -74,6 +80,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `orchestrate.inbound` transcript-audit event.
 
 ### Fixed
+- One agent row per session id, enforced structurally: a partial unique index on
+  `agents.session_id` (session-less rows exempt) plus an up-front duplicate-session
+  check on restore bundles. Previously a hand-edited or corrupt bundle could
+  restore two rows sharing one session id, making the child-exit report's
+  session-id lookup nondeterministic — a valid report could resolve the wrong row,
+  fail its nonce check, and silently degrade immediate liveness to the
+  membership/staleness fallbacks. A duplicate-session bundle is now rejected
+  whole, before anything is restored.
 - A rebuilt dev binary now evicts a stale running daemon: unstamped builds report
   `9999.<binary-mtime>.0-dev`, which wins cc-interact's newest-wins eviction
   (previously `0.2.0-dev` lost to any installed release, so the old daemon kept

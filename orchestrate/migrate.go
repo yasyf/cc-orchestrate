@@ -64,6 +64,10 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			key   TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		)`,
+		// Guards getAgentBySession's at-most-one-row contract against a restore bundle
+		// carrying duplicate session ids; session-less rows (NULL or '') are exempt.
+		`CREATE UNIQUE INDEX IF NOT EXISTS agents_session_id_unique
+			ON agents(session_id) WHERE session_id <> ''`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {

@@ -308,6 +308,16 @@ func TestRestoreStrictParseFailsLoud(t *testing.T) {
 			name: "malformed json",
 			body: `{"version":1,"agents":[ not json`,
 		},
+		{
+			name: "duplicate session id",
+			body: `{"version":1,"created_at":"2026-06-19T00:00:00Z","agents":[` +
+				`{"id":"a1","sprint_id":"w1-s","backend":"sertest","terminal_handle":"t1",` +
+				`"session_id":"sess-1","scope":"/s","name":"","prompt":"","subject_id":"subj-a1",` +
+				`"ccnotes_task":"","restart_count":0,"last_restart_at":"","screen":"x"},` +
+				`{"id":"a2","sprint_id":"w1-s","backend":"sertest","terminal_handle":"t2",` +
+				`"session_id":"sess-1","scope":"/s","name":"","prompt":"","subject_id":"subj-a2",` +
+				`"ccnotes_task":"","restart_count":0,"last_restart_at":"","screen":"y"}]}`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
