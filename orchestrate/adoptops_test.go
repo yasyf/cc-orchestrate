@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,12 @@ func (b adoptFakeBackend) Caps() backend.Caps {
 	}
 	return b.caps
 }
+
+type nonCapturingAdoptBackend struct {
+	adoptFakeBackend
+}
+
+func (nonCapturingAdoptBackend) Caps() backend.Caps { return backend.Caps{} }
 
 // newAdoptOpEnv sets up an adopt-handler test: a short poll interval, no ccp on PATH, a
 // scratch CLAUDE_CONFIG_DIR, a resolved HOME (so worktree paths carry no symlinks), an
@@ -586,6 +593,99 @@ func TestHandleAdoptSpawnBeforeInsert(t *testing.T) {
 	}
 	if exists, _ := agentExists(ctx, db, adoptTestSID); !exists {
 		t.Error("agents row absent after adopt; insert must follow a successful spawn")
+	}
+}
+
+func TestHandleAdoptPassesSpawnNonceToPTYHost(t *testing.T) {
+	ctx, db := newAdoptOpEnv(t)
+	lookupPath = func(name string) (string, error) {
+		if name == "ccp" {
+			return "/test/ccp", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	var gotSpec backend.SpawnSpec
+	backend.Register(nonCapturingAdoptBackend{adoptFakeBackend{onSpawn: func(spec backend.SpawnSpec) {
+		gotSpec = spec
+	}}})
+	if err := setConfig(ctx, db, configBackend, "adopttest"); err != nil {
+		t.Fatalf("setConfig: %v", err)
+	}
+	repoDir := t.TempDir()
+	initAdoptGitRepo(ctx, t, repoDir)
+	resolved := mustResolve(t, repoDir)
+	idleTranscript(t, resolved, adoptTestSID, "main", "nonce")
+	stubClaudeProcs(t, nil)
+
+	log := &eventLog{}
+	if _, err := handleAdopt(adoptHC(ctx, db, log), adoptRequest{SessionID: adoptTestSID, Cwd: repoDir}); err != nil {
+		t.Fatalf("handleAdopt: %v", err)
+	}
+	ag, err := getAgent(ctx, db, adoptTestSID)
+	if err != nil {
+		t.Fatalf("getAgent: %v", err)
+	}
+	if ag.SpawnNonce == "" {
+		t.Fatal("spawn_nonce not stamped on adopted agent")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	wantPrefix := []string{
+		self, scrubExecCmdName, "--", self, ptyHostCmdName,
+		"--session-id", adoptTestSID, "--spawn-nonce", ag.SpawnNonce, "--", "/test/ccp", "run",
+	}
+	if len(gotSpec.Command) < len(wantPrefix) || !slices.Equal(gotSpec.Command[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("spawn command = %v, want prefix %v", gotSpec.Command, wantPrefix)
+	}
+}
+
+func TestHandleAdoptUnresolvableLauncherLeavesNoSubjectOrAgent(t *testing.T) {
+	ctx, db := newAdoptOpEnv(t)
+	lookupPath = func(name string) (string, error) {
+		if name == "ccp" {
+			return "/test/ccp", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	var spawnCalled bool
+	backend.Register(nonCapturingAdoptBackend{adoptFakeBackend{onSpawn: func(backend.SpawnSpec) {
+		spawnCalled = true
+	}}})
+	if err := setConfig(ctx, db, configBackend, "adopttest"); err != nil {
+		t.Fatalf("setConfig: %v", err)
+	}
+	if err := setConfig(ctx, db, childLauncherKey, `["missing-launcher","wrap","--"]`); err != nil {
+		t.Fatalf("set child launcher: %v", err)
+	}
+	repoDir := t.TempDir()
+	initAdoptGitRepo(ctx, t, repoDir)
+	resolved := mustResolve(t, repoDir)
+	idleTranscript(t, resolved, adoptTestSID, "main", "ordering")
+	stubClaudeProcs(t, nil)
+
+	log := &eventLog{}
+	_, err := handleAdopt(adoptHC(ctx, db, log), adoptRequest{SessionID: adoptTestSID, Cwd: repoDir})
+	if err == nil || !strings.Contains(err.Error(), `resolve launcher "missing-launcher"`) {
+		t.Fatalf("err = %v, want launcher resolution error", err)
+	}
+	if spawnCalled {
+		t.Fatal("backend Spawn was called despite launcher resolution failure")
+	}
+	agents, err := listAgents(ctx, db, "", "")
+	if err != nil {
+		t.Fatalf("listAgents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Fatalf("agents = %d, want 0", len(agents))
+	}
+	var subjectCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM subjects`).Scan(&subjectCount); err != nil {
+		t.Fatalf("count subjects: %v", err)
+	}
+	if subjectCount != 0 {
+		t.Fatalf("subjects = %d, want 0 (launcher resolution failed before Subjects.Start)", subjectCount)
 	}
 }
 

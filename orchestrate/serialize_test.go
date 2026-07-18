@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/yasyf/cc-orchestrate/backend"
+	"github.com/yasyf/cc-orchestrate/ptyhost"
 )
 
 // serializeTestBackend is a registered test backend for serialize/restore: it
@@ -446,5 +448,71 @@ func TestRestorePresentExitedRowReactivates(t *testing.T) {
 	}
 	if log.count(EventRestored) != 1 {
 		t.Fatalf("EventRestored count = %d, want 1; events=%v", log.count(EventRestored), log.types())
+	}
+}
+
+// TestCaptureAfterRespawnDialsCurrentIncarnation pins captureScreenText's under-lock
+// re-read: the caller's row snapshot can predate a concurrent respawn that rotated
+// the incarnation nonce, and resolving the screen from that snapshot would dial the
+// OLD incarnation's pty socket. Two live pty-hosts serve the old and new
+// incarnations' sockets with distinct screens; a capture handed the stale snapshot
+// must return the NEW incarnation's screen.
+func TestCaptureAfterRespawnDialsCurrentIncarnation(t *testing.T) {
+	shortHome(t) // the pty socket paths must stay inside the OS sun_path limit
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	db := newTestDB(ctx, t)
+	// A non-capturing backend routes resolveScreen through the pty-host socket, the
+	// path derived from the row's spawn nonce.
+	backend.Register(nonCapturingSpawnBackend{spawnBackend{spec: &backend.SpawnSpec{}}})
+	if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "spawntest", Cwd: "/s", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatal(err)
+	}
+	seedWorkstream(ctx, t, db, "w1", "p1", "spawntest", "ws-1")
+
+	if err := os.MkdirAll(filepath.Dir(ptySocketPath("sc", "n-old")), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	startHost := func(nonce, text string) {
+		t.Helper()
+		sock := ptySocketPath("sc", nonce)
+		hctx, hcancel := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() {
+			done <- ptyhost.Run(hctx, ptyhost.Options{Socket: sock, Argv: []string{"sh", "-c", "printf " + text + "; while :; do sleep 0.1; done"}})
+		}()
+		t.Cleanup(func() {
+			hcancel()
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+			}
+		})
+		cl := ptyhost.Dial(sock)
+		waitUntil(t, text+" on the "+nonce+" screen", func() bool {
+			s, err := cl.Capture(ctx)
+			return err == nil && strings.Contains(s, text)
+		})
+	}
+	startHost("n-old", "OLD-INCARNATION")
+	startHost("n-new", "NEW-INCARNATION")
+
+	// The row's CURRENT incarnation is n-new; the caller's snapshot is the stale n-old.
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a1", SprintID: "w1-s", Backend: "spawntest", TerminalHandle: "term-2",
+		SessionID: "sc", Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
+		CreatedAt: "t0", SpawnNonce: "n-new",
+	})
+	stale := agentRow{
+		ID: "a1", SprintID: "w1-s", Backend: "spawntest", TerminalHandle: "term-1",
+		SessionID: "sc", Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
+		CreatedAt: "t0", SpawnNonce: "n-old",
+	}
+	text, err := captureScreenText(ctx, db, stale)
+	if err != nil {
+		t.Fatalf("captureScreenText: %v", err)
+	}
+	if !strings.Contains(text, "NEW-INCARNATION") || strings.Contains(text, "OLD-INCARNATION") {
+		t.Fatalf("capture = %q, want the NEW incarnation's screen only", text)
 	}
 }

@@ -499,8 +499,9 @@ func TestApplyStatus(t *testing.T) {
 }
 
 // TestRestartHelpers proves the three restart-state writers each touch only their own
-// columns: markRestartAttempt the (count, at) pair, setAgentTerminalHandle the handle,
-// and resetRestart the (count, at) pair back to (0, ""), each leaving the rest intact.
+// columns: markRestartAttempt the (count, at) pair, setAgentIncarnation the
+// (handle, nonce) pair in one atomic statement, and resetRestart the (count, at) pair
+// back to (0, ""), each leaving the rest intact.
 func TestRestartHelpers(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(ctx, t)
@@ -531,9 +532,9 @@ func TestRestartHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("setAgentTerminalHandle sets only the handle", func(t *testing.T) {
-		if err := setAgentTerminalHandle(ctx, db, "a1", "term-2"); err != nil {
-			t.Fatalf("setAgentTerminalHandle: %v", err)
+	t.Run("setAgentIncarnation sets only the handle and nonce", func(t *testing.T) {
+		if err := setAgentIncarnation(ctx, db, "a1", "term-2", "n2"); err != nil {
+			t.Fatalf("setAgentIncarnation: %v", err)
 		}
 		got, err := getAgent(ctx, db, "a1")
 		if err != nil {
@@ -543,8 +544,9 @@ func TestRestartHelpers(t *testing.T) {
 		want.RestartCount = 3
 		want.LastRestartAt = "2026-06-16T03:00:00Z"
 		want.TerminalHandle = "term-2"
+		want.SpawnNonce = "n2"
 		if got != want {
-			t.Fatalf("setAgentTerminalHandle mutated more than the handle:\n got %+v\nwant %+v", got, want)
+			t.Fatalf("setAgentIncarnation mutated more than (handle, nonce):\n got %+v\nwant %+v", got, want)
 		}
 	})
 
@@ -558,6 +560,7 @@ func TestRestartHelpers(t *testing.T) {
 		}
 		want := seed
 		want.TerminalHandle = "term-2"
+		want.SpawnNonce = "n2"
 		if got != want {
 			t.Fatalf("resetRestart mutated more than (count, at):\n got %+v\nwant %+v", got, want)
 		}

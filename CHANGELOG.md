@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Immediate child-exit liveness: a pty-hosted child's exit is now reported to the
+  daemon by the wrapper as its last act, after its own socket teardown (the
+  socket-only `cco.agent.childExited` op, off the parent XRPC/MCP surfaces), so
+  the supervisor resumes the agent's session at once instead of waiting out the
+  ~2-minute transcript-staleness (or membership) latency. The report carries the
+  session id plus a per-(re)spawn nonce identifying the reporting incarnation,
+  resumes the SAME session, and tears the surviving wrapper terminal down first;
+  it is a no-op for an already-terminal agent, for a stale report whose nonce
+  no longer matches the row (a delayed duplicate arriving after a concurrent
+  kill+respawn), and for any report carrying an empty nonce (a migrated pre-nonce
+  row reads an empty nonce until its next respawn, so the upgrade window is
+  explicitly a no-op rather than a match), so a healthy fresh incarnation is never
+  killed by its predecessor's report. A respawn persists its new terminal handle
+  and nonce in one atomic statement, so no torn write can pair a fresh terminal
+  with a stale nonce. The pty-host control socket is now derived per incarnation
+  from the session id plus 64 bits of the spawn nonce's SHA-256 — a nonce-less
+  legacy wrapper keeps the old session-derived path — so a kill-driven respawn's
+  replacement binds its own socket, out of reach of the signaled old wrapper's
+  deferred cleanup. A spawn's post-insert steps (hierarchy re-check, spawned
+  event, tailer start) run under the agent's lock, so a fast child exit whose
+  report lands right after the insert serializes behind the spawn instead of
+  respawning first and having its replacement's tailer cancelled by the spawn's
+  stale continuation; screen capture re-reads the agent row under the same lock,
+  so a capture racing a respawn dials the current incarnation's socket, never the
+  old one's. The report only fires on a natural child exit — a signal-driven
+  teardown skips it — and is best-effort: a daemon that is down at exit time is
+  tolerated, with the existing membership/prober/staleness fallbacks covering that
+  window unchanged.
 - `child.launcher` config key: a JSON string-array argv prefix (e.g.
   `cco config set child.launcher '["my-launcher","wrap","--"]'`) that wraps every
   child agent's launch — spawn and resume alike — in front of the whole claude

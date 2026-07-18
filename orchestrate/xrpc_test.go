@@ -153,6 +153,9 @@ func TestXRPCCatalog(t *testing.T) {
 	if _, ok := byName["cco.agent.report"]; ok {
 		t.Error("catalog exposes cco.agent.report, which is socket-only")
 	}
+	if _, ok := byName["cco.agent.childExited"]; ok {
+		t.Error("catalog exposes cco.agent.childExited, which is socket-only")
+	}
 }
 
 func TestXRPCPostProcedureRoundTrip(t *testing.T) {

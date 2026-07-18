@@ -162,7 +162,7 @@ func resolveScreen(ctx context.Context, db *sql.DB, ag agentRow) (promptScreen, 
 		}
 		return nativeScreen{cap: capturer, snd: snd, handle: handle}, nil
 	}
-	return ptyScreen{client: ptyhost.Dial(ptySocketPath(ag.SessionID))}, nil
+	return ptyScreen{client: ptyhost.Dial(ptySocketPath(ag.SessionID, ag.SpawnNonce))}, nil
 }
 
 // resolveProbePolicy reads the configured answer policy. The default (unset or

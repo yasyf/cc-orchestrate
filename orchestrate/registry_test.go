@@ -47,14 +47,24 @@ func TestMethodRegistryInvariants(t *testing.T) {
 	}
 }
 
-// TestExposeBits asserts the transport exposure contract: report is socket-only, the
-// new getters are off the parent MCP list, and everything else is xrpc-exposed.
+// TestExposeBits asserts the transport exposure contract: the internal child→daemon
+// signals (report, childExited) are socket-only and off the parent XRPC/MCP surfaces,
+// and every other method is xrpc-exposed.
 func TestExposeBits(t *testing.T) {
+	socketOnly := map[string]bool{mAgentReport.name: true, mAgentChildExited.name: true}
+	for name := range socketOnly {
+		if m, ok := lookupXRPCMethod(name); ok {
+			t.Errorf("%q must not be on the xrpc surface, got %+v", name, m)
+		}
+	}
 	if mAgentReport.exposes != exposeSocket {
 		t.Errorf("cco.agent.report exposes = %b, want socket-only", mAgentReport.exposes)
 	}
+	if mAgentChildExited.exposes != exposeSocket {
+		t.Errorf("cco.agent.childExited exposes = %b, want socket-only", mAgentChildExited.exposes)
+	}
 	for _, m := range methods {
-		if m.name == mAgentReport.name {
+		if socketOnly[m.name] {
 			if m.exposes.has(exposeXRPC) || m.exposes.has(exposeMCP) {
 				t.Errorf("%q must not be on xrpc or mcp", m.name)
 			}

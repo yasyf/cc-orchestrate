@@ -3,9 +3,11 @@ package orchestrate
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,12 +25,15 @@ import (
 // CanCapture too, so respawnAgent's wrapForCapture returns the argv unchanged and the
 // test needs no real claude on PATH. Its name is outside backend.Precedence.
 type superviseBackend struct {
-	agents    []backend.AgentHandle
-	enumerate bool
-	mu        *sync.Mutex
-	spawns    *int
-	nextTerm  *string
-	killed    *[]string // when set, records each Kill target's handle id
+	agents       []backend.AgentHandle
+	enumerate    bool
+	mu           *sync.Mutex
+	spawns       *int
+	nextTerm     *string
+	killed       *[]string     // when set, records each Kill target's handle id
+	spawnSids    *[]string     // when set, records each Spawn's SessionID (the resumed sid)
+	spawnEntered chan struct{} // when set, Spawn signals entry (inside the caller's critical section) ...
+	spawnRelease chan struct{} // ... then parks until released, so a test can act mid-spawn
 }
 
 func (superviseBackend) Name() backend.Name                { return "supervisetest" }
@@ -43,9 +48,16 @@ func (superviseBackend) CreateWorkstream(context.Context, backend.WorkstreamSpec
 }
 
 func (b superviseBackend) Spawn(_ context.Context, spec backend.SpawnSpec) (backend.AgentHandle, error) {
+	if b.spawnEntered != nil {
+		b.spawnEntered <- struct{}{}
+		<-b.spawnRelease
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	*b.spawns++
+	if b.spawnSids != nil {
+		*b.spawnSids = append(*b.spawnSids, spec.SessionID)
+	}
 	return backend.AgentHandle{Backend: "supervisetest", ID: *b.nextTerm, SessionID: spec.SessionID}, nil
 }
 
@@ -368,7 +380,7 @@ func TestSupervisorTick(t *testing.T) {
 		// effect under the lock: a fresh terminal term-2, row still active. (With the
 		// fix agent-kill reads nothing until the lock, so the delay never makes it flaky.)
 		time.Sleep(30 * time.Millisecond)
-		if err := setAgentTerminalHandle(ctx, db, "a1", "term-2"); err != nil {
+		if err := setAgentIncarnation(ctx, db, "a1", "term-2", "n2"); err != nil {
 			t.Fatal(err)
 		}
 		hold.Unlock()
@@ -752,6 +764,471 @@ func TestSupervisorStaleness(t *testing.T) {
 				t.Fatalf("must not kill/respawn; spawns=%d killed=%d", gotSpawns, gotKilled)
 			}
 		})
+	}
+}
+
+// TestHandleChildExited drives the pty-host's authoritative child-exit report through
+// handleChildExited: the killed-child-under-a-surviving-wrapper case (simulated at the
+// handler boundary, no real claude) resumes the SAME session into a fresh terminal after
+// tearing the survivor down; a stale/duplicate report for an already-terminal agent is a
+// no-op; and an unknown session is a NotFound no-op.
+func TestHandleChildExited(t *testing.T) {
+	old := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	t.Setenv("HOME", t.TempDir())
+
+	newAgent := func(t *testing.T, status LifecycleStatus) (context.Context, *sql.DB, *eventLog, *sync.Mutex, *int, *[]string, *[]string) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		tailers = newTestTailerManager(ctx)
+		db := newTestDB(ctx, t)
+
+		var mu sync.Mutex
+		spawns := 0
+		nextTerm := "term-2"
+		var killed, spawnSids []string
+		// term-1 is still enumerated (the wrapper's terminal outlived its child), so no
+		// membership diff would fire — only the report catches this death.
+		backend.Register(superviseBackend{
+			agents:    []backend.AgentHandle{{Backend: "supervisetest", ID: "term-1"}},
+			enumerate: true,
+			mu:        &mu, spawns: &spawns, nextTerm: &nextTerm, killed: &killed, spawnSids: &spawnSids,
+		})
+		seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+		mustInsertAgent(ctx, t, db, agentRow{
+			ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
+			SessionID: "sess-a1", Scope: "/s", SubjectID: "subj-a1", Status: status, State: StateWorking,
+			CreatedAt: "t0", SpawnNonce: "n1",
+		})
+		return ctx, db, &eventLog{}, &mu, &spawns, &killed, &spawnSids
+	}
+
+	callReport := func(t *testing.T, db *sql.DB, log *eventLog, sid, nonce string) daemon.Reply {
+		t.Helper()
+		return runTyped(handleChildExited, opCtx(db, mustJSON(t, agentChildExitedRequest{SessionID: sid, SpawnNonce: nonce}), log.append))
+	}
+
+	mustRespawned := func(t *testing.T, reply daemon.Reply) bool {
+		t.Helper()
+		if !reply.OK {
+			t.Fatalf("handleChildExited failed: %s", reply.Error)
+		}
+		var res agentChildExitedResult
+		if err := json.Unmarshal(reply.Body, &res); err != nil {
+			t.Fatalf("unmarshal result: %v", err)
+		}
+		return res.Respawned
+	}
+
+	t.Run("reported child-exit resumes the same session, killing the survivor first", func(t *testing.T) {
+		ctx, db, log, mu, spawns, killed, spawnSids := newAgent(t, StatusActive)
+
+		if !mustRespawned(t, callReport(t, db, log, "sess-a1", "n1")) {
+			t.Fatalf("result respawned = false, want true")
+		}
+
+		assertAgentStatus(ctx, t, db, "a1", StatusActive)
+		assertRestartCount(ctx, t, db, "a1", 1)
+		assertTerminalHandle(ctx, t, db, "a1", "term-2")
+		if log.count(EventRestarted) != 1 {
+			t.Fatalf("EventRestarted = %d, want 1; events=%v", log.count(EventRestarted), log.types())
+		}
+		if log.count(EventExited) != 0 || log.count(EventAbandoned) != 0 {
+			t.Fatalf("under budget must not abandon/exit; events=%v", log.types())
+		}
+		mu.Lock()
+		gotSpawns, gotKilled, gotSids := *spawns, append([]string(nil), *killed...), append([]string(nil), *spawnSids...)
+		mu.Unlock()
+		if gotSpawns != 1 {
+			t.Fatalf("Spawn calls = %d, want 1", gotSpawns)
+		}
+		if len(gotKilled) != 1 || gotKilled[0] != "term-1" {
+			t.Fatalf("killed = %v, want [term-1] (tear the surviving wrapper terminal down before resuming)", gotKilled)
+		}
+		if len(gotSids) != 1 || gotSids[0] != "sess-a1" {
+			t.Fatalf("resumed session ids = %v, want [sess-a1] (resume the SAME sid)", gotSids)
+		}
+	})
+
+	t.Run("a report for an already-killed agent is a no-op", func(t *testing.T) {
+		ctx, db, log, mu, spawns, killed, _ := newAgent(t, StatusExited)
+
+		if mustRespawned(t, callReport(t, db, log, "sess-a1", "n1")) {
+			t.Fatalf("a stale report must not respawn a terminal agent; respawned = true")
+		}
+		assertAgentStatus(ctx, t, db, "a1", StatusExited)
+		assertRestartCount(ctx, t, db, "a1", 0)
+		assertTerminalHandle(ctx, t, db, "a1", "term-1")
+		if len(log.types()) != 0 {
+			t.Fatalf("a no-op report must emit nothing; events=%v", log.types())
+		}
+		mu.Lock()
+		gotSpawns, gotKilled := *spawns, len(*killed)
+		mu.Unlock()
+		if gotSpawns != 0 || gotKilled != 0 {
+			t.Fatalf("must not kill/respawn; spawns=%d killed=%d", gotSpawns, gotKilled)
+		}
+	})
+
+	t.Run("a report for an unknown session is a not-found no-op", func(t *testing.T) {
+		_, db, log, _, spawns, _, _ := newAgent(t, StatusActive)
+
+		reply := callReport(t, db, log, "sess-ghost", "n1")
+		if reply.OK {
+			t.Fatal("handleChildExited on an unknown session must fail, not silently succeed")
+		}
+		if !strings.HasPrefix(reply.Error, "NotFound: ") {
+			t.Fatalf("error = %q, want a NotFound prefix", reply.Error)
+		}
+		if *spawns != 0 {
+			t.Fatalf("Spawn calls = %d, want 0 for an unknown session", *spawns)
+		}
+	})
+
+	t.Run("a replayed report from the pre-respawn incarnation is a no-op", func(t *testing.T) {
+		// The session id survives a respawn, so a delayed duplicate of the report that
+		// drove the respawn resolves the same row and finds it active — only the fresh
+		// spawn nonce marks it stale. A regressed handler would kill the healthy fresh
+		// terminal and respawn a third incarnation.
+		ctx, db, log, mu, spawns, killed, _ := newAgent(t, StatusActive)
+
+		if !mustRespawned(t, callReport(t, db, log, "sess-a1", "n1")) {
+			t.Fatalf("first report must respawn")
+		}
+		if mustRespawned(t, callReport(t, db, log, "sess-a1", "n1")) {
+			t.Fatalf("replayed report must not respawn the fresh incarnation")
+		}
+
+		assertAgentStatus(ctx, t, db, "a1", StatusActive)
+		assertRestartCount(ctx, t, db, "a1", 1)
+		assertTerminalHandle(ctx, t, db, "a1", "term-2")
+		if log.count(EventRestarted) != 1 {
+			t.Fatalf("EventRestarted = %d, want 1 (the replay must add none); events=%v", log.count(EventRestarted), log.types())
+		}
+		mu.Lock()
+		gotSpawns, gotKilled := *spawns, append([]string(nil), *killed...)
+		mu.Unlock()
+		if gotSpawns != 1 {
+			t.Fatalf("Spawn calls = %d, want 1 (no third incarnation)", gotSpawns)
+		}
+		if len(gotKilled) != 1 || gotKilled[0] != "term-1" {
+			t.Fatalf("killed = %v, want [term-1] only (term-2 must survive the replay)", gotKilled)
+		}
+	})
+
+	t.Run("an empty-nonce report is a no-op even against an empty-nonce row", func(t *testing.T) {
+		// A migrated pre-nonce row reads "" for spawn_nonce until its next respawn, so a
+		// nonce-less report would string-match it. The empty-nonce guard keeps the
+		// upgrade window an explicit no-op: a report that cannot prove which incarnation
+		// it belongs to never kills anything.
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		tailers = newTestTailerManager(ctx)
+		db := newTestDB(ctx, t)
+
+		var mu sync.Mutex
+		spawns := 0
+		nextTerm := "term-2"
+		var killed []string
+		backend.Register(superviseBackend{
+			agents:    []backend.AgentHandle{{Backend: "supervisetest", ID: "term-1"}},
+			enumerate: true,
+			mu:        &mu, spawns: &spawns, nextTerm: &nextTerm, killed: &killed,
+		})
+		seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+		mustInsertAgent(ctx, t, db, agentRow{
+			ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
+			SessionID: "sess-a1", Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
+			CreatedAt: "t0", SpawnNonce: "",
+		})
+
+		log := &eventLog{}
+		if mustRespawned(t, callReport(t, db, log, "sess-a1", "")) {
+			t.Fatal("an empty-nonce report must never drive a respawn")
+		}
+		assertAgentStatus(ctx, t, db, "a1", StatusActive)
+		assertRestartCount(ctx, t, db, "a1", 0)
+		assertTerminalHandle(ctx, t, db, "a1", "term-1")
+		if len(log.types()) != 0 {
+			t.Fatalf("a no-op report must emit nothing; events=%v", log.types())
+		}
+		mu.Lock()
+		gotSpawns, gotKilled := spawns, len(killed)
+		mu.Unlock()
+		if gotSpawns != 0 || gotKilled != 0 {
+			t.Fatalf("must not kill/respawn; spawns=%d killed=%d", gotSpawns, gotKilled)
+		}
+	})
+
+	t.Run("a report at the restart budget abandons and answers respawned false", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		tailers = newTestTailerManager(ctx)
+		db := newTestDB(ctx, t)
+
+		var mu sync.Mutex
+		spawns := 0
+		nextTerm := "term-2"
+		var killed []string
+		backend.Register(superviseBackend{
+			agents:    []backend.AgentHandle{{Backend: "supervisetest", ID: "term-1"}},
+			enumerate: true,
+			mu:        &mu, spawns: &spawns, nextTerm: &nextTerm, killed: &killed,
+		})
+		seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+		mustInsertAgent(ctx, t, db, agentRow{
+			ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
+			SessionID: "sess-a1", Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
+			RestartCount: restartBudget, CreatedAt: "t0", SpawnNonce: "n1",
+		})
+
+		log := &eventLog{}
+		if mustRespawned(t, callReport(t, db, log, "sess-a1", "n1")) {
+			t.Fatalf("at budget the reply must say respawned = false")
+		}
+		assertAgentStatus(ctx, t, db, "a1", StatusExited)
+		if log.count(EventAbandoned) != 1 || log.count(EventRestarted) != 0 {
+			t.Fatalf("at budget want one Abandoned and no Restarted; events=%v", log.types())
+		}
+		mu.Lock()
+		gotSpawns := spawns
+		mu.Unlock()
+		if gotSpawns != 0 {
+			t.Fatalf("Spawn calls = %d, want 0 at budget", gotSpawns)
+		}
+	})
+}
+
+// TestQueuedOldNonceReportAfterKillAndManualRespawn drives the delayed-report race at
+// the handler boundary: a wrapper's childExited report is still queued while its agent
+// is killed (cco.agent.kill) and then manually respawned (cco.agent.respawn). Landing
+// after the kill it must be a no-op on the exited row; replaying after the manual
+// respawn — which rotated the incarnation nonce — it must be a stale-incarnation
+// no-op. A regressed handler would tear down the healthy replacement's terminal and
+// resume a second incarnation.
+func TestQueuedOldNonceReportAfterKillAndManualRespawn(t *testing.T) {
+	old := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+	db := newTestDB(ctx, t)
+
+	var mu sync.Mutex
+	spawns := 0
+	nextTerm := "term-2"
+	var killed []string
+	backend.Register(superviseBackend{
+		agents:    []backend.AgentHandle{{Backend: "supervisetest", ID: "term-1"}},
+		enumerate: true,
+		mu:        &mu, spawns: &spawns, nextTerm: &nextTerm, killed: &killed,
+	})
+	if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "supervisetest", Cwd: "/s", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatal(err)
+	}
+	seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
+		SessionID: "sess-a1", Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
+		CreatedAt: "t0", SpawnNonce: "n-old",
+	})
+	log := &eventLog{}
+	report := func() agentChildExitedResult {
+		t.Helper()
+		reply := runTyped(handleChildExited, opCtx(db, mustJSON(t, agentChildExitedRequest{SessionID: "sess-a1", SpawnNonce: "n-old"}), log.append))
+		if !reply.OK {
+			t.Fatalf("handleChildExited failed: %s", reply.Error)
+		}
+		var res agentChildExitedResult
+		if err := json.Unmarshal(reply.Body, &res); err != nil {
+			t.Fatalf("unmarshal result: %v", err)
+		}
+		return res
+	}
+
+	// The agent is killed while its dying wrapper's report is still in flight.
+	if reply := runTyped(handleAgentKill, opCtx(db, mustJSON(t, agentKillRequest{AgentID: "a1"}), log.append)); !reply.OK {
+		t.Fatalf("agent-kill failed: %s", reply.Error)
+	}
+
+	// The queued report lands on the exited row: no-op.
+	if report().Respawned {
+		t.Fatal("a report on a killed agent must not respawn")
+	}
+	assertAgentStatus(ctx, t, db, "a1", StatusExited)
+
+	// The operator manually respawns the agent, rotating the incarnation nonce.
+	if reply := runTyped(handleAgentRespawn, opCtx(db, mustJSON(t, agentRespawnRequest{AgentID: "a1"}), log.append)); !reply.OK {
+		t.Fatalf("agent-respawn failed: %s", reply.Error)
+	}
+	assertAgentStatus(ctx, t, db, "a1", StatusActive)
+	assertTerminalHandle(ctx, t, db, "a1", "term-2")
+	fresh, err := getAgent(ctx, db, "a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.SpawnNonce == "" || fresh.SpawnNonce == "n-old" {
+		t.Fatalf("manual respawn must rotate the nonce, got %q", fresh.SpawnNonce)
+	}
+
+	// The same old-nonce report replays against the now-active replacement: the rotated
+	// nonce marks it stale, and the healthy replacement stays untouched.
+	if report().Respawned {
+		t.Fatal("a stale old-nonce report must not respawn the replacement")
+	}
+	assertAgentStatus(ctx, t, db, "a1", StatusActive)
+	assertTerminalHandle(ctx, t, db, "a1", "term-2")
+	after, err := getAgent(ctx, db, "a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.SpawnNonce != fresh.SpawnNonce {
+		t.Fatalf("replayed report mutated the nonce: %q -> %q", fresh.SpawnNonce, after.SpawnNonce)
+	}
+	mu.Lock()
+	gotSpawns, gotKilled := spawns, append([]string(nil), killed...)
+	mu.Unlock()
+	if gotSpawns != 1 {
+		t.Fatalf("Spawn calls = %d, want 1 (the manual respawn only)", gotSpawns)
+	}
+	if len(gotKilled) != 1 || gotKilled[0] != "term-1" {
+		t.Fatalf("killed = %v, want [term-1] only (term-2 must survive both reports)", gotKilled)
+	}
+}
+
+// TestManualRespawnRotatesNonceUnderLock proves the incarnation rotation is persisted
+// before respawnOneAgent releases agentLock: while the respawn is parked inside the
+// backend spawn the lock is held, and a competitor that wins the lock the instant it
+// is released already observes the fresh nonce — so no under-lock decision site
+// (reconcileReportedExit, agent-kill) can ever read a respawned row still carrying the
+// old incarnation's identity.
+func TestManualRespawnRotatesNonceUnderLock(t *testing.T) {
+	old := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+	db := newTestDB(ctx, t)
+
+	var mu sync.Mutex
+	spawns := 0
+	nextTerm := "term-2"
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	backend.Register(superviseBackend{
+		enumerate: true,
+		mu:        &mu, spawns: &spawns, nextTerm: &nextTerm,
+		spawnEntered: entered, spawnRelease: release,
+	})
+	if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "supervisetest", Cwd: "/s", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatal(err)
+	}
+	seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
+		SessionID: "sess-a1", Scope: "/s", SubjectID: "subj-a1", Status: StatusExited, State: StateWorking,
+		CreatedAt: "t0", SpawnNonce: "n-old",
+	})
+
+	log := &eventLog{}
+	done := make(chan daemon.Reply, 1)
+	go func() {
+		done <- runTyped(handleAgentRespawn, opCtx(db, mustJSON(t, agentRespawnRequest{AgentID: "a1"}), log.append))
+	}()
+
+	<-entered // the respawn is inside its critical section, parked in backend Spawn
+	lock := agentLock("a1")
+	if lock.TryLock() {
+		lock.Unlock()
+		t.Fatal("agentLock free while the manual respawn is mid-spawn; the respawn must hold it")
+	}
+	// A competitor parks on the lock and reads the row the moment the respawn releases
+	// it: the rotation must already be durable by then.
+	observed := make(chan string, 1)
+	go func() {
+		lock.Lock()
+		defer lock.Unlock()
+		got, err := getAgent(ctx, db, "a1")
+		if err != nil {
+			observed <- "err: " + err.Error()
+			return
+		}
+		observed <- got.SpawnNonce
+	}()
+	close(release)
+	if reply := <-done; !reply.OK {
+		t.Fatalf("agent-respawn failed: %s", reply.Error)
+	}
+	if nonce := <-observed; nonce == "" || nonce == "n-old" || strings.HasPrefix(nonce, "err: ") {
+		t.Fatalf("first lock-winner after the respawn observed nonce %q; the rotation must be persisted before agentLock releases", nonce)
+	}
+}
+
+// TestReconcileVanishedSkipsReplacedTerminal pins the stale-snapshot guard: the tick
+// enumerates live terminals against an agents snapshot read moments earlier, so a
+// concurrent respawn (a childExited report, a manual respawn) can replace term-1 with
+// term-2 between the snapshot and the diff. reconcileVanished must recognize under the
+// lock that the row's terminal is no longer the one observed vanished and skip — a
+// regressed handler would resume the session AGAIN into term-3 with killFirst false,
+// leaving the live term-2 running and untracked.
+func TestReconcileVanishedSkipsReplacedTerminal(t *testing.T) {
+	old := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+	db := newTestDB(ctx, t)
+
+	var mu sync.Mutex
+	spawns := 0
+	nextTerm := "term-3"
+	var killed []string
+	backend.Register(superviseBackend{
+		agents:    []backend.AgentHandle{{Backend: "supervisetest", ID: "term-2"}},
+		enumerate: true,
+		mu:        &mu, spawns: &spawns, nextTerm: &nextTerm, killed: &killed,
+	})
+	seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
+	// The row already carries term-2: a concurrent actor respawned the agent after the
+	// caller snapshotted it holding term-1.
+	mustInsertAgent(ctx, t, db, agentRow{
+		ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-2",
+		SessionID: "sess-a1", Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
+		RestartCount: 1, CreatedAt: "t0", SpawnNonce: "n2",
+	})
+
+	stale := agentRow{
+		ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
+		SessionID: "sess-a1", Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
+		RestartCount: 0, CreatedAt: "t0", SpawnNonce: "n1",
+	}
+	log := &eventLog{}
+	if err := reconcileVanished(ctx, db, log.append, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	assertAgentStatus(ctx, t, db, "a1", StatusActive)
+	assertRestartCount(ctx, t, db, "a1", 1)
+	assertTerminalHandle(ctx, t, db, "a1", "term-2")
+	if len(log.types()) != 0 {
+		t.Fatalf("a replaced terminal must be a no-op; events=%v", log.types())
+	}
+	mu.Lock()
+	gotSpawns, gotKilled := spawns, len(killed)
+	mu.Unlock()
+	if gotSpawns != 0 || gotKilled != 0 {
+		t.Fatalf("must not kill/respawn a replaced terminal; spawns=%d killed=%d", gotSpawns, gotKilled)
 	}
 }
 

@@ -157,7 +157,12 @@ func reconcileStaleAgents(ctx context.Context, db *sql.DB, appendFn daemon.Appen
 // re-reads the row under the lock before acting: handleAgentKill and markSprintKilled
 // take the same lock and flip the row to a terminal status, so re-checking
 // StatusActive under the lock means a concurrently killed agent is never resurrected.
-// The terminal is already gone, so it does not kill before respawning.
+// The vanished observation is about ag's terminal specifically, so a re-read whose
+// handle has moved on means a concurrent respawn (a childExited report, a manual
+// respawn) already replaced the terminal between the caller's snapshot and this lock —
+// acting anyway would spawn a second resume of the same session and leak the fresh
+// terminal untracked. The terminal is already gone, so it does not kill before
+// respawning.
 func reconcileVanished(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow) error {
 	mu := agentLock(ag.ID)
 	mu.Lock()
@@ -169,7 +174,11 @@ func reconcileVanished(ctx context.Context, db *sql.DB, appendFn daemon.AppendFu
 	if cur.Status != StatusActive {
 		return nil
 	}
-	return respawnUnderBudget(ctx, db, appendFn, cur, false)
+	if cur.TerminalHandle != ag.TerminalHandle {
+		return nil
+	}
+	_, err = respawnUnderBudget(ctx, db, appendFn, cur, false)
+	return err
 }
 
 // reconcileDeadChild is the supervisor's decision site for a StatusActive agent whose
@@ -192,14 +201,87 @@ func reconcileDeadChild(ctx context.Context, db *sql.DB, appendFn daemon.AppendF
 	if !confirmDead(ctx, cur) {
 		return nil
 	}
+	_, err = respawnUnderBudget(ctx, db, appendFn, cur, true)
+	return err
+}
+
+// agentChildExitedRequest is a pty-host's child-exit report, keyed by the child's
+// session id so the supervisor resumes the same session. SpawnNonce identifies the
+// reporting incarnation: each (re)spawn mints a fresh nonce into the wrapper's argv
+// and the agent row, so a report can only ever act on the incarnation that sent it.
+type agentChildExitedRequest struct {
+	SessionID  string `json:"session_id"`
+	SpawnNonce string `json:"spawn_nonce"`
+}
+
+// agentChildExitedResult reports whether the report drove a respawn — false when the
+// agent was already terminal (a concurrent kill won the race), the report's nonce no
+// longer matches the row's incarnation (a stale report), or the restart budget is
+// exhausted (the agent was abandoned instead).
+type agentChildExitedResult struct {
+	Respawned bool `json:"respawned"`
+}
+
+// handleChildExited answers cco.agent.childExited: a pty-host's authoritative report
+// that its claude child exited (its cmd.Wait returned). It resolves the agent by session
+// id and drives the existing respawn path at once, so a wrapped agent whose child dies
+// under a still-present terminal is resumed immediately rather than after the
+// membership/staleness latency. It is socket-only — an internal child→daemon signal like
+// cco.agent.report, off the parent XRPC/MCP surfaces.
+func handleChildExited(hc daemon.HandlerCtx, req agentChildExitedRequest) (agentChildExitedResult, error) {
+	ag, err := getAgentBySession(hc.Ctx, hc.DB, req.SessionID)
+	if err != nil {
+		return agentChildExitedResult{}, err
+	}
+	respawned, err := reconcileReportedExit(hc.Ctx, hc.DB, hc.Append, ag, req.SpawnNonce)
+	if err != nil {
+		return agentChildExitedResult{}, err
+	}
+	return agentChildExitedResult{Respawned: respawned}, nil
+}
+
+// reconcileReportedExit is the decision site for a pty-host's authoritative child-exit
+// report: the wrapper witnessed its claude child exit, so unlike reconcileDeadChild it
+// needs no prober corroboration — the report itself is the death signal, and the
+// pty-host wrapper (superset) is not an AgentProber to corroborate against anyway. It
+// mirrors reconcileVanished/reconcileDeadChild's idempotency guard: it holds agentLock
+// and re-reads the row, so a report that races an agent-kill (or any already-terminal
+// state) re-reads a non-active row and is a no-op, never resurrecting a killed agent.
+// The session id survives a respawn, so an active row alone does not prove the report
+// is about the row's current incarnation: a report delayed past a concurrent
+// kill-then-respawn would otherwise kill the healthy fresh incarnation. The spawn
+// nonce settles it — each (re)spawn mints a fresh nonce into both the wrapper's argv
+// and the row, so a mismatched nonce marks the report as a prior incarnation's and a
+// no-op. An EMPTY report nonce never matches, even an empty row nonce: a migrated
+// pre-nonce row reads "" until its next respawn, and a nonce-less report matching it
+// would kill an agent it cannot prove it belongs to — so the upgrade window is
+// explicitly a no-op, covered by the membership/staleness fallbacks. A still-active,
+// nonce-matched agent is respawned under budget with killFirst, tearing down the
+// wrapper's surviving terminal before resuming the SAME session. It reports whether
+// it drove a respawn.
+func reconcileReportedExit(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow, spawnNonce string) (bool, error) {
+	mu := agentLock(ag.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	cur, err := getAgent(ctx, db, ag.ID)
+	if err != nil {
+		return false, err
+	}
+	if cur.Status != StatusActive {
+		return false, nil
+	}
+	if spawnNonce == "" || cur.SpawnNonce != spawnNonce {
+		return false, nil
+	}
 	return respawnUnderBudget(ctx, db, appendFn, cur, true)
 }
 
 // respawnUnderBudget re-spawns cur (resume into a fresh terminal) while it stays under
-// restartBudget and abandons it at or over budget. The caller holds agentLock and has
-// re-read cur as StatusActive. When killFirst is set the agent's terminal is still
-// present (a dead child under a surviving pane), so it is torn down before the new one
-// is spawned; reconcileVanished passes false because its terminal is already gone.
+// restartBudget and abandons it at or over budget, reporting whether it respawned
+// (false means abandoned). The caller holds agentLock and has re-read cur as
+// StatusActive. When killFirst is set the agent's terminal is still present (a dead
+// child under a surviving pane), so it is torn down before the new one is spawned;
+// reconcileVanished passes false because its terminal is already gone.
 //
 // It counts and persists the restart attempt BEFORE respawning, then mirrors it onto
 // the in-memory row, so respawnAgent's tailer snapshot carries the incremented
@@ -209,43 +291,43 @@ func reconcileDeadChild(ctx context.Context, db *sql.DB, appendFn daemon.AppendF
 // recorded, so a persistently-failing agent climbs toward budget and is eventually
 // abandoned rather than retried forever at a stuck count; the agentLock + re-read of
 // cur serialize ticks, so a single death detection counts exactly one attempt.
-func respawnUnderBudget(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, cur agentRow, killFirst bool) error {
+func respawnUnderBudget(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, cur agentRow, killFirst bool) (bool, error) {
 	if cur.RestartCount >= restartBudget {
 		if _, err := appendFn(ctx, &event.Event{
 			SubjectID: cur.SubjectID, Origin: event.OriginSystem, Type: EventAbandoned, Payload: abandonedPayload(cur),
 		}); err != nil {
-			return err
+			return false, err
 		}
 		fleetLog.emit(ctx, abandonedFrame(cur.ID, cur.RestartCount))
 		if err := softExitAgent(ctx, db, appendFn, cur); err != nil {
-			return err
+			return false, err
 		}
 		fleetLog.emit(ctx, exitedFrame(cur.ID, reasonExited))
-		return nil
+		return false, nil
 	}
 	attempt := cur.RestartCount + 1
 	stamp := nowStamp()
 	if err := markRestartAttempt(ctx, db, cur.ID, attempt, stamp); err != nil {
-		return err
+		return false, err
 	}
 	cur.RestartCount = attempt
 	cur.LastRestartAt = stamp
 	if killFirst {
 		if err := killAgentTerminal(ctx, db, cur); err != nil {
-			return err
+			return false, err
 		}
 	}
 	handle, err := respawnAgent(ctx, db, appendFn, cur)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if _, err := appendFn(ctx, &event.Event{
 		SubjectID: cur.SubjectID, Origin: event.OriginSystem, Type: EventRestarted, Payload: restartedPayload(cur, handle.ID, attempt),
 	}); err != nil {
-		return err
+		return false, err
 	}
 	fleetLog.emit(ctx, restartedFrame(cur.ID, attempt))
-	return nil
+	return true, nil
 }
 
 // transcriptStale reports whether an agent's transcript file has gone unwritten past

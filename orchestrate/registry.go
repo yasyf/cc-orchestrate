@@ -200,6 +200,7 @@ var (
 	mAgentCapture     = query("cco.agent.capture", "Capture an active agent's current terminal screen.", full, handleAgentCapture)
 	mAgentReport      = procedure("cco.agent.report", "Append a child agent's report to its subject log (the child channel's tool).", sock, handleReport)
 	mAdoptList        = query("cco.adopt.list", "List hand-started Claude Code sessions in a directory that can be adopted.", full, handleAdoptList)
+	mAgentChildExited = procedure("cco.agent.childExited", "Report a pty-hosted child's exit so the supervisor resumes its session immediately (the pty-host's last act).", sock, handleChildExited)
 
 	mConfigGet   = query("cco.config.get", "Read one persisted config key's value.", full, handleConfigGet)
 	mConfigSet   = procedure("cco.config.set", "Upsert one persisted config key.", full, handleConfigSet)
@@ -214,7 +215,7 @@ var (
 		mRepoCreate, mRepoList, mRepoShow, mRepoActivate, mRepoKill, mRegistryList,
 		mWorkstreamCreate, mWorkstreamList, mWorkstreamShow, mWorkstreamActivate, mWorkstreamKill,
 		mSprintCreate, mSprintList, mSprintShow, mSprintActivate, mSprintKill,
-		mAgentSpawn, mAgentList, mAgentShow, mAgentSendMessage, mAgentKill, mAgentRespawn, mAgentAdopt, mAgentCapture, mAgentReport, mAdoptList,
+		mAgentSpawn, mAgentList, mAgentShow, mAgentSendMessage, mAgentKill, mAgentRespawn, mAgentAdopt, mAgentCapture, mAgentReport, mAdoptList, mAgentChildExited,
 		mConfigGet, mConfigSet, mConfigList, mConfigUnset,
 		mFleetStatus, mFleetSerialize, mFleetRestore,
 	}

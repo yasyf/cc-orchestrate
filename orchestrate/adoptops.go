@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/yasyf/cc-interact/daemon"
 	"github.com/yasyf/cc-interact/event"
 	"github.com/yasyf/cc-interact/subject"
@@ -790,11 +792,12 @@ func launchAdopted(hc daemon.HandlerCtx, req adoptRequest, sid string, candidate
 	if err != nil {
 		return adoptResult{}, err
 	}
-	sub, _, err := hc.Subjects.Start(hc.Ctx, subject.Window{Session: sid}, scope, agentSlug(sid), lifecycle, true)
+	spawnNonce := uuid.NewString()
+	command, err := wrapForCapture(self, sid, spawnNonce, launcher, adoptResumeCommand(self, sid, scope, movedNote), b.Caps())
 	if err != nil {
 		return adoptResult{}, err
 	}
-	command, err := wrapForCapture(self, sid, launcher, adoptResumeCommand(self, sid, scope, movedNote), b.Caps())
+	sub, _, err := hc.Subjects.Start(hc.Ctx, subject.Window{Session: sid}, scope, agentSlug(sid), lifecycle, true)
 	if err != nil {
 		return adoptResult{}, err
 	}
@@ -814,7 +817,7 @@ func launchAdopted(hc daemon.HandlerCtx, req adoptRequest, sid string, candidate
 		ID: sid, SprintID: sprint.ID, Backend: ws.Backend, TerminalHandle: handle.ID,
 		SessionID: sid, Scope: scope, Name: name, Prompt: candidate.FirstPrompt,
 		SubjectID: sub.ID, CCNotesTask: ccTask, Status: StatusActive, State: StateUnknown,
-		CreatedAt: nowStamp(),
+		CreatedAt: nowStamp(), SpawnNonce: spawnNonce,
 	}
 	if err := insertAgent(hc.Ctx, hc.DB, ag); err != nil {
 		// The terminal is live but has no row; the supervisor only reconciles agents that

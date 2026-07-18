@@ -287,7 +287,7 @@ func TestChildLauncherComposition(t *testing.T) {
 	launcherPath := filepath.Join(bin, "cc-runtime")
 
 	build := func(inner []string) []string {
-		wrapped, err := wrapForCapture(self, sid, launcher, inner, backend.Capabilities())
+		wrapped, err := wrapForCapture(self, sid, "nonce-1", launcher, inner, backend.Capabilities())
 		if err != nil {
 			t.Fatalf("wrapForCapture: %v", err)
 		}
@@ -298,7 +298,7 @@ func TestChildLauncherComposition(t *testing.T) {
 		got := build(claudeCommand(self, sid, scope, ""))
 		want := []string{
 			self, scrubExecCmdName, "--",
-			self, ptyHostCmdName, "--session-id", sid, "--",
+			self, ptyHostCmdName, "--session-id", sid, "--spawn-nonce", "nonce-1", "--",
 			launcherPath, "wrap", "--",
 			claudePath,
 			"--session-id", sid,
@@ -314,7 +314,7 @@ func TestChildLauncherComposition(t *testing.T) {
 		got := build(resumeCommand(self, sid, scope))
 		want := []string{
 			self, scrubExecCmdName, "--",
-			self, ptyHostCmdName, "--session-id", sid, "--",
+			self, ptyHostCmdName, "--session-id", sid, "--spawn-nonce", "nonce-1", "--",
 			launcherPath, "wrap", "--",
 			claudePath,
 			"--resume", sid,
@@ -637,13 +637,16 @@ func TestHandleSpawn(t *testing.T) {
 		ID: out.AgentID, SprintID: "s1", Backend: "spawntest", TerminalHandle: "term-1",
 		SessionID: out.AgentID, Scope: "/tmp/alpha", Name: "worker", Prompt: "fix it",
 		SubjectID: out.SubjectID, Status: "active", State: StateUnknown,
-		CreatedAt: ag.CreatedAt,
+		CreatedAt: ag.CreatedAt, SpawnNonce: ag.SpawnNonce,
 	}
 	if ag != want {
 		t.Fatalf("agent row = %+v, want %+v", ag, want)
 	}
 	if ag.CreatedAt == "" {
 		t.Error("created_at not stamped")
+	}
+	if ag.SpawnNonce == "" {
+		t.Error("spawn_nonce not stamped; the wrapper's childExited report could not be matched to this incarnation")
 	}
 
 	// The subject was created for the child session with claude_pid 0 (unknown
@@ -1383,4 +1386,149 @@ func TestSpawnKillOrphanRace(t *testing.T) {
 			t.Fatalf("exited frames = %v, want one killed", got)
 		}
 	})
+}
+
+// TestSpawnFastChildExitSerializesBehindLock pins handleSpawn's post-insert critical
+// section: once the agent row is inserted, a pty-host childExited report resolving it
+// by session id must serialize behind the spawn's own agentLock. A lock-free
+// continuation would let the report's respawn run first, then cancel the
+// REPLACEMENT's tailer, leave the prober dialing the old incarnation's socket, and
+// count the budget from the stale pre-respawn row. The spawn parks in the seam
+// between the insert and the tailer start; the report must block there, then land
+// after the spawn completes and drive one clean respawn (fresh terminal, rotated
+// nonce, one counted restart, the replacement's tailer registered).
+func TestSpawnFastChildExitSerializesBehindLock(t *testing.T) {
+	old := pollInterval
+	pollInterval = 5 * time.Millisecond
+	t.Cleanup(func() { pollInterval = old })
+	oldLookup := lookupPath
+	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { lookupPath = oldLookup })
+	t.Setenv("HOME", t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+	log, _ := installTestFleet(t)
+	var bmu sync.Mutex
+	spawns := 0
+	nextTerm := "term-1"
+	var killed []string
+	var spawnSids []string
+	backend.Register(superviseBackend{
+		enumerate: true,
+		mu:        &bmu, spawns: &spawns, nextTerm: &nextTerm, killed: &killed, spawnSids: &spawnSids,
+	})
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	db := st.DB()
+	if err := insertRepo(ctx, db, repoRow{ID: "p1", Name: "alpha", Backend: "supervisetest", Cwd: "/tmp/a", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "supervisetest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/tmp/a", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0"}); err != nil {
+		t.Fatal(err)
+	}
+
+	parked := make(chan struct{})
+	release := make(chan struct{})
+	prev := spawnAfterInsert
+	spawnAfterInsert = func() {
+		parked <- struct{}{}
+		<-release
+	}
+	t.Cleanup(func() { spawnAfterInsert = prev })
+
+	spawnDone := make(chan daemon.Reply, 1)
+	go func() {
+		spawnDone <- runTyped(handleSpawn, daemon.HandlerCtx{
+			Ctx: ctx, Env: daemon.Envelope{Body: mustJSON(t, map[string]string{"repo": "p1", "name": "worker"})},
+			Window: subject.Window{Session: "parent", ClaudePID: 4242}, Scope: "/parent",
+			Subjects: subject.Resolver{Store: store.NewSubjectStore(db)}, DB: db, Append: log.append,
+		})
+	}()
+	<-parked // the spawn is parked between its insert and its tailer start
+
+	agents, err := listAgents(ctx, db, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("agents = %d, want the just-inserted row", len(agents))
+	}
+	inserted := agents[0]
+	if lock := agentLock(inserted.ID); lock.TryLock() {
+		lock.Unlock()
+		t.Fatal("agentLock free between insert and tailer start; the spawn continuation must hold it")
+	}
+	bmu.Lock()
+	nextTerm = "term-2" // the report's respawn hands back a distinguishable terminal
+	bmu.Unlock()
+
+	// The dying wrapper's report lands in the window. It must park on the lock —
+	// completing here is exactly the stale-tailer interleaving.
+	reportDone := make(chan agentChildExitedResult, 1)
+	go func() {
+		reply := runTyped(handleChildExited, opCtx(db, mustJSON(t, agentChildExitedRequest{
+			SessionID: inserted.SessionID, SpawnNonce: inserted.SpawnNonce,
+		}), log.append))
+		if !reply.OK {
+			reportDone <- agentChildExitedResult{}
+			return
+		}
+		var res agentChildExitedResult
+		if err := json.Unmarshal(reply.Body, &res); err != nil {
+			reportDone <- agentChildExitedResult{}
+			return
+		}
+		reportDone <- res
+	}()
+	select {
+	case <-reportDone:
+		t.Fatal("childExited report completed while the spawn held agentLock; it must serialize behind the spawn")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	if reply := <-spawnDone; !reply.OK {
+		t.Fatalf("spawn failed: %s", reply.Error)
+	}
+	if res := <-reportDone; !res.Respawned {
+		t.Fatal("the report must drive the respawn once the spawn's critical section ends")
+	}
+
+	assertAgentStatus(ctx, t, db, inserted.ID, StatusActive)
+	assertRestartCount(ctx, t, db, inserted.ID, 1)
+	assertTerminalHandle(ctx, t, db, inserted.ID, "term-2")
+	after, err := getAgent(ctx, db, inserted.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.SpawnNonce == "" || after.SpawnNonce == inserted.SpawnNonce {
+		t.Fatalf("the respawn must rotate the nonce, got %q", after.SpawnNonce)
+	}
+	bmu.Lock()
+	gotSpawns, gotKilled := spawns, append([]string(nil), killed...)
+	bmu.Unlock()
+	if gotSpawns != 2 {
+		t.Fatalf("Spawn calls = %d, want 2 (the spawn, then the report's respawn)", gotSpawns)
+	}
+	if len(gotKilled) != 1 || gotKilled[0] != "term-1" {
+		t.Fatalf("killed = %v, want [term-1] only (the replacement's term-2 must survive)", gotKilled)
+	}
+	tailers.mu.Lock()
+	registered := len(tailers.cancels)
+	_, hasAgent := tailers.cancels[inserted.ID]
+	tailers.mu.Unlock()
+	if registered != 1 || !hasAgent {
+		t.Fatalf("tailers registered = %d (agent present: %v), want exactly the replacement's", registered, hasAgent)
+	}
 }

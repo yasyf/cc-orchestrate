@@ -154,21 +154,29 @@ func handleSerialize(hc daemon.HandlerCtx, req fleetSerializeRequest) (fleetSeri
 	return fleetSerializeResult{Path: path, Count: len(bundle.Agents)}, nil
 }
 
-// captureScreenText reads one active agent's terminal screen, holding agentLock so a
-// concurrent restart cannot swap the handle mid-read. An unresolvable screen is tagged
-// Unsupported; a resolved screen's capture failing is left untagged (InternalError).
-// Shared by captureAgent and the cco.agent.capture handler.
+// captureScreenText reads one active agent's terminal screen under agentLock,
+// re-reading the row once the lock is held: the caller's snapshot may predate a
+// concurrent respawn, and resolving the screen from it would dial the OLD
+// incarnation's pty socket (or capture a swapped-out terminal handle) — the re-read
+// targets the row's current incarnation, and the lock keeps it current for the
+// duration of the read. An unresolvable screen is tagged Unsupported; a resolved
+// screen's capture failing is left untagged (InternalError). Shared by captureAgent
+// and the cco.agent.capture handler.
 func captureScreenText(ctx context.Context, db *sql.DB, ag agentRow) (string, error) {
 	mu := agentLock(ag.ID)
 	mu.Lock()
 	defer mu.Unlock()
-	screen, err := resolveScreen(ctx, db, ag)
+	cur, err := getAgent(ctx, db, ag.ID)
 	if err != nil {
-		return "", opErr(codeUnsupported, fmt.Errorf("resolve screen for agent %q: %w", ag.ID, err))
+		return "", err
+	}
+	screen, err := resolveScreen(ctx, db, cur)
+	if err != nil {
+		return "", opErr(codeUnsupported, fmt.Errorf("resolve screen for agent %q: %w", cur.ID, err))
 	}
 	text, err := captureWithTimeout(ctx, screen)
 	if err != nil {
-		return "", fmt.Errorf("capture screen for agent %q: %w", ag.ID, err)
+		return "", fmt.Errorf("capture screen for agent %q: %w", cur.ID, err)
 	}
 	return text, nil
 }

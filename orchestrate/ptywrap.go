@@ -1,11 +1,18 @@
 package orchestrate
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/yasyf/cc-interact/daemon"
 
 	"github.com/yasyf/cc-orchestrate/backend"
 	"github.com/yasyf/cc-orchestrate/ptyhost"
@@ -16,11 +23,28 @@ import (
 // binary owns and the prober can read and drive its screen.
 const ptyHostCmdName = "pty-host"
 
-// ptySocketPath is the control socket a session's pty-host serves, derived
-// deterministically from the session id so the spawn wrapper, the host, and the
-// prober client all resolve the same path.
-func ptySocketPath(sessionID string) string {
-	return filepath.Join(appPaths().StateDir(), "pty", sessionID+".sock")
+// reportChildExitTimeout bounds the pty-host's best-effort child-exit report to the
+// daemon, so a slow or wedged daemon never delays the wrapper's own exit.
+const reportChildExitTimeout = 5 * time.Second
+
+// ptySocketPath is the control socket one pty-host incarnation serves, derived
+// deterministically from the session id and spawn nonce so the spawn wrapper, the
+// host, and the prober client (via the agent row's nonce) all resolve the same path.
+// Deriving per incarnation is what makes a kill-driven respawn race-free: the
+// replacement binds its own path, so the signaled old wrapper's deferred socket
+// removal can never unlink the replacement's socket. The suffix is 64 bits of the
+// full nonce's SHA-256 (16 hex chars) — wide enough that two incarnations of one
+// session can never share a path, unlike a truncated-nonce prefix — while the full
+// path stays inside the OS sun_path limit under the production StateDir; an empty
+// nonce (a wrapper or row predating nonces) keeps the bare session-derived path, so
+// capture keeps working across the upgrade window.
+func ptySocketPath(sessionID, spawnNonce string) string {
+	name := sessionID
+	if spawnNonce != "" {
+		sum := sha256.Sum256([]byte(spawnNonce))
+		name += "-" + hex.EncodeToString(sum[:8])
+	}
+	return filepath.Join(appPaths().StateDir(), "pty", name+".sock")
 }
 
 // wrapForCapture composes the launcher prefix and child argv, wrapping the result
@@ -28,8 +52,9 @@ func ptySocketPath(sessionID string) string {
 // natively; a capturing backend gets the composed argv unchanged. Under the
 // pty-host, executables are resolved here because the host may run under a
 // different PATH: a bare claude resolves past a backend's wrapper shim even behind
-// a launcher prefix, and the launcher head resolves via lookupPath.
-func wrapForCapture(self, sessionID string, launcher, command []string, caps backend.Caps) ([]string, error) {
+// a launcher prefix, and the launcher head resolves via lookupPath. spawnNonce is
+// this incarnation's identity, carried by the wrapper into its childExited report.
+func wrapForCapture(self, sessionID, spawnNonce string, launcher, command []string, caps backend.Caps) ([]string, error) {
 	if caps.Has(backend.CanCapture) {
 		return append(slices.Clone(launcher), command...), nil
 	}
@@ -50,20 +75,20 @@ func wrapForCapture(self, sessionID string, launcher, command []string, caps bac
 		}
 		executable = resolved
 	}
-	return wrapPTYHost(self, sessionID, executable, full), nil
+	return wrapPTYHost(self, sessionID, spawnNonce, executable, full), nil
 }
 
 // wrapPTYHost rewrites an argv to run under the pty-host with the resolved child
 // executable in place of command[0].
-func wrapPTYHost(self, sessionID, executable string, command []string) []string {
-	return append([]string{self, ptyHostCmdName, "--session-id", sessionID, "--", executable}, command[1:]...)
+func wrapPTYHost(self, sessionID, spawnNonce, executable string, command []string) []string {
+	return append([]string{self, ptyHostCmdName, "--session-id", sessionID, "--spawn-nonce", spawnNonce, "--", executable}, command[1:]...)
 }
 
 // ptyHostCmd is the hidden `pty-host` command: it runs the argv after `--` under a
 // pseudo-terminal and serves the session's control socket, so a non-capturing
 // backend's agent can still be read and driven by the prober. It is not user-facing.
 func ptyHostCmd() *cobra.Command {
-	var sessionID string
+	var sessionID, spawnNonce string
 	c := &cobra.Command{
 		Use:    ptyHostCmdName,
 		Short:  "Host a child under a pseudo-terminal and serve its capture/keys socket",
@@ -71,11 +96,30 @@ func ptyHostCmd() *cobra.Command {
 		Args:   cobra.MinimumNArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
 			return ptyhost.Run(c.Context(), ptyhost.Options{
-				Socket: ptySocketPath(sessionID),
-				Argv:   args,
+				Socket:      ptySocketPath(sessionID, spawnNonce),
+				Argv:        args,
+				OnChildExit: func() { reportChildExit(sessionID, spawnNonce) },
 			})
 		},
 	}
 	c.Flags().StringVar(&sessionID, "session-id", "", "the child agent's session id")
+	c.Flags().StringVar(&spawnNonce, "spawn-nonce", "", "this incarnation's spawn nonce, echoed in the child-exit report")
 	return c
+}
+
+// reportChildExit tells the daemon its pty-hosted child has exited, so the supervisor
+// resumes the agent's session immediately instead of waiting for a membership or
+// staleness fallback to notice. It is the pty-host's last act and best-effort: a bare
+// Do that never launches a daemon, so a daemon that is down or unreachable yields an
+// ignored error and the wrapper still exits cleanly, with the fallbacks covering that
+// window. spawnNonce identifies the reporting incarnation, so a report delayed past a
+// concurrent kill+respawn can never be mistaken for the fresh incarnation's death.
+func reportChildExit(sessionID, spawnNonce string) {
+	body, err := json.Marshal(agentChildExitedRequest{SessionID: sessionID, SpawnNonce: spawnNonce})
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reportChildExitTimeout)
+	defer cancel()
+	_, _ = newClient().Do(ctx, daemon.Envelope{Op: mAgentChildExited.op(), Session: AppName, Body: body})
 }

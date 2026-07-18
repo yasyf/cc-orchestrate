@@ -328,7 +328,8 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 	if err != nil {
 		return agentSpawnResult{}, err
 	}
-	command, err := wrapForCapture(self, sid, launcher, claudeCommand(self, sid, scope, req.Prompt), b.Caps())
+	spawnNonce := uuid.NewString()
+	command, err := wrapForCapture(self, sid, spawnNonce, launcher, claudeCommand(self, sid, scope, req.Prompt), b.Caps())
 	if err != nil {
 		return agentSpawnResult{}, err
 	}
@@ -352,8 +353,21 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 		ID: sid, SprintID: sprint.ID, Backend: bname, TerminalHandle: handle.ID,
 		SessionID: sid, Scope: scope, Name: name, Prompt: req.Prompt,
 		SubjectID: sub.ID, CCNotesTask: ccTask, Status: StatusActive, State: StateUnknown,
-		CreatedAt: nowStamp(),
+		CreatedAt: nowStamp(), SpawnNonce: spawnNonce,
 	}
+	// The insert makes the row addressable by every concurrent decision site (a
+	// pty-host childExited report resolving it by session id, agent-kill, the
+	// supervisor), so the remaining steps run under agentLock, matching the respawn
+	// paths' discipline. A fast child exit whose report lands right after the insert
+	// therefore serializes behind this critical section instead of respawning first
+	// and having its replacement's tailer cancelled by this stale continuation (which
+	// would also leave the prober dialing the old incarnation's socket and the budget
+	// counted from a pre-respawn RestartCount). The pre-insert work — Subjects.Start
+	// and the backend Spawn — stays outside the lock: no contender can address the
+	// agent before its row exists, and the lock is uncontended until then.
+	mu := agentLock(sid)
+	mu.Lock()
+	defer mu.Unlock()
 	if err := insertAgent(hc.Ctx, hc.DB, ag); err != nil {
 		// The terminal is live but has no row; the supervisor only reconciles agents that
 		// have one, so tear it down rather than leak an unmanaged claude forever.
@@ -368,7 +382,7 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 		return agentSpawnResult{}, err
 	}
 	if _, _, err := requireActiveHierarchy(hc, fresh); err != nil {
-		if cerr := compensateSpawn(hc.Ctx, hc.DB, hc.Append, ag); cerr != nil {
+		if cerr := compensateSpawnLocked(hc.Ctx, hc.DB, hc.Append, ag); cerr != nil {
 			return agentSpawnResult{}, cerr
 		}
 		return agentSpawnResult{}, err
@@ -386,21 +400,10 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 	return agentSpawnResult{ID: sid, SubjectID: sub.ID, Terminal: handle.ID, Backend: string(bname)}, nil
 }
 
-// compensateSpawn undoes a spawn whose post-insert hierarchy re-check failed: under
-// agentLock it re-reads the row and, if still active, soft-exits it and kills its fresh
-// terminal, so a concurrent container-kill that missed the insert never leaves a live
-// agent orphaned under a killed container. An agent that kill's teardown already exited
-// is a no-op, so the exit and terminal teardown happen exactly once.
-func compensateSpawn(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow) error {
-	mu := agentLock(ag.ID)
-	mu.Lock()
-	defer mu.Unlock()
-	return compensateSpawnLocked(ctx, db, appendFn, ag)
-}
-
-// compensateSpawnLocked is compensateSpawn's body for a caller that already holds
-// agentLock(ag.ID) — the path handleAdopt takes, since it holds the lock across its
-// whole op body and re-acquiring it here would deadlock.
+// compensateSpawnLocked undoes a spawn whose post-insert hierarchy re-check failed,
+// for a caller that already holds agentLock(ag.ID) — both handleSpawn (which holds
+// the lock continuously from before its insert) and handleAdopt (which holds it
+// across its whole op body); re-acquiring it here would deadlock.
 func compensateSpawnLocked(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow) error {
 	cur, readErr := getAgent(ctx, db, ag.ID)
 	// Flip off Active first and unconditionally — even when the read failed — so an
@@ -427,8 +430,11 @@ func compensateSpawnLocked(ctx context.Context, db *sql.DB, appendFn daemon.Appe
 
 // respawnAgent brings a vanished agent's terminal back: it resumes the agent's
 // existing Claude session (same sid → same transcript, no work lost) into a fresh
-// backend terminal, persists the new terminal handle, and restarts the transcript
-// tailer with a snapshot carrying that handle. It reuses every spawn-tail mechanic
+// backend terminal, persists the new terminal handle and the incarnation's fresh
+// spawn nonce in one atomic statement (setAgentIncarnation — a torn write would let
+// a delayed old-nonce report kill the healthy replacement), and restarts the
+// transcript tailer with a snapshot carrying that handle. It reuses every spawn-tail
+// mechanic
 // handleSpawn runs — EnsureReady, wrapForCapture, Spawn, tailers.start — but with
 // resumeCommand rather than claudeCommand, and it updates the agent's existing row
 // instead of inserting a new one. It mints no new subject and writes no lifecycle
@@ -458,7 +464,8 @@ func respawnAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, a
 	if err != nil {
 		return backend.AgentHandle{}, err
 	}
-	command, err := wrapForCapture(self, ag.SessionID, launcher, resumeCommand(self, ag.SessionID, ag.Scope), b.Caps())
+	spawnNonce := uuid.NewString()
+	command, err := wrapForCapture(self, ag.SessionID, spawnNonce, launcher, resumeCommand(self, ag.SessionID, ag.Scope), b.Caps())
 	if err != nil {
 		return backend.AgentHandle{}, err
 	}
@@ -473,11 +480,12 @@ func respawnAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, a
 	if err != nil {
 		return backend.AgentHandle{}, fmt.Errorf("respawn agent %q: %w", ag.ID, err)
 	}
-	if err := setAgentTerminalHandle(ctx, db, ag.ID, handle.ID); err != nil {
+	if err := setAgentIncarnation(ctx, db, ag.ID, handle.ID, spawnNonce); err != nil {
 		return backend.AgentHandle{}, err
 	}
 	fresh := ag
 	fresh.TerminalHandle = handle.ID
+	fresh.SpawnNonce = spawnNonce
 	//nolint:contextcheck // tailer intentionally derives from the daemon-lifetime base ctx, not this caller's ctx (see tailerManager doc)
 	tailers.start(db, appendFn, fresh)
 	return handle, nil

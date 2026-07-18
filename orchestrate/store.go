@@ -34,7 +34,7 @@ const agentColumns = `agents.id, agents.sprint_id, agents.backend, COALESCE(agen
 	`COALESCE(agents.session_id, ''), agents.scope, COALESCE(agents.name, ''), COALESCE(agents.prompt, ''), ` +
 	`COALESCE(agents.subject_id, ''), COALESCE(agents.ccnotes_task, ''), agents.status, agents.state, ` +
 	`COALESCE(agents.activity, ''), agents.tokens, COALESCE(agents.updated_at, ''), agents.created_at, ` +
-	`agents.restart_count, COALESCE(agents.last_restart_at, '')`
+	`agents.restart_count, COALESCE(agents.last_restart_at, ''), COALESCE(agents.spawn_nonce, '')`
 
 // repoRow is one row of the repos table: an orchestration repo, the container its
 // workstreams branch from. The backend workspace now lives on each workstream.
@@ -101,6 +101,7 @@ type agentRow struct {
 	CreatedAt      string
 	RestartCount   int
 	LastRestartAt  string
+	SpawnNonce     string
 }
 
 // rowScanner is the Scan surface shared by *sql.Row and *sql.Rows.
@@ -155,7 +156,7 @@ func scanAgent(s rowScanner) (agentRow, error) {
 	err := s.Scan(
 		&a.ID, &a.SprintID, &a.Backend, &a.TerminalHandle, &a.SessionID, &a.Scope,
 		&a.Name, &a.Prompt, &a.SubjectID, &a.CCNotesTask, &a.Status, &a.State, &a.Activity, &a.Tokens,
-		&a.UpdatedAt, &a.CreatedAt, &a.RestartCount, &a.LastRestartAt,
+		&a.UpdatedAt, &a.CreatedAt, &a.RestartCount, &a.LastRestartAt, &a.SpawnNonce,
 	)
 	return a, err
 }
@@ -448,11 +449,11 @@ func insertAgent(ctx context.Context, db *sql.DB, a agentRow) error {
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO agents (id, sprint_id, backend, backend_terminal_handle, session_id, scope,
 			name, prompt, subject_id, ccnotes_task, status, state, activity, tokens, updated_at, created_at,
-			restart_count, last_restart_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			restart_count, last_restart_at, spawn_nonce)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.ID, a.SprintID, a.Backend, a.TerminalHandle, a.SessionID, a.Scope,
 		a.Name, a.Prompt, a.SubjectID, a.CCNotesTask, a.Status, a.State, a.Activity, a.Tokens, a.UpdatedAt, a.CreatedAt,
-		a.RestartCount, a.LastRestartAt)
+		a.RestartCount, a.LastRestartAt, a.SpawnNonce)
 	if err != nil {
 		return fmt.Errorf("insert agent %q: %w", a.ID, err)
 	}
@@ -552,6 +553,20 @@ func getAgentBySubject(ctx context.Context, db *sql.DB, subjectID string) (agent
 	return a, nil
 }
 
+// getAgentBySession returns the agent whose claude --session-id matches — the pty-host's
+// child-exit report resolves the agent from the session id it carries. A session id is a
+// per-spawn uuid unique across agents, so at most one row matches.
+func getAgentBySession(ctx context.Context, db *sql.DB, sessionID string) (agentRow, error) {
+	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM agents WHERE agents.session_id = ?`, sessionID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return agentRow{}, notFoundf("agent not found for session: %s", sessionID)
+	}
+	if err != nil {
+		return agentRow{}, fmt.Errorf("get agent by session %q: %w", sessionID, err)
+	}
+	return a, nil
+}
+
 // agentExists reports whether an agent row is present, the absent-vs-present branch
 // restore needs: an absent agent is re-inserted from its bundle, a present one only
 // has its terminal recreated.
@@ -591,10 +606,15 @@ func markRestartAttempt(ctx context.Context, db *sql.DB, id string, count int, a
 	return nil
 }
 
-func setAgentTerminalHandle(ctx context.Context, db *sql.DB, id, handle string) error {
-	_, err := db.ExecContext(ctx, `UPDATE agents SET backend_terminal_handle = ? WHERE id = ?`, handle, id)
+// setAgentIncarnation records a respawn's new terminal handle and spawn nonce in one
+// atomic statement. The pair defines the incarnation a childExited report is matched
+// against (see reconcileReportedExit), so it must never persist torn: a row holding
+// the new terminal with the prior incarnation's nonce would let a delayed old-nonce
+// report kill the healthy replacement.
+func setAgentIncarnation(ctx context.Context, db *sql.DB, id, handle, nonce string) error {
+	_, err := db.ExecContext(ctx, `UPDATE agents SET backend_terminal_handle = ?, spawn_nonce = ? WHERE id = ?`, handle, nonce, id)
 	if err != nil {
-		return fmt.Errorf("set agent %q terminal handle: %w", id, err)
+		return fmt.Errorf("set agent %q incarnation: %w", id, err)
 	}
 	return nil
 }

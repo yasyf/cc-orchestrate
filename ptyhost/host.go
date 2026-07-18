@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 )
@@ -21,6 +22,16 @@ import (
 type Options struct {
 	Socket string   // unix socket path to serve CAPTURE/KEYS on
 	Argv   []string // the child command to run under the PTY
+	// OnChildExit, when set, fires once the hosted child exits on its own — not when a
+	// parent signal (SIGINT/SIGTERM/SIGHUP) tore it down — as the wrapper's last act,
+	// AFTER the socket and grid are freed: the daemon's response is to kill this
+	// wrapper and respawn the session, so by the time the hook hands control to the
+	// daemon this wrapper's socket must already be gone and never touched again (the
+	// daemon derives the replacement's socket per incarnation, so even an interleaved
+	// replacement binds a different path and this wrapper's removal stays self-scoped).
+	// A signal-driven teardown skips it, leaving that window to the supervisor's
+	// membership/staleness fallbacks.
+	OnChildExit func()
 }
 
 // Run hosts opts.Argv under a pseudo-terminal: it tees the child's output to this
@@ -89,6 +100,17 @@ func Run(ctx context.Context, opts Options) error {
 	_ = srv.Close() // stop accepting and drain in-flight handlers before freeing the grid
 	_ = os.Remove(opts.Socket)
 	teardown()
+	// The child exited on its own (no parent signal cancelled ctx): fire the exit hook
+	// as the wrapper's last act, strictly after the socket removal above, so the whole
+	// teardown is complete before the hook hands control to the daemon — which answers
+	// the report by killing this wrapper and respawning the session. The daemon derives
+	// socket paths per incarnation, so the replacement binds its own path and this
+	// wrapper's removal can never unlink it regardless of interleaving; the ordering
+	// keeps the wrapper from ever touching the filesystem after the daemon has taken
+	// over. A signal-driven teardown leaves ctx.Err() non-nil and skips it.
+	if opts.OnChildExit != nil && ctx.Err() == nil {
+		opts.OnChildExit()
+	}
 	return werr
 }
 
@@ -122,10 +144,15 @@ func ttySize() *pty.Winsize {
 }
 
 // ptyServer serves the control socket; Close stops accepting and waits for in-flight
-// handlers, so no handler reads the grid after Run frees it.
+// handlers, so no handler reads the grid after Run frees it. Live connections are
+// tracked so Close can expire their deadlines: the drain is bounded by unblocking
+// every handler, never by trusting a client to finish its request.
 type ptyServer struct {
-	ln net.Listener
-	wg sync.WaitGroup
+	ln      net.Listener
+	wg      sync.WaitGroup
+	mu      sync.Mutex
+	conns   map[net.Conn]struct{}
+	closing bool
 }
 
 func serve(socket string, g grid, child io.Writer) (*ptyServer, error) {
@@ -137,7 +164,7 @@ func serve(socket string, g grid, child io.Writer) (*ptyServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pty-host listen %s: %w", socket, err)
 	}
-	s := &ptyServer{ln: ln}
+	s := &ptyServer{ln: ln, conns: map[net.Conn]struct{}{}}
 	s.wg.Add(1)
 	go s.accept(g, child)
 	return s, nil
@@ -153,14 +180,43 @@ func (s *ptyServer) accept(g grid, child io.Writer) {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			defer func() { _ = conn.Close() }()
+			defer s.untrack(conn)
+			s.track(conn)
 			handleConn(conn, g, child)
 		}()
 	}
 }
 
+// track registers a live connection; a conn accepted while Close is already draining
+// gets its deadline expired immediately, so it can never slip past the drain sweep.
+func (s *ptyServer) track(conn net.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.conns[conn] = struct{}{}
+	if s.closing {
+		_ = conn.SetDeadline(time.Now())
+	}
+}
+
+func (s *ptyServer) untrack(conn net.Conn) {
+	s.mu.Lock()
+	delete(s.conns, conn)
+	s.mu.Unlock()
+	_ = conn.Close()
+}
+
+// Close stops accepting, expires every in-flight connection's deadline so its handler
+// unblocks with an I/O error, and waits for the handlers to drain. A wedged client
+// that connected but never completes its request therefore cannot stall the wrapper's
+// teardown (or the child-exit report behind it).
 func (s *ptyServer) Close() error {
 	err := s.ln.Close()
+	s.mu.Lock()
+	s.closing = true
+	for conn := range s.conns {
+		_ = conn.SetDeadline(time.Now())
+	}
+	s.mu.Unlock()
 	s.wg.Wait()
 	return err
 }
