@@ -784,11 +784,17 @@ func launchAdopted(hc daemon.HandlerCtx, req adoptRequest, sid string, candidate
 		}
 	}
 
+	// Read, validate, and resolve the launcher config before Subjects.Start: an
+	// unusable child.launcher must not leave an active subject behind.
+	launcher, err := childLauncher(hc.Ctx, hc.DB)
+	if err != nil {
+		return adoptResult{}, err
+	}
 	sub, _, err := hc.Subjects.Start(hc.Ctx, subject.Window{Session: sid}, scope, agentSlug(sid), lifecycle, true)
 	if err != nil {
 		return adoptResult{}, err
 	}
-	command, err := wrapForCapture(self, sid, adoptResumeCommand(self, sid, scope, movedNote), b.Caps())
+	command, err := wrapForCapture(self, sid, launcher, adoptResumeCommand(self, sid, scope, movedNote), b.Caps())
 	if err != nil {
 		return adoptResult{}, err
 	}
