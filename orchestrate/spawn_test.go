@@ -198,6 +198,136 @@ func TestPooledClaudeCommands(t *testing.T) {
 	}
 }
 
+func TestChildLauncher(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(ctx, t)
+
+	t.Run("unset yields no prefix", func(t *testing.T) {
+		got, err := childLauncher(ctx, db)
+		if err != nil {
+			t.Fatalf("childLauncher: %v", err)
+		}
+		if got != nil {
+			t.Fatalf("prefix = %v, want nil", got)
+		}
+	})
+	t.Run("empty value yields no prefix", func(t *testing.T) {
+		if err := setConfig(ctx, db, childLauncherKey, ""); err != nil {
+			t.Fatal(err)
+		}
+		got, err := childLauncher(ctx, db)
+		if err != nil {
+			t.Fatalf("childLauncher: %v", err)
+		}
+		if got != nil {
+			t.Fatalf("prefix = %v, want nil", got)
+		}
+	})
+	t.Run("json array decodes to the argv prefix", func(t *testing.T) {
+		if err := setConfig(ctx, db, childLauncherKey, `["cc-runtime","wrap","--"]`); err != nil {
+			t.Fatal(err)
+		}
+		got, err := childLauncher(ctx, db)
+		if err != nil {
+			t.Fatalf("childLauncher: %v", err)
+		}
+		want := []string{"cc-runtime", "wrap", "--"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("prefix = %v, want %v", got, want)
+		}
+	})
+	t.Run("malformed value is a loud error", func(t *testing.T) {
+		if err := setConfig(ctx, db, childLauncherKey, "cc-runtime wrap --"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := childLauncher(ctx, db); err == nil {
+			t.Fatal("childLauncher accepted non-JSON value, want error")
+		}
+	})
+	t.Run("json null is a loud error", func(t *testing.T) {
+		if err := setConfig(ctx, db, childLauncherKey, "null"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := childLauncher(ctx, db); err == nil {
+			t.Fatal("childLauncher accepted JSON null, want error")
+		}
+	})
+	t.Run("null element is a loud error", func(t *testing.T) {
+		if err := setConfig(ctx, db, childLauncherKey, `["cc-runtime",null]`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := childLauncher(ctx, db); err == nil {
+			t.Fatal("childLauncher accepted a null argv element, want error")
+		}
+	})
+}
+
+// TestChildLauncherComposition pins the wrapping order the spawn path builds: the
+// launcher wraps the claude invocation inside the pty-host, and scrub-exec stays
+// outermost — scrub-exec / pty-host / launcher / claude — with the launcher head
+// and the claude token both resolved for the pty-host's foreign PATH.
+func TestChildLauncherComposition(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"claude", "cc-runtime"} {
+		//nolint:gosec // the fakes must be executable for PATH resolution to find them
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatalf("write fake %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("HOME", t.TempDir())
+
+	const (
+		self  = "/opt/cc-orchestrate"
+		sid   = "sid-1"
+		scope = "/work"
+	)
+	launcher := []string{"cc-runtime", "wrap", "--"}
+	claudePath := filepath.Join(bin, "claude")
+	launcherPath := filepath.Join(bin, "cc-runtime")
+
+	build := func(inner []string) []string {
+		wrapped, err := wrapForCapture(self, sid, launcher, inner, backend.Capabilities())
+		if err != nil {
+			t.Fatalf("wrapForCapture: %v", err)
+		}
+		return wrapScrubExec(self, wrapped)
+	}
+
+	t.Run("spawn nests scrub-exec / pty-host / launcher / claude", func(t *testing.T) {
+		got := build(claudeCommand(self, sid, scope, ""))
+		want := []string{
+			self, scrubExecCmdName, "--",
+			self, ptyHostCmdName, "--session-id", sid, "--",
+			launcherPath, "wrap", "--",
+			claudePath,
+			"--session-id", sid,
+			"--channels", channelPlugin.ChannelID(),
+			"--settings", childSettings(self),
+			"--append-system-prompt", spawnBrief(self, sid, scope),
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("composed argv =\n  %v\nwant\n  %v", got, want)
+		}
+	})
+	t.Run("resume nests the same order", func(t *testing.T) {
+		got := build(resumeCommand(self, sid, scope))
+		want := []string{
+			self, scrubExecCmdName, "--",
+			self, ptyHostCmdName, "--session-id", sid, "--",
+			launcherPath, "wrap", "--",
+			claudePath,
+			"--resume", sid,
+			"--channels", channelPlugin.ChannelID(),
+			"--settings", childSettings(self),
+			"--append-system-prompt", spawnBrief(self, sid, scope),
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("composed argv =\n  %v\nwant\n  %v", got, want)
+		}
+	})
+}
+
 func TestSpawnBrief(t *testing.T) {
 	brief := spawnBrief("/opt/cc-orchestrate", "sid-1", "/work")
 	tests := []struct {
@@ -316,6 +446,98 @@ func (spawnBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) er
 // TestWrapForCapture.
 func (spawnBackend) Capture(context.Context, backend.AgentHandle) (string, error) { return "", nil }
 func (spawnBackend) Caps() backend.Caps                                           { return backend.Capabilities(backend.CanCapture) }
+
+type nonCapturingSpawnBackend struct {
+	spawnBackend
+}
+
+func (nonCapturingSpawnBackend) Caps() backend.Caps { return backend.Caps{} }
+
+func TestHandleSpawnUnresolvableLauncherLeavesNoSubjectOrAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	oldLookup := lookupPath
+	lookupPath = func(name string) (string, error) {
+		if name == "ccp" {
+			return "/test/ccp", nil
+		}
+		if name == "missing-launcher" {
+			return "", exec.ErrNotFound
+		}
+		return exec.LookPath(name)
+	}
+	t.Cleanup(func() { lookupPath = oldLookup })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tailers = newTestTailerManager(ctx)
+
+	var gotSpec backend.SpawnSpec
+	backend.Register(nonCapturingSpawnBackend{spawnBackend{spec: &gotSpec}})
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	db := st.DB()
+
+	if err := insertRepo(ctx, db, repoRow{
+		ID: "p1", Name: "alpha", Backend: "spawntest",
+		Cwd: "/tmp/alpha", Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertRepo: %v", err)
+	}
+	if err := insertWorkstream(ctx, db, workstreamRow{
+		ID: "w1", RepoID: "p1", Name: "main", Backend: "spawntest", WorkspaceHandle: "ws-1",
+		Branch: "main", Worktree: "/tmp/alpha", IsPrimary: true, Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertWorkstream: %v", err)
+	}
+	if err := insertSprint(ctx, db, sprintRow{
+		ID: "s1", WorkstreamID: "w1", Name: "main", Status: StatusActive, CreatedAt: "t0",
+	}); err != nil {
+		t.Fatalf("insertSprint: %v", err)
+	}
+	if err := setConfig(ctx, db, childLauncherKey, `["missing-launcher","wrap","--"]`); err != nil {
+		t.Fatalf("set child launcher: %v", err)
+	}
+
+	subjects := subject.Resolver{Store: store.NewSubjectStore(db)}
+	appendFn := func(context.Context, *event.Event) (int64, error) {
+		t.Fatal("Append must not run when launcher resolution fails before the subject is started")
+		return 0, nil
+	}
+	hc := daemon.HandlerCtx{
+		Ctx: ctx, Env: daemon.Envelope{Body: mustJSON(t, map[string]string{"repo": "p1", "name": "worker"})},
+		Window: subject.Window{Session: "parent"}, Scope: "/tmp/alpha",
+		Subjects: subjects, DB: db, Append: appendFn,
+	}
+
+	reply := runTyped(handleSpawn, hc)
+	if reply.OK || reply.Error == "" {
+		t.Fatalf("reply = %+v, want ok=false when launcher resolution fails", reply)
+	}
+	if !strings.Contains(reply.Error, `resolve launcher "missing-launcher"`) {
+		t.Fatalf("reply error = %q, want launcher resolution error", reply.Error)
+	}
+	if gotSpec.SessionID != "" {
+		t.Fatalf("backend.Spawn was called despite launcher resolution failure: %+v", gotSpec)
+	}
+	agents, err := listAgents(ctx, db, "", "")
+	if err != nil {
+		t.Fatalf("listAgents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Fatalf("agents = %d, want 0", len(agents))
+	}
+	var subjectCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM subjects`).Scan(&subjectCount); err != nil {
+		t.Fatalf("count subjects: %v", err)
+	}
+	if subjectCount != 0 {
+		t.Fatalf("subjects = %d, want 0 (launcher resolution failed before Subjects.Start)", subjectCount)
+	}
+}
 
 func TestHandleSpawn(t *testing.T) {
 	old := pollInterval

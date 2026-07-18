@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -65,6 +66,7 @@ func childSettings(self string) string {
 // through ccp when installed and otherwise starts bare claude. The orchestration
 // brief is appended to the child's system prompt so it arms its receive Monitor
 // and knows to report back. An empty prompt omits the trailing positional argument.
+// The configured launcher prefix wraps this invocation in wrapForCapture.
 func claudeCommand(self, sid, scope, prompt string) []string {
 	argv := append(claudeInvocation(),
 		"--session-id", sid,
@@ -93,6 +95,35 @@ func resumeCommand(self, sid, scope string) []string {
 	)
 }
 
+// childLauncherKey is the config key holding a JSON string-array argv prefix that
+// wraps every child agent's launch — spawn and resume alike. Unset or empty runs
+// children bare, byte-for-byte as if the key were absent.
+const childLauncherKey = "child.launcher"
+
+// childLauncher reads the configured child-launcher argv prefix. An unset or empty
+// key yields a nil prefix; a set key must decode as a JSON array of non-empty
+// strings — null anywhere is malformed, not "no launcher".
+func childLauncher(ctx context.Context, db *sql.DB) ([]string, error) {
+	v, found, err := getConfig(ctx, db, childLauncherKey)
+	if err != nil {
+		return nil, err
+	}
+	if !found || v == "" {
+		return nil, nil
+	}
+	var prefix []string
+	if err := json.Unmarshal([]byte(v), &prefix); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", childLauncherKey, err)
+	}
+	if prefix == nil || slices.Contains(prefix, "") {
+		return nil, fmt.Errorf("parse %s: %q is not a JSON array of non-empty strings", childLauncherKey, v)
+	}
+	return prefix, nil
+}
+
+// claudeInvocation is the executable head of a child's argv: ccp when installed,
+// otherwise bare claude. wrapForCapture prepends the configured launcher prefix in
+// front of this whole invocation so the wrapper receives the entire original argv.
 func claudeInvocation() []string {
 	if ccp, err := lookupPath("ccp"); err == nil {
 		return []string{ccp, "run"}
@@ -291,11 +322,17 @@ func handleSpawn(hc daemon.HandlerCtx, req agentSpawnRequest) (agentSpawnResult,
 		}
 	}
 
-	sub, _, err := hc.Subjects.Start(hc.Ctx, subject.Window{Session: sid}, scope, agentSlug(sid), lifecycle, true)
+	// Read, validate, and resolve the launcher config before Subjects.Start: an
+	// unusable child.launcher must not leave an active subject behind.
+	launcher, err := childLauncher(hc.Ctx, hc.DB)
 	if err != nil {
 		return agentSpawnResult{}, err
 	}
-	command, err := wrapForCapture(self, sid, claudeCommand(self, sid, scope, req.Prompt), b.Caps())
+	command, err := wrapForCapture(self, sid, launcher, claudeCommand(self, sid, scope, req.Prompt), b.Caps())
+	if err != nil {
+		return agentSpawnResult{}, err
+	}
+	sub, _, err := hc.Subjects.Start(hc.Ctx, subject.Window{Session: sid}, scope, agentSlug(sid), lifecycle, true)
 	if err != nil {
 		return agentSpawnResult{}, err
 	}
@@ -397,7 +434,11 @@ func respawnAgent(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, a
 	if err != nil {
 		return backend.AgentHandle{}, fmt.Errorf("resolve self: %w", err)
 	}
-	command, err := wrapForCapture(self, ag.SessionID, resumeCommand(self, ag.SessionID, ag.Scope), b.Caps())
+	launcher, err := childLauncher(ctx, db)
+	if err != nil {
+		return backend.AgentHandle{}, err
+	}
+	command, err := wrapForCapture(self, ag.SessionID, launcher, resumeCommand(self, ag.SessionID, ag.Scope), b.Caps())
 	if err != nil {
 		return backend.AgentHandle{}, err
 	}

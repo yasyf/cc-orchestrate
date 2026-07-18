@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `child.launcher` config key: a JSON string-array argv prefix (e.g.
+  `cco config set child.launcher '["my-launcher","wrap","--"]'`) that wraps every
+  child agent's launch — spawn and resume alike — in front of the whole claude
+  invocation, nested inside the pty-host and under the env scrub. Under the
+  pty-host the launcher head and the claude token both resolve at spawn time, so
+  a bare `claude` still skips the superset wrapper shim behind a prefix. Unset or
+  empty runs children bare, byte-for-byte as before; a malformed value (anything
+  but a JSON array of non-empty strings) fails the spawn loudly.
 - Channel delivery: spawned agents receive orchestrator messages as
   `<channel source="cc-orchestrate">` tags pushed by the plugin-loaded `cco channel`
   MCP server, with the watch Monitor as the fallback until the agent's first

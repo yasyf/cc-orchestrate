@@ -3,6 +3,7 @@ package orchestrate
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 
 	"github.com/spf13/cobra"
 
@@ -22,23 +23,34 @@ func ptySocketPath(sessionID string) string {
 	return filepath.Join(appPaths().StateDir(), "pty", sessionID+".sock")
 }
 
-// wrapForCapture wraps a child argv to run under this binary's pty-host when the
-// backend cannot capture its terminal natively; a capturing backend's argv is
-// returned unchanged. The child executable is resolved first because the host may
-// run under a different PATH; claude also skips a backend's wrapper shim.
-func wrapForCapture(self, sessionID string, command []string, caps backend.Caps) ([]string, error) {
+// wrapForCapture composes the launcher prefix and child argv, wrapping the result
+// under this binary's pty-host when the backend cannot capture its terminal
+// natively; a capturing backend gets the composed argv unchanged. Under the
+// pty-host, executables are resolved here because the host may run under a
+// different PATH: a bare claude resolves past a backend's wrapper shim even behind
+// a launcher prefix, and the launcher head resolves via lookupPath.
+func wrapForCapture(self, sessionID string, launcher, command []string, caps backend.Caps) ([]string, error) {
 	if caps.Has(backend.CanCapture) {
-		return command, nil
+		return append(slices.Clone(launcher), command...), nil
 	}
-	executable := command[0]
 	if command[0] == "claude" {
-		var err error
-		executable, err = backend.ResolveClaude()
+		resolved, err := backend.ResolveClaude()
 		if err != nil {
 			return nil, fmt.Errorf("resolve claude: %w", err)
 		}
+		command = slices.Clone(command)
+		command[0] = resolved
 	}
-	return wrapPTYHost(self, sessionID, executable, command), nil
+	full := append(slices.Clone(launcher), command...)
+	executable := full[0]
+	if len(launcher) > 0 {
+		resolved, err := lookupPath(launcher[0])
+		if err != nil {
+			return nil, fmt.Errorf("resolve launcher %q: %w", launcher[0], err)
+		}
+		executable = resolved
+	}
+	return wrapPTYHost(self, sessionID, executable, full), nil
 }
 
 // wrapPTYHost rewrites an argv to run under the pty-host with the resolved child
