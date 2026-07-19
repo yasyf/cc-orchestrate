@@ -24,6 +24,10 @@ coverage.html
 # goreleaser output
 /dist/
 
+# Great Docs build artifacts
+great-docs/
+docs/scripts/.gd-build/
+
 # go-libghostty local build artifacts (libghostty-vt.a etc.)
 .libghostty/
 dist/

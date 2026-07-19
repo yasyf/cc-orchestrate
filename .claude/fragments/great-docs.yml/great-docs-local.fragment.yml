@@ -1,0 +1,28 @@
+# Great Docs configuration — https://posit-dev.github.io/great-docs/
+# Content-only site: no Python package; the landing renders from README.md.
+
+display_name: cc-orchestrate
+repo: https://github.com/yasyf/cc-orchestrate
+site_url: "https://yasyf.github.io/cc-orchestrate/"
+pypi: false
+
+reference: false
+mcp: false
+skill:
+  enabled: false
+package_info_page: false
+
+logo: docs/assets/logo.png
+
+navbar_color: "#101f33"
+accent_color:
+  light: "#c1274a"
+  dark: "#ff8ba0"
+
+social_cards:
+  image: docs/assets/social-preview.jpg
+  twitter_site: "@yasyf"
+
+hero:
+  name: cc-orchestrate
+  tagline: "Stop letting your Claude agents fight over one working copy."
