@@ -7,17 +7,5 @@
       "Bash(uv run:*)",
       "Bash(uv sync:*)"
     ]
-  },
-  "extraKnownMarketplaces": {
-    "cc-orchestrate": {
-      "source": {
-        "source": "github",
-        "repo": "yasyf/cc-orchestrate"
-      },
-      "autoUpdate": true
-    }
-  },
-  "enabledPlugins": {
-    "cc-orchestrate@cc-orchestrate": true
   }
 }
