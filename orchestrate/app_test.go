@@ -1,12 +1,21 @@
 package orchestrate
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/yasyf/cc-interact/version"
 	dkversion "github.com/yasyf/daemonkit/version"
 )
+
+func TestAppPathsUseEpochOneNamespace(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if got, want := appPaths().StateDir(), filepath.Join(os.Getenv("HOME"), ".cc-orchestrate-v1"); got != want {
+		t.Fatalf("StateDir() = %q, want %q", got, want)
+	}
+}
 
 func TestBuildVersionDevFallback(t *testing.T) {
 	mtime := time.Unix(1_700_000_000, 0)

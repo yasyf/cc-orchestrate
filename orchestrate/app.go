@@ -19,8 +19,8 @@ const (
 	// AppName labels the daemon and user-facing messages.
 	AppName = "cc-orchestrate"
 
-	// appDir is the state-directory basename under the user's home (~/.cc-orchestrate).
-	appDir = ".cc-orchestrate"
+	// appDir is the v1 state-directory basename under the user's home.
+	appDir = ".cc-orchestrate-v1"
 )
 
 var channelPlugin = channelsetup.Plugin{Marketplace: "cc-orchestrate", Name: "cc-orchestrate"}
@@ -66,7 +66,7 @@ const (
 func appPaths() paths.Paths { return paths.Paths{App: appDir} }
 
 // worktreesBase is the root under which non-primary workstream worktrees live,
-// one subdirectory per repo: ~/.cc-orchestrate/worktrees/<repo-id>/<name>.
+// one subdirectory per repo: ~/.cc-orchestrate-v1/worktrees/<repo-id>/<name>.
 func worktreesBase() string { return filepath.Join(appPaths().StateDir(), "worktrees") }
 
 func newClient() *daemon.Client { return daemon.NewClient(appPaths().SocketPath()) }

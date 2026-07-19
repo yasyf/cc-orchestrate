@@ -19,8 +19,8 @@ func newTestDB(ctx context.Context, t *testing.T) *sql.DB {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := migrate(ctx, db); err != nil {
-		t.Fatalf("migrate: %v", err)
+	if err := initializeDatabaseSchema(ctx, db); err != nil {
+		t.Fatalf("initialize schema: %v", err)
 	}
 	return db
 }

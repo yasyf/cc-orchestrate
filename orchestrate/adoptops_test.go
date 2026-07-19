@@ -84,7 +84,7 @@ func (nonCapturingAdoptBackend) Caps() backend.Caps { return backend.Caps{} }
 // newAdoptOpEnv sets up an adopt-handler test: a short poll interval, no ccp on PATH, a
 // scratch CLAUDE_CONFIG_DIR, a resolved HOME (so worktree paths carry no symlinks), an
 // isolated git config, a test tailer manager, and a real on-disk DB with cc-interact's
-// core schema plus the orchestrate migrate.
+// core schema plus the orchestrate schema.
 func newAdoptOpEnv(t *testing.T) (context.Context, *sql.DB) {
 	t.Helper()
 	oldPoll := pollInterval
@@ -106,7 +106,7 @@ func newAdoptOpEnv(t *testing.T) (context.Context, *sql.DB) {
 	t.Cleanup(cancel)
 	tailers = newTestTailerManager(ctx)
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -460,7 +460,7 @@ func TestHandleAdoptSupersetWorktree(t *testing.T) {
 
 func newAdoptOpDB(t *testing.T) *sql.DB {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

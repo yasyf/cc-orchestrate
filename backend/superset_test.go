@@ -215,7 +215,8 @@ func serveFakePtyDaemon(t *testing.T, socket string, sessions []supersetSession)
 			return
 		}
 		defer func() { _ = conn.Close() }()
-		if _, err := readSupersetFrame(conn); err != nil { // hello
+		hello, err := readSupersetFrame(conn)
+		if err != nil || !slices.Equal(hello.Protocols, []int{supersetDaemonProtocol}) {
 			return
 		}
 		if err := writeSupersetFrame(conn, map[string]any{"type": "hello-ack", "protocol": supersetDaemonProtocol, "daemonVersion": "0.2.4"}); err != nil {
@@ -229,6 +230,36 @@ func serveFakePtyDaemon(t *testing.T, socket string, sessions []supersetSession)
 	return func() {
 		_ = ln.Close()
 		<-done
+	}
+}
+
+func TestSupersetProtoV1(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "ptyd.sock")
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		if _, err := readSupersetFrame(conn); err != nil {
+			return
+		}
+		_ = writeSupersetFrame(conn, map[string]any{"type": "hello-ack", "protocol": 2})
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		<-done
+	})
+
+	_, err = listSupersetSessions(t.Context(), socket)
+	if err == nil || !strings.Contains(err.Error(), "want exactly 1") {
+		t.Fatalf("listSupersetSessions() error = %v, want exact-protocol rejection", err)
 	}
 }
 

@@ -16,7 +16,7 @@ import (
 
 // supersetDaemonProtocol is the pty-daemon wire protocol version cc-orchestrate
 // announces in its hello; the daemon answers hello-ack with the negotiated version.
-const supersetDaemonProtocol = 2
+const supersetDaemonProtocol = 1
 
 // supersetMaxFrame caps a single daemon frame, matching the daemon's own 8 MB
 // guard, so a malformed length prefix cannot make the client allocate unbounded.
@@ -40,8 +40,10 @@ type supersetSession struct {
 // supersetFrame is the decoded JSON of one control frame, covering both the
 // hello-ack (Type only) and the list-reply (Type plus Sessions).
 type supersetFrame struct {
-	Type     string            `json:"type"`
-	Sessions []supersetSession `json:"sessions"`
+	Type      string            `json:"type"`
+	Protocol  int               `json:"protocol"`
+	Protocols []int             `json:"protocols"`
+	Sessions  []supersetSession `json:"sessions"`
 }
 
 // supersetDaemonSocketPath resolves the pty-daemon control socket for the local
@@ -78,7 +80,7 @@ var supersetDaemonSocketPath = func() (string, error) {
 }
 
 // listSupersetSessions dials the pty-daemon control socket and runs the hello/list
-// handshake (length-prefixed binary frames, protocol v2), returning the host's live
+// handshake (length-prefixed binary frames, protocol v1), returning the host's live
 // PTY sessions. The socket is the daemon's authoritative real-time view and is
 // guarded by filesystem permissions (0600), so no token is exchanged.
 func listSupersetSessions(ctx context.Context, socket string) ([]supersetSession, error) {
@@ -103,6 +105,9 @@ func listSupersetSessions(ctx context.Context, socket string) ([]supersetSession
 	}
 	if ack.Type != "hello-ack" {
 		return nil, fmt.Errorf("superset: pty-daemon handshake: got frame %q, want hello-ack", ack.Type)
+	}
+	if ack.Protocol != supersetDaemonProtocol {
+		return nil, fmt.Errorf("superset: pty-daemon handshake: protocol %d, want exactly %d", ack.Protocol, supersetDaemonProtocol)
 	}
 	if err := writeSupersetFrame(conn, supersetListReq{Type: "list"}); err != nil {
 		return nil, err

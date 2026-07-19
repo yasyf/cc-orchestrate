@@ -26,7 +26,7 @@ func newXRPCServer(t *testing.T) (*daemon.Server, *httptest.Server) {
 		Paths:          appPaths(),
 		Version:        Version,
 		ActiveStatuses: []string{string(StatusActive)},
-		Migrate:        migrate,
+		Migrate:        initializeDatabaseSchema,
 	})
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)

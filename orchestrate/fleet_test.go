@@ -303,7 +303,7 @@ func TestFleetSpawnFrame(t *testing.T) {
 	log, _ := installTestFleet(t)
 	backend.Register(spawnBackend{spec: &backend.SpawnSpec{}})
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

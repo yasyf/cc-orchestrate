@@ -483,7 +483,7 @@ func TestHandleSpawnUnresolvableLauncherLeavesNoSubjectOrAgent(t *testing.T) {
 	var gotSpec backend.SpawnSpec
 	backend.Register(nonCapturingSpawnBackend{spawnBackend{spec: &gotSpec}})
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -565,8 +565,8 @@ func TestHandleSpawn(t *testing.T) {
 	backend.Register(spawnBackend{spec: &gotSpec})
 
 	// store.Open applies cc-interact's core schema (subjects/events) plus the
-	// orchestrate migrate, so the subject resolver has a real table to write.
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	// orchestrate schema, so the subject resolver has a real table to write.
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -728,7 +728,7 @@ func TestHandleSpawnKillsTerminalOnInsertFailure(t *testing.T) {
 	t.Cleanup(cancel)
 	tailers = newTestTailerManager(ctx)
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -792,7 +792,7 @@ func TestHandleSpawnDefaultsEmptyName(t *testing.T) {
 	var gotSpec backend.SpawnSpec
 	backend.Register(spawnBackend{spec: &gotSpec})
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -904,7 +904,7 @@ func TestHandleSpawnPooling(t *testing.T) {
 			var gotSpec backend.SpawnSpec
 			backend.Register(spawnBackend{spec: &gotSpec})
 
-			st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+			st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
 			if err != nil {
 				t.Fatalf("store.Open: %v", err)
 			}
@@ -1440,7 +1440,7 @@ func TestSpawnKillOrphanRace(t *testing.T) {
 		log, _ := installTestFleet(t)
 		killed := &[]backend.AgentHandle{}
 		backend.Register(spawnBackend{spec: &backend.SpawnSpec{}, killed: killed})
-		st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+		st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
 		if err != nil {
 			t.Fatalf("store.Open: %v", err)
 		}
@@ -1561,7 +1561,7 @@ func TestSpawnFastChildExitSerializesBehindLock(t *testing.T) {
 		enumerate: true,
 		mu:        &bmu, spawns: &spawns, nextTerm: &nextTerm, killed: &killed, spawnSids: &spawnSids,
 	})
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), migrate)
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

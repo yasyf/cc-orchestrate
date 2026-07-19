@@ -17,7 +17,7 @@ import (
 )
 
 // shortHome returns a temp HOME anchored at /tmp, cleaned up on test end. The default
-// temp root (darwin's /var/folders/...) plus .cc-orchestrate/pty/<sid>-<16-hex>.sock
+// temp root (darwin's /var/folders/...) plus .cc-orchestrate-v1/pty/<sid>-<16-hex>.sock
 // overruns the OS sun_path limit (~104 bytes); a /tmp anchor leaves ample headroom.
 func shortHome(t *testing.T) string {
 	t.Helper()
@@ -170,7 +170,7 @@ func TestReportChildExitToleratesUnreachableDaemon(t *testing.T) {
 // one cco.agent.childExited envelope carrying the session id and spawn nonce, then
 // returns once the reply lands.
 func TestReportChildExitReachesDaemon(t *testing.T) {
-	// t.TempDir embeds the (long) test name, which can push HOME/.cc-orchestrate/
+	// t.TempDir embeds the (long) test name, which can push HOME/.cc-orchestrate-v1/
 	// daemon.sock past the OS sun_path limit; a bare MkdirTemp stays short.
 	home, err := os.MkdirTemp("", "cco")
 	if err != nil {

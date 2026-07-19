@@ -309,6 +309,18 @@ func TestRestoreStrictParseFailsLoud(t *testing.T) {
 			body: `{"version":1,"agents":[ not json`,
 		},
 		{
+			name: "missing version",
+			body: `{"created_at":"2026-06-19T00:00:00Z","agents":[]}`,
+		},
+		{
+			name: "other version",
+			body: `{"version":2,"created_at":"2026-06-19T00:00:00Z","agents":[]}`,
+		},
+		{
+			name: "trailing object",
+			body: `{"version":1,"created_at":"2026-06-19T00:00:00Z","agents":[]} {}`,
+		},
+		{
 			name: "duplicate session id",
 			body: `{"version":1,"created_at":"2026-06-19T00:00:00Z","agents":[` +
 				`{"id":"a1","sprint_id":"w1-s","backend":"sertest","terminal_handle":"t1",` +

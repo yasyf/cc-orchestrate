@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -23,7 +25,7 @@ const serializeBundleVersion = 1
 // serializeBundle is the on-disk snapshot a restore recreates a wiped DB from: the
 // repo → workstream → sprint hierarchy every active agent descends from, then the
 // active agents themselves (identity plus captured screen). The hierarchy is carried
-// because a ~/.cc-orchestrate wipe deletes the single SQLite DB holding every table,
+// because a ~/.cc-orchestrate-v1 wipe deletes the single SQLite DB holding every table,
 // so respawnAgent could not otherwise resolve the parents it resumes an agent into.
 type serializeBundle struct {
 	Version     int               `json:"version"`
@@ -37,7 +39,7 @@ type serializeBundle struct {
 // serializedAgent is one active agent's restorable identity — the fields insertAgent
 // recreates the row from — plus the captured terminal Screen. Restore reattaches the
 // live Claude session via --resume (its transcript in ~/.claude survives a
-// ~/.cc-orchestrate wipe); Screen is preserved for inspection only and is never replayed.
+// ~/.cc-orchestrate-v1 wipe); Screen is preserved for inspection only and is never replayed.
 type serializedAgent struct {
 	ID             string       `json:"id"`
 	SprintID       string       `json:"sprint_id"`
@@ -81,7 +83,7 @@ func restoredPayload(id, terminal string) json.RawMessage {
 }
 
 // serializeDir is the root under which snapshot bundles are written, one JSON file per
-// serialize: ~/.cc-orchestrate/serialize/<stamp>.json.
+// serialize: ~/.cc-orchestrate-v1/serialize/<stamp>.json.
 func serializeDir() string { return filepath.Join(appPaths().StateDir(), "serialize") }
 
 // handleSerialize answers the serialize op: it snapshots the repo/workstream/sprint
@@ -289,8 +291,15 @@ func readBundle(path string) (serializeBundle, error) {
 	if err := dec.Decode(&bundle); err != nil {
 		return serializeBundle{}, fmt.Errorf("decode bundle %q: %w", path, err)
 	}
-	if dec.More() {
-		return serializeBundle{}, fmt.Errorf("decode bundle %q: trailing data after the bundle object", path)
+	if bundle.Version != serializeBundleVersion {
+		return serializeBundle{}, fmt.Errorf("decode bundle %q: version %d, want exactly %d", path, bundle.Version, serializeBundleVersion)
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return serializeBundle{}, fmt.Errorf("decode bundle %q: trailing data after the bundle object", path)
+		}
+		return serializeBundle{}, fmt.Errorf("decode bundle %q: trailing data: %w", path, err)
 	}
 	owner := make(map[string]string, len(bundle.Agents))
 	for _, sa := range bundle.Agents {

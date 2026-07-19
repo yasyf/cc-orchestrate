@@ -56,7 +56,7 @@ func serve(ctx context.Context) error {
 		// type these hooks emit, correct even for the Connectivity zero value.
 		PresenceEventType: c.Type(),
 		OnPresenceChange:  c.OnPresenceChange,
-		Migrate:           migrate,
+		Migrate:           initializeDatabaseSchema,
 		// Run the channel boot reconcile, repair DB rows whose backend workspace or
 		// terminal vanished while the daemon was down, then resume a transcript
 		// tailer for every agent still active across the restart (the post-reconcile
