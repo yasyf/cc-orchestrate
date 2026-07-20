@@ -1,0 +1,10 @@
+# Go binaries
+/cc-orchestrate
+*.exe
+
+# Go test / coverage
+coverage.html
+
+# go-libghostty local build artifacts (libghostty-vt.a etc.)
+.libghostty/
+dist/
