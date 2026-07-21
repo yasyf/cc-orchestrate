@@ -10,7 +10,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/yasyf/cc-interact v0.14.1-0.20260721021908-d3a0a7a9502b
 	github.com/yasyf/cc-notes v0.31.1
-	github.com/yasyf/daemonkit v0.1.1-0.20260721013056-c39154cdbd0a
+	github.com/yasyf/daemonkit v0.1.1-0.20260721044346-f090a23cf11f
 	github.com/yasyf/reposync v0.16.0
 	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6
 	golang.org/x/sys v0.47.0
