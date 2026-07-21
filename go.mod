@@ -8,9 +8,9 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/yasyf/cc-interact v0.14.1-0.20260721021908-d3a0a7a9502b
+	github.com/yasyf/cc-interact v0.15.0
 	github.com/yasyf/cc-notes v0.31.1
-	github.com/yasyf/daemonkit v0.1.1-0.20260721044346-f090a23cf11f
+	github.com/yasyf/daemonkit v0.2.0
 	github.com/yasyf/reposync v0.16.0
 	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6
 	golang.org/x/sys v0.47.0
@@ -40,7 +40,6 @@ require (
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect
 	github.com/go-git/go-git/v5 v5.19.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
@@ -66,7 +65,7 @@ require (
 	github.com/vishvananda/netns v0.0.0-20200728191858-db3c7e526aae // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/yasyf/synckit v0.23.1-0.20260721024529-9b633bf21646 // indirect
+	github.com/yasyf/synckit v0.24.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.etcd.io/bbolt v1.5.0 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
