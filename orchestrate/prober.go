@@ -162,6 +162,9 @@ func resolveScreen(ctx context.Context, db *sql.DB, ag agentRow) (promptScreen, 
 		}
 		return nativeScreen{cap: capturer, snd: snd, handle: handle}, nil
 	}
+	if ag.SpawnNonce == "" {
+		return nil, fmt.Errorf("agent %q has no spawn nonce", ag.ID)
+	}
 	return ptyScreen{client: ptyhost.Dial(ptySocketPath(ag.SessionID, ag.SpawnNonce))}, nil
 }
 

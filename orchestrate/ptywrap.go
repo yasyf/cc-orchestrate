@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -35,15 +36,13 @@ const reportChildExitTimeout = 5 * time.Second
 // removal can never unlink the replacement's socket. The suffix is 64 bits of the
 // full nonce's SHA-256 (16 hex chars) — wide enough that two incarnations of one
 // session can never share a path, unlike a truncated-nonce prefix — while the full
-// path stays inside the OS sun_path limit under the production StateDir; an empty
-// nonce (a wrapper or row predating nonces) keeps the bare session-derived path, so
-// capture keeps working across the upgrade window.
+// path stays inside the OS sun_path limit under the production StateDir.
 func ptySocketPath(sessionID, spawnNonce string) string {
-	name := sessionID
-	if spawnNonce != "" {
-		sum := sha256.Sum256([]byte(spawnNonce))
-		name += "-" + hex.EncodeToString(sum[:8])
+	if spawnNonce == "" {
+		panic("pty socket requires spawn nonce")
 	}
+	sum := sha256.Sum256([]byte(spawnNonce))
+	name := sessionID + "-" + hex.EncodeToString(sum[:8])
 	return filepath.Join(appPaths().StateDir(), "pty", name+".sock")
 }
 
@@ -94,6 +93,12 @@ func ptyHostCmd() *cobra.Command {
 		Short:  "Host a child under a pseudo-terminal and serve its capture/keys socket",
 		Hidden: true,
 		Args:   cobra.MinimumNArgs(1),
+		PreRunE: func(*cobra.Command, []string) error {
+			if spawnNonce == "" {
+				return errors.New("pty-host requires --spawn-nonce")
+			}
+			return nil
+		},
 		RunE: func(c *cobra.Command, args []string) error {
 			return ptyhost.Run(c.Context(), ptyhost.Options{
 				Socket:      ptySocketPath(sessionID, spawnNonce),

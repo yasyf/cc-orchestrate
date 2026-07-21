@@ -282,9 +282,12 @@ func TestPtySocketPathDeterministic(t *testing.T) {
 	if _, err := hex.DecodeString(suffix); err != nil {
 		t.Fatalf("socket suffix %q is not hex: %v", suffix, err)
 	}
-	// A nonce-less legacy wrapper (and a migrated pre-nonce row) keeps the bare
-	// session-derived path, so capture keeps working across the upgrade window.
-	if got, want := filepath.Base(ptySocketPath("sid-9", "")), "sid-9.sock"; got != want {
-		t.Fatalf("legacy socket name = %q, want %q", got, want)
-	}
+	t.Run("empty nonce panics", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("ptySocketPath accepted an empty spawn nonce")
+			}
+		}()
+		_ = ptySocketPath("sid-9", "")
+	})
 }

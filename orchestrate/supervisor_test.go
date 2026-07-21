@@ -918,47 +918,11 @@ func TestHandleChildExited(t *testing.T) {
 		}
 	})
 
-	t.Run("an empty-nonce report is a no-op even against an empty-nonce row", func(t *testing.T) {
-		// A migrated pre-nonce row reads "" for spawn_nonce until its next respawn, so a
-		// nonce-less report would string-match it. The empty-nonce guard keeps the
-		// upgrade window an explicit no-op: a report that cannot prove which incarnation
-		// it belongs to never kills anything.
-		ctx, cancel := context.WithCancel(context.Background())
-		t.Cleanup(cancel)
-		tailers = newTestTailerManager(ctx)
-		db := newTestDB(ctx, t)
-
-		var mu sync.Mutex
-		spawns := 0
-		nextTerm := "term-2"
-		var killed []string
-		backend.Register(superviseBackend{
-			agents:    []backend.AgentHandle{{Backend: "supervisetest", ID: "term-1"}},
-			enumerate: true,
-			mu:        &mu, spawns: &spawns, nextTerm: &nextTerm, killed: &killed,
-		})
-		seedWorkstream(ctx, t, db, "w1", "p1", "supervisetest", "ws-1")
-		mustInsertAgent(ctx, t, db, agentRow{
-			ID: "a1", SprintID: "w1-s", Backend: "supervisetest", TerminalHandle: "term-1",
-			SessionID: "sess-a1", Scope: "/s", SubjectID: "subj-a1", Status: StatusActive, State: StateWorking,
-			CreatedAt: "t0", SpawnNonce: "",
-		})
-
-		log := &eventLog{}
-		if mustRespawned(t, callReport(t, db, log, "sess-a1", "")) {
-			t.Fatal("an empty-nonce report must never drive a respawn")
-		}
-		assertAgentStatus(ctx, t, db, "a1", StatusActive)
-		assertRestartCount(ctx, t, db, "a1", 0)
-		assertTerminalHandle(ctx, t, db, "a1", "term-1")
-		if len(log.types()) != 0 {
-			t.Fatalf("a no-op report must emit nothing; events=%v", log.types())
-		}
-		mu.Lock()
-		gotSpawns, gotKilled := spawns, len(killed)
-		mu.Unlock()
-		if gotSpawns != 0 || gotKilled != 0 {
-			t.Fatalf("must not kill/respawn; spawns=%d killed=%d", gotSpawns, gotKilled)
+	t.Run("an empty-nonce report is rejected", func(t *testing.T) {
+		_, db, log, _, _, _, _ := newAgent(t, StatusActive)
+		reply := callReport(t, db, log, "sess-a1", "")
+		if reply.OK || !strings.Contains(reply.Error, "requires spawn nonce") {
+			t.Fatalf("empty-nonce report = %+v, want rejection", reply)
 		}
 	})
 

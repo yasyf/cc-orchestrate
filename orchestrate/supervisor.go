@@ -3,6 +3,8 @@ package orchestrate
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -229,6 +231,9 @@ type agentChildExitedResult struct {
 // membership/staleness latency. It is socket-only — an internal child→daemon signal like
 // cco.agent.report, off the parent XRPC/MCP surfaces.
 func handleChildExited(hc daemon.HandlerCtx, req agentChildExitedRequest) (agentChildExitedResult, error) {
+	if req.SpawnNonce == "" {
+		return agentChildExitedResult{}, errors.New("child exit report requires spawn nonce")
+	}
 	ag, err := getAgentBySession(hc.Ctx, hc.DB, req.SessionID)
 	if err != nil {
 		return agentChildExitedResult{}, err
@@ -252,13 +257,9 @@ func handleChildExited(hc daemon.HandlerCtx, req agentChildExitedRequest) (agent
 // kill-then-respawn would otherwise kill the healthy fresh incarnation. The spawn
 // nonce settles it — each (re)spawn mints a fresh nonce into both the wrapper's argv
 // and the row, so a mismatched nonce marks the report as a prior incarnation's and a
-// no-op. An EMPTY report nonce never matches, even an empty row nonce: a migrated
-// pre-nonce row reads "" until its next respawn, and a nonce-less report matching it
-// would kill an agent it cannot prove it belongs to — so the upgrade window is
-// explicitly a no-op, covered by the membership/staleness fallbacks. A still-active,
-// nonce-matched agent is respawned under budget with killFirst, tearing down the
-// wrapper's surviving terminal before resuming the SAME session. It reports whether
-// it drove a respawn.
+// no-op. A still-active, nonce-matched agent is respawned under budget with killFirst,
+// tearing down the wrapper's surviving terminal before resuming the SAME session. It
+// reports whether it drove a respawn.
 func reconcileReportedExit(ctx context.Context, db *sql.DB, appendFn daemon.AppendFunc, ag agentRow, spawnNonce string) (bool, error) {
 	mu := agentLock(ag.ID)
 	mu.Lock()
@@ -270,7 +271,10 @@ func reconcileReportedExit(ctx context.Context, db *sql.DB, appendFn daemon.Appe
 	if cur.Status != StatusActive {
 		return false, nil
 	}
-	if spawnNonce == "" || cur.SpawnNonce != spawnNonce {
+	if cur.SpawnNonce == "" {
+		return false, fmt.Errorf("active agent %q has no spawn nonce", cur.ID)
+	}
+	if cur.SpawnNonce != spawnNonce {
 		return false, nil
 	}
 	return respawnUnderBudget(ctx, db, appendFn, cur, true)
