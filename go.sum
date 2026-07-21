@@ -153,8 +153,8 @@ github.com/yasyf/cc-interact v0.15.0 h1:Pigq/OHqZSDz+Ccbp7rP/lemKz6CCCOaWsExzjZ9
 github.com/yasyf/cc-interact v0.15.0/go.mod h1:MHdPVfQ8ExxR2JDe1HeFaCpstI3xRcihmZCDWuGt0O8=
 github.com/yasyf/cc-notes v0.31.1 h1:KKtVy9PHhCK5qB/JW+2w/EiKPFRhhkYXGNZJmCsHqLU=
 github.com/yasyf/cc-notes v0.31.1/go.mod h1:ozaCHRQL1KMgOEywobSaFQcalyQfqGsWWcx9ZexSads=
-github.com/yasyf/daemonkit v0.3.2 h1:+u9jwUFRVe+Kk8xE8N9/DMNQFh+yNXGB++62oTYygsc=
-github.com/yasyf/daemonkit v0.3.2/go.mod h1:nJvh9FlJ3XPTuDkUb3PMcW0ZupIXsJJCkTGzfE40r/I=
+github.com/yasyf/daemonkit v0.7.1 h1:3ukBqpRrbu7Ex+tA8KNPSZ3A6sFAVj0JvXqr6buQWaE=
+github.com/yasyf/daemonkit v0.7.1/go.mod h1:5tYeENawEKN1GpM12YXTqIZ1fbWv7bj9P4TyIcSZ24Q=
 github.com/yasyf/reposync v0.16.0 h1:3J6OrpUvkRCKruvCopA5+nbIkyQLVUw9xkMuqSGUSBQ=
 github.com/yasyf/reposync v0.16.0/go.mod h1:qQD1k8V5ZLQDw/let3vozjwfjn/bvsvHZT+9o+gDYFo=
 github.com/yasyf/synckit v0.24.0 h1:MqZCNYYPXFz+fP6/6JkF/4t+8yrrLnRt+85G4N09U4E=
