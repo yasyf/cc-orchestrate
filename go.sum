@@ -154,6 +154,8 @@ github.com/yasyf/cc-notes v0.31.1 h1:KKtVy9PHhCK5qB/JW+2w/EiKPFRhhkYXGNZJmCsHqLU
 github.com/yasyf/cc-notes v0.31.1/go.mod h1:ozaCHRQL1KMgOEywobSaFQcalyQfqGsWWcx9ZexSads=
 github.com/yasyf/daemonkit v0.1.1-0.20260719051422-e93fc1280567 h1:HUrEFyARmxmvOsLKXWyyjAD7Y2bbHgri3fNGiUlkN4I=
 github.com/yasyf/daemonkit v0.1.1-0.20260719051422-e93fc1280567/go.mod h1:615tFTdsseJNwpHtb6xMfQcvJFZj62xPZaCm21psoiY=
+github.com/yasyf/daemonkit v0.1.1-0.20260721013056-c39154cdbd0a h1:7VR17Wh0qR5/yJ0Pus0zvtNnH3opiJDgZtCViDnsCHQ=
+github.com/yasyf/daemonkit v0.1.1-0.20260721013056-c39154cdbd0a/go.mod h1:nJvh9FlJ3XPTuDkUb3PMcW0ZupIXsJJCkTGzfE40r/I=
 github.com/yasyf/reposync v0.16.0 h1:3J6OrpUvkRCKruvCopA5+nbIkyQLVUw9xkMuqSGUSBQ=
 github.com/yasyf/reposync v0.16.0/go.mod h1:qQD1k8V5ZLQDw/let3vozjwfjn/bvsvHZT+9o+gDYFo=
 github.com/yasyf/synckit v0.9.0 h1:tf05zgun658JRKfJLCxjLj44kygAB/y2nToA0QVK5WY=
@@ -188,6 +190,8 @@ golang.org/x/sys v0.0.0-20220715151400-c0bba94af5f8/go.mod h1:oPkhp1MJrh7nUepCBc
 golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.46.0 h1:noSf2Fq6F8DBgS+LysIkx7rIExoNHJsxOAtPp4rthXw=
 golang.org/x/sys v0.46.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
+golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
+golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
 golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
 golang.org/x/term v0.44.0 h1:0rLvDRCtNj0gZkyIXhCyOb2OAzEhLVqc4B+hrsBhrmc=
 golang.org/x/term v0.44.0/go.mod h1:7ze4MdzUzLXpSAoFP1H0bOI9aXDqveSvatT5vKcFh2Y=
