@@ -142,13 +142,7 @@ func TestRunTypedErrorCodes(t *testing.T) {
 // cc-interact reserved op or double-registering (either panics in Server.Register).
 func TestRegisterOpsNoPanic(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	s, err := daemon.New(daemon.Config{
-		AppName:        AppName,
-		Paths:          appPaths(),
-		Version:        Version,
-		ActiveStatuses: []string{string(StatusActive)},
-		Migrate:        initializeDatabaseSchema,
-	})
+	s, err := daemon.New(testDaemonConfig())
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}

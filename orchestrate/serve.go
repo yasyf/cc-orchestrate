@@ -51,12 +51,14 @@ func serve(ctx context.Context) error {
 		AppName:        AppName,
 		Paths:          appPaths(),
 		Version:        buildVersion(),
+		LifecycleBuild: buildVersion(),
+		DaemonRole:     appDaemonRole(),
 		ActiveStatuses: []string{string(StatusActive)},
 		// c.Type() (not c.EventType) so the SSE plane filters the same presence
 		// type these hooks emit, correct even for the Connectivity zero value.
 		PresenceEventType: c.Type(),
 		OnPresenceChange:  c.OnPresenceChange,
-		Migrate:           initializeDatabaseSchema,
+		StoreSchema:       databaseStoreSchema(),
 		// Run the channel boot reconcile, repair DB rows whose backend workspace or
 		// terminal vanished while the daemon was down, then resume a transcript
 		// tailer for every agent still active across the restart (the post-reconcile

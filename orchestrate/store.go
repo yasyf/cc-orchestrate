@@ -30,11 +30,11 @@ const sprintColumns = `id, workstream_id, name, COALESCE(ccnotes_sprint, ''), st
 // agents table so the list stays unambiguous when joined against sprints and
 // workstreams; nullable columns are coalesced to "" so every scan target is a plain
 // string.
-const agentColumns = `agents.id, agents.sprint_id, agents.backend, COALESCE(agents.backend_terminal_handle, ''), ` +
-	`COALESCE(agents.session_id, ''), agents.scope, COALESCE(agents.name, ''), COALESCE(agents.prompt, ''), ` +
-	`COALESCE(agents.subject_id, ''), COALESCE(agents.ccnotes_task, ''), agents.status, agents.state, ` +
-	`COALESCE(agents.activity, ''), agents.tokens, COALESCE(agents.updated_at, ''), agents.created_at, ` +
-	`agents.restart_count, COALESCE(agents.last_restart_at, ''), COALESCE(agents.spawn_nonce, '')`
+const agentColumns = `orchestrate_agents.id, orchestrate_agents.sprint_id, orchestrate_agents.backend, COALESCE(orchestrate_agents.backend_terminal_handle, ''), ` +
+	`COALESCE(orchestrate_agents.session_id, ''), orchestrate_agents.scope, COALESCE(orchestrate_agents.name, ''), COALESCE(orchestrate_agents.prompt, ''), ` +
+	`COALESCE(orchestrate_agents.subject_id, ''), COALESCE(orchestrate_agents.ccnotes_task, ''), orchestrate_agents.status, orchestrate_agents.state, ` +
+	`COALESCE(orchestrate_agents.activity, ''), orchestrate_agents.tokens, COALESCE(orchestrate_agents.updated_at, ''), orchestrate_agents.created_at, ` +
+	`orchestrate_agents.restart_count, COALESCE(orchestrate_agents.last_restart_at, ''), COALESCE(orchestrate_agents.spawn_nonce, '')`
 
 // repoRow is one row of the repos table: an orchestration repo, the container its
 // workstreams branch from. The backend workspace now lives on each workstream.
@@ -447,7 +447,7 @@ func casSprintKilled(ctx context.Context, db *sql.DB, id string) (bool, error) {
 
 func insertAgent(ctx context.Context, db *sql.DB, a agentRow) error {
 	_, err := db.ExecContext(ctx,
-		`INSERT INTO agents (id, sprint_id, backend, backend_terminal_handle, session_id, scope,
+		`INSERT INTO orchestrate_agents (id, sprint_id, backend, backend_terminal_handle, session_id, scope,
 			name, prompt, subject_id, ccnotes_task, status, state, activity, tokens, updated_at, created_at,
 			restart_count, last_restart_at, spawn_nonce)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -463,49 +463,49 @@ func insertAgent(ctx context.Context, db *sql.DB, a agentRow) error {
 // listAgents returns every agent, narrowed to sprintFilter and/or status when either
 // is set.
 func listAgents(ctx context.Context, db *sql.DB, sprintFilter string, status LifecycleStatus) ([]agentRow, error) {
-	query := `SELECT ` + agentColumns + ` FROM agents`
+	query := `SELECT ` + agentColumns + ` FROM orchestrate_agents`
 	conds := []string{}
 	args := []any{}
 	if sprintFilter != "" {
-		conds = append(conds, `agents.sprint_id = ?`)
+		conds = append(conds, `orchestrate_agents.sprint_id = ?`)
 		args = append(args, sprintFilter)
 	}
 	if status != "" {
-		conds = append(conds, `agents.status = ?`)
+		conds = append(conds, `orchestrate_agents.status = ?`)
 		args = append(args, status)
 	}
 	if len(conds) > 0 {
 		query += ` WHERE ` + strings.Join(conds, ` AND `)
 	}
-	return queryAgents(ctx, db, query+` ORDER BY agents.created_at`, args...)
+	return queryAgents(ctx, db, query+` ORDER BY orchestrate_agents.created_at`, args...)
 }
 
 // listWorkstreamAgents returns every agent of a workstream, joining through its
 // sprints (an agent attaches to a sprint, the sprint to a workstream).
 func listWorkstreamAgents(ctx context.Context, db *sql.DB, workstreamID string) ([]agentRow, error) {
 	return queryAgents(ctx, db,
-		`SELECT `+agentColumns+` FROM agents
-		 JOIN sprints ON agents.sprint_id = sprints.id
-		 WHERE sprints.workstream_id = ? ORDER BY agents.created_at`, workstreamID)
+		`SELECT `+agentColumns+` FROM orchestrate_agents
+		 JOIN sprints ON orchestrate_agents.sprint_id = sprints.id
+		 WHERE sprints.workstream_id = ? ORDER BY orchestrate_agents.created_at`, workstreamID)
 }
 
 // listRepoAgents returns every agent of a repo, joining through its sprints and
 // workstreams, narrowed to status when it is set.
 func listRepoAgents(ctx context.Context, db *sql.DB, repoID string, status LifecycleStatus) ([]agentRow, error) {
-	query := `SELECT ` + agentColumns + ` FROM agents
-		 JOIN sprints ON agents.sprint_id = sprints.id
+	query := `SELECT ` + agentColumns + ` FROM orchestrate_agents
+		 JOIN sprints ON orchestrate_agents.sprint_id = sprints.id
 		 JOIN workstreams ON sprints.workstream_id = workstreams.id
 		 WHERE workstreams.repo_id = ?`
 	args := []any{repoID}
 	if status != "" {
-		query += ` AND agents.status = ?`
+		query += ` AND orchestrate_agents.status = ?`
 		args = append(args, status)
 	}
-	return queryAgents(ctx, db, query+` ORDER BY agents.created_at`, args...)
+	return queryAgents(ctx, db, query+` ORDER BY orchestrate_agents.created_at`, args...)
 }
 
 func listActiveAgents(ctx context.Context, db *sql.DB) ([]agentRow, error) {
-	return queryAgents(ctx, db, `SELECT `+agentColumns+` FROM agents WHERE agents.status = ? ORDER BY agents.created_at`, StatusActive)
+	return queryAgents(ctx, db, `SELECT `+agentColumns+` FROM orchestrate_agents WHERE orchestrate_agents.status = ? ORDER BY orchestrate_agents.created_at`, StatusActive)
 }
 
 func queryAgents(ctx context.Context, db *sql.DB, query string, args ...any) ([]agentRow, error) {
@@ -529,7 +529,7 @@ func queryAgents(ctx context.Context, db *sql.DB, query string, args ...any) ([]
 }
 
 func getAgent(ctx context.Context, db *sql.DB, id string) (agentRow, error) {
-	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM agents WHERE agents.id = ?`, id))
+	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM orchestrate_agents WHERE orchestrate_agents.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return agentRow{}, notFoundf("agent not found: %s", id)
 	}
@@ -543,7 +543,7 @@ func getAgent(ctx context.Context, db *sql.DB, id string) (agentRow, error) {
 // back from the subject it resolves to the agent id its fleet frame carries. A subject
 // is 1:1 with an agent, so at most one row matches.
 func getAgentBySubject(ctx context.Context, db *sql.DB, subjectID string) (agentRow, error) {
-	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM agents WHERE agents.subject_id = ?`, subjectID))
+	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM orchestrate_agents WHERE orchestrate_agents.subject_id = ?`, subjectID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return agentRow{}, notFoundf("agent not found for subject: %s", subjectID)
 	}
@@ -558,7 +558,7 @@ func getAgentBySubject(ctx context.Context, db *sql.DB, subjectID string) (agent
 // per-spawn uuid unique across agents (enforced by agents_session_id_unique), so at most
 // one row matches.
 func getAgentBySession(ctx context.Context, db *sql.DB, sessionID string) (agentRow, error) {
-	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM agents WHERE agents.session_id = ?`, sessionID))
+	a, err := scanAgent(db.QueryRowContext(ctx, `SELECT `+agentColumns+` FROM orchestrate_agents WHERE orchestrate_agents.session_id = ?`, sessionID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return agentRow{}, notFoundf("agent not found for session: %s", sessionID)
 	}
@@ -572,7 +572,7 @@ func getAgentBySession(ctx context.Context, db *sql.DB, sessionID string) (agent
 // restore needs: an absent agent is re-inserted from its bundle, a present one only
 // has its terminal recreated.
 func agentExists(ctx context.Context, db *sql.DB, id string) (bool, error) {
-	return rowExists(ctx, db, "agents", id)
+	return rowExists(ctx, db, "orchestrate_agents", id)
 }
 
 // rowExists reports whether a row with the given primary-key id is present in table.
@@ -592,7 +592,7 @@ func rowExists(ctx context.Context, db *sql.DB, table, id string) (bool, error) 
 }
 
 func setAgentLifecycle(ctx context.Context, db *sql.DB, id string, status LifecycleStatus) error {
-	_, err := db.ExecContext(ctx, `UPDATE agents SET status = ?, updated_at = ? WHERE id = ?`, status, nowStamp(), id)
+	_, err := db.ExecContext(ctx, `UPDATE orchestrate_agents SET status = ?, updated_at = ? WHERE id = ?`, status, nowStamp(), id)
 	if err != nil {
 		return fmt.Errorf("set agent %q lifecycle: %w", id, err)
 	}
@@ -600,7 +600,7 @@ func setAgentLifecycle(ctx context.Context, db *sql.DB, id string, status Lifecy
 }
 
 func markRestartAttempt(ctx context.Context, db *sql.DB, id string, count int, at string) error {
-	_, err := db.ExecContext(ctx, `UPDATE agents SET restart_count = ?, last_restart_at = ? WHERE id = ?`, count, at, id)
+	_, err := db.ExecContext(ctx, `UPDATE orchestrate_agents SET restart_count = ?, last_restart_at = ? WHERE id = ?`, count, at, id)
 	if err != nil {
 		return fmt.Errorf("mark agent %q restart attempt: %w", id, err)
 	}
@@ -613,7 +613,7 @@ func markRestartAttempt(ctx context.Context, db *sql.DB, id string, count int, a
 // the new terminal with the prior incarnation's nonce would let a delayed old-nonce
 // report kill the healthy replacement.
 func setAgentIncarnation(ctx context.Context, db *sql.DB, id, handle, nonce string) error {
-	_, err := db.ExecContext(ctx, `UPDATE agents SET backend_terminal_handle = ?, spawn_nonce = ? WHERE id = ?`, handle, nonce, id)
+	_, err := db.ExecContext(ctx, `UPDATE orchestrate_agents SET backend_terminal_handle = ?, spawn_nonce = ? WHERE id = ?`, handle, nonce, id)
 	if err != nil {
 		return fmt.Errorf("set agent %q incarnation: %w", id, err)
 	}
@@ -621,7 +621,7 @@ func setAgentIncarnation(ctx context.Context, db *sql.DB, id, handle, nonce stri
 }
 
 func resetRestart(ctx context.Context, db *sql.DB, id string) error {
-	_, err := db.ExecContext(ctx, `UPDATE agents SET restart_count = 0, last_restart_at = '' WHERE id = ?`, id)
+	_, err := db.ExecContext(ctx, `UPDATE orchestrate_agents SET restart_count = 0, last_restart_at = '' WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("reset agent %q restart state: %w", id, err)
 	}
@@ -632,7 +632,7 @@ func resetRestart(ctx context.Context, db *sql.DB, id string) error {
 // fresh updated_at in RFC3339 UTC.
 func applyStatus(ctx context.Context, db *sql.DB, id string, st Status) error {
 	_, err := db.ExecContext(ctx,
-		`UPDATE agents SET state = ?, activity = ?, tokens = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE orchestrate_agents SET state = ?, activity = ?, tokens = ?, updated_at = ? WHERE id = ?`,
 		st.State, statusActivity(st), st.Tokens, nowStamp(), id)
 	if err != nil {
 		return fmt.Errorf("apply status to agent %q: %w", id, err)

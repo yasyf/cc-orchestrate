@@ -3,7 +3,6 @@ package orchestrate
 import (
 	"encoding/hex"
 	"encoding/json"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -165,6 +164,21 @@ func TestReportChildExitToleratesUnreachableDaemon(t *testing.T) {
 	}
 }
 
+func startChildExitCapture(t *testing.T) <-chan daemon.Envelope {
+	t.Helper()
+	got := make(chan daemon.Envelope, 1)
+	s, err := daemon.New(testDaemonConfig())
+	if err != nil {
+		t.Fatalf("daemon.New: %v", err)
+	}
+	s.Register(mAgentChildExited.op(), func(h daemon.HandlerCtx) daemon.Reply {
+		got <- h.Env
+		return daemon.Reply{OK: true}
+	})
+	startTestDaemon(t, s)
+	return got
+}
+
 // TestReportChildExitReachesDaemon proves the positive path at the socket level: with
 // a daemon listening on the derived control socket, reportChildExit delivers exactly
 // one cco.agent.childExited envelope carrying the session id and spawn nonce, then
@@ -179,30 +193,7 @@ func TestReportChildExitReachesDaemon(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("HOME", home)
 
-	sock := appPaths().SocketPath()
-	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-
-	got := make(chan daemon.Envelope, 1)
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
-		var env daemon.Envelope
-		if err := json.NewDecoder(conn).Decode(&env); err != nil {
-			return
-		}
-		_ = json.NewEncoder(conn).Encode(daemon.Reply{Proto: env.Proto, OK: true})
-		got <- env
-	}()
+	got := startChildExitCapture(t)
 
 	reportChildExit("sess-live", "nonce-live")
 
@@ -234,30 +225,7 @@ func TestReportChildExitReachesDaemon(t *testing.T) {
 func TestPtyHostCmdReportsChildExitToDaemon(t *testing.T) {
 	shortHome(t)
 
-	sock := appPaths().SocketPath()
-	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-
-	got := make(chan daemon.Envelope, 1)
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
-		var env daemon.Envelope
-		if err := json.NewDecoder(conn).Decode(&env); err != nil {
-			return
-		}
-		_ = json.NewEncoder(conn).Encode(daemon.Reply{Proto: env.Proto, OK: true})
-		got <- env
-	}()
+	got := startChildExitCapture(t)
 
 	c := ptyHostCmd()
 	c.SetArgs([]string{"--session-id", "sc", "--spawn-nonce", "n1chain0", "--", "sh", "-c", "exit 0"})

@@ -303,7 +303,7 @@ func TestFleetSpawnFrame(t *testing.T) {
 	log, _ := installTestFleet(t)
 	backend.Register(spawnBackend{spec: &backend.SpawnSpec{}})
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -551,7 +551,7 @@ func TestFleetSerializeRestoreFrames(t *testing.T) {
 		t.Fatalf("serialized frame = %v, want path %q count 1", ser, out)
 	}
 
-	if _, err := db.ExecContext(ctx, `DELETE FROM agents`); err != nil {
+	if _, err := db.ExecContext(ctx, `DELETE FROM orchestrate_agents`); err != nil {
 		t.Fatal(err)
 	}
 	if reply := runTyped(handleRestore, opCtx(db, mustJSON(t, map[string]string{"path": out}), (&eventLog{}).append)); !reply.OK {

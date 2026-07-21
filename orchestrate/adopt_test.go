@@ -123,7 +123,7 @@ func TestListAdoptableFilters(t *testing.T) {
 			name: "managed session id",
 			prepare: func(ctx context.Context, t *testing.T, db *sql.DB, resolved, sid string) {
 				writeAdoptTranscript(t, resolved, sid, []string{adoptFixture(t, lineText, resolved, sid, "main")})
-				if _, err := db.ExecContext(ctx, `INSERT INTO agents (id, sprint_id, backend, scope, status, created_at) VALUES (?, 'sprint', 'tmux', 'scope', 'killed', 'now')`, sid); err != nil {
+				if _, err := db.ExecContext(ctx, `INSERT INTO orchestrate_agents (id, sprint_id, backend, scope, status, created_at) VALUES (?, 'sprint', 'tmux', 'scope', 'killed', 'now')`, sid); err != nil {
 					t.Fatalf("insert managed agent: %v", err)
 				}
 			},

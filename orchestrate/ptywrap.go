@@ -121,5 +121,9 @@ func reportChildExit(sessionID, spawnNonce string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), reportChildExitTimeout)
 	defer cancel()
-	_, _ = newClient().Do(ctx, daemon.Envelope{Op: mAgentChildExited.op(), Session: AppName, Body: body})
+	client, err := newClient(ctx)
+	if err != nil {
+		return
+	}
+	_, _ = client.Do(ctx, daemon.Envelope{Op: mAgentChildExited.op(), Session: AppName, Body: body})
 }

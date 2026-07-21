@@ -131,7 +131,7 @@ func findAdoptCandidateBySID(candidates []adoptCandidate, sid string) (adoptCand
 }
 
 func managedSessionIDs(ctx context.Context, db *sql.DB) (map[string]struct{}, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id FROM agents`)
+	rows, err := db.QueryContext(ctx, `SELECT id FROM orchestrate_agents`)
 	if err != nil {
 		return nil, fmt.Errorf("list managed session ids: %w", err)
 	}

@@ -65,7 +65,7 @@ func TestNativeText(t *testing.T) {
 }
 
 func TestResolveProbePolicy(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestResolveProbePolicy(t *testing.T) {
 		}
 	})
 	t.Run("config-read error fails safe to surface-only", func(t *testing.T) {
-		closed, err := store.Open(filepath.Join(t.TempDir(), "closed.db"), initializeDatabaseSchema)
+		closed, err := store.Open(ctx, filepath.Join(t.TempDir(), "closed.db"), databaseStoreSchema())
 		if err != nil {
 			t.Fatal(err)
 		}

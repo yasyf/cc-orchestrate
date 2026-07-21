@@ -216,7 +216,11 @@ func runOpCtx(ctx context.Context, op daemon.Op, body any) (daemon.Reply, error)
 			return daemon.Reply{}, err
 		}
 	}
-	reply, err := newClient().Do(ctx, daemon.Envelope{
+	client, err := newClient(ctx)
+	if err != nil {
+		return daemon.Reply{}, err
+	}
+	reply, err := client.Do(ctx, daemon.Envelope{
 		Op: op, Session: AppName, ClaudePID: d.ClaudePID(), Scope: cwd, Body: raw,
 	})
 	if err != nil {
@@ -971,7 +975,10 @@ func watchAllAgents(c *cobra.Command, d cmd.Deps) error {
 // its event log to emit one event at a time, stopping on the agent's terminal exit
 // event or when ctx is cancelled.
 func streamAgent(ctx context.Context, d cmd.Deps, a agentView, emit func(string) error) error {
-	client := newClient()
+	client, err := newClient(ctx)
+	if err != nil {
+		return err
+	}
 	pid := d.ClaudePID()
 	subjectID, port, err := resolveAgentSubject(ctx, client, a.SessionID, a.Scope, pid)
 	if err != nil {
@@ -1271,10 +1278,14 @@ func fleetStreamTarget(c *cobra.Command) (subjectID string, port int, err error)
 // the stream.
 func consumeFleet(ctx context.Context, d cmd.Deps, subjectID string, port int, consumer string, emit func(string) error) error {
 	pid := d.ClaudePID()
+	client, err := newClient(ctx)
+	if err != nil {
+		return err
+	}
 	src := consume.StreamSource{
 		Port: port, SubjectID: subjectID, Consumer: consumer, ClaudePID: pid,
 		Paths: d.Paths, WindowAlive: d.WindowAlive,
-		Refresh: refreshFleetPort(newClient(), pid),
+		Refresh: refreshFleetPort(client, pid),
 	}
 	return consume.ConsumeEvents(ctx, src, func(_ int64, data string) (bool, error) {
 		if err := emit(data); err != nil {

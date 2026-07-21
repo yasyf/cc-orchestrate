@@ -111,19 +111,14 @@ func TestSprintCommandTree(t *testing.T) {
 // s.Append chokepoint, then drives the identical consume path against the daemon's
 // SSE plane.
 func TestAgentWatchObservesReport(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	shortHome(t)
 	ctx := context.Background()
 
-	s, err := daemon.New(daemon.Config{
-		AppName:        AppName,
-		Paths:          appPaths(),
-		Version:        Version,
-		ActiveStatuses: []string{"active"},
-		Migrate:        initializeDatabaseSchema,
-	})
+	s, err := daemon.New(testDaemonConfig())
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}
+	startTestDaemon(t, s)
 	db := s.DB()
 
 	subjects := subject.Resolver{Store: store.NewSubjectStore(db)}
@@ -331,17 +326,12 @@ func TestBackendsSelectValidatesBeforeDaemon(t *testing.T) {
 // TestWatchFleetStatusPropagatesStreamErrors proves a fatal fleet SSE response reaches
 // the caller, while cancelling the parent context remains a clean watch exit.
 func TestWatchFleetStatusPropagatesStreamErrors(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	s, err := daemon.New(daemon.Config{
-		AppName:        AppName,
-		Paths:          appPaths(),
-		Version:        Version,
-		ActiveStatuses: []string{"active"},
-		Migrate:        initializeDatabaseSchema,
-	})
+	shortHome(t)
+	s, err := daemon.New(testDaemonConfig())
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}
+	startTestDaemon(t, s)
 	ts := httptest.NewServer(s.Mux())
 	t.Cleanup(ts.Close)
 	u, err := url.Parse(ts.URL)

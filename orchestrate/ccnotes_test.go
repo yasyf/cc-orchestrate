@@ -109,7 +109,7 @@ func TestCCNotesDisabledSpawnLeavesTaskEmpty(t *testing.T) {
 
 	backend.Register(spawnBackend{spec: &backend.SpawnSpec{}})
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestCCNotesSpawnFailureLeavesNoSubjectOrAgent(t *testing.T) {
 	var gotSpec backend.SpawnSpec
 	backend.Register(spawnBackend{spec: &gotSpec})
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

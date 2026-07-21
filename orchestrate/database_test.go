@@ -6,82 +6,71 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-)
 
-func openRawDatabase(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "state.db")+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	return db
-}
+	"github.com/yasyf/cc-interact/store"
+	_ "modernc.org/sqlite"
+)
 
 func TestDatabaseSchemaCreatesAndReopensExactV1(t *testing.T) {
 	ctx := context.Background()
-	db := openRawDatabase(t)
+	path := filepath.Join(t.TempDir(), "state.db")
 	for _, pass := range []string{"create", "reopen"} {
-		if err := initializeDatabaseSchema(ctx, db); err != nil {
-			t.Fatalf("initialize schema (%s): %v", pass, err)
+		st, err := store.Open(ctx, path, databaseStoreSchema())
+		if err != nil {
+			t.Fatalf("open exact store (%s): %v", pass, err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("close exact store (%s): %v", pass, err)
 		}
 	}
-	var version int
-	if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+	st, err := store.Open(ctx, path, databaseStoreSchema())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if version != databaseSchemaVersion {
-		t.Fatalf("user_version = %d, want %d", version, databaseSchemaVersion)
+	defer func() { _ = st.Close() }()
+	for _, table := range []string{"agents", "orchestrate_agents"} {
+		var name string
+		if err := st.DB().QueryRowContext(ctx, `SELECT name FROM sqlite_schema WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
+			t.Fatalf("lookup %s: %v", table, err)
+		}
 	}
 }
 
-func TestDatabaseSchemaRejectsLegacyOtherEpochAndDrift(t *testing.T) {
+func TestDatabaseSchemaRejectsForeignEpochAndFingerprint(t *testing.T) {
 	ctx := context.Background()
-	for _, tc := range []struct {
-		name  string
-		setup func(*testing.T, *sql.DB)
-		want  string
-	}{
-		{
-			name: "unversioned legacy table",
-			setup: func(t *testing.T, db *sql.DB) {
-				if _, err := db.Exec(`CREATE TABLE agents (id TEXT PRIMARY KEY)`); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: "manually transfer",
-		},
-		{
-			name: "other epoch",
-			setup: func(t *testing.T, db *sql.DB) {
-				if _, err := db.Exec(`PRAGMA user_version = 2`); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: "expected exactly 1",
-		},
-		{
-			name: "v1 schema drift",
-			setup: func(t *testing.T, db *sql.DB) {
-				if err := initializeDatabaseSchema(ctx, db); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := db.Exec(`ALTER TABLE agents ADD COLUMN legacy TEXT`); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: "does not match v1",
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			db := openRawDatabase(t)
-			tc.setup(t, db)
-			err := initializeDatabaseSchema(ctx, db)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("initializeDatabaseSchema() error = %v, want containing %q", err, tc.want)
-			}
-		})
-	}
+	t.Run("foreign epoch", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.db")
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `PRAGMA user_version = 2`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		_, err = store.Open(ctx, path, databaseStoreSchema())
+		if err == nil || !strings.Contains(err.Error(), "want exactly 1") {
+			t.Fatalf("store.Open() error = %v, want exact epoch rejection", err)
+		}
+	})
+
+	t.Run("fingerprint drift", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.db")
+		st, err := store.Open(ctx, path, databaseStoreSchema())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		drifted := store.Schema{DDL: databaseDDL + "\nCREATE TABLE drift(id TEXT PRIMARY KEY);"}
+		_, err = store.Open(ctx, path, drifted)
+		if err == nil || !strings.Contains(err.Error(), "fingerprint") {
+			t.Fatalf("store.Open() error = %v, want fingerprint rejection", err)
+		}
+	})
 }
 
 func TestDatabaseSchemaEnforcesSessionUniqueness(t *testing.T) {

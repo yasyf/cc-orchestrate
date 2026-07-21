@@ -106,7 +106,7 @@ func newAdoptOpEnv(t *testing.T) (context.Context, *sql.DB) {
 	t.Cleanup(cancel)
 	tailers = newTestTailerManager(ctx)
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestHandleAdoptSupersetWorktree(t *testing.T) {
 	})
 
 	t.Run("falls back to the primary workstream with a warning", func(t *testing.T) {
-		db := newAdoptOpDB(t)
+		db := newAdoptOpDB(ctx, t)
 		backend.Register(adoptFakeBackend{
 			caps:       backend.Capabilities(backend.CanCapture, backend.ManagesWorktree),
 			workspaces: nil, // no server-side workspace matches the checkout
@@ -458,9 +458,9 @@ func TestHandleAdoptSupersetWorktree(t *testing.T) {
 	})
 }
 
-func newAdoptOpDB(t *testing.T) *sql.DB {
+func newAdoptOpDB(ctx context.Context, t *testing.T) *sql.DB {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -1116,7 +1116,7 @@ func TestHandleAdoptKillsTerminalOnInsertFailure(t *testing.T) {
 		onSpawn: func(backend.SpawnSpec) {
 			// Drop the table so the post-spawn insertAgent fails, exercising the fix-11
 			// orphaned-terminal teardown.
-			if _, err := db.ExecContext(ctx, `DROP TABLE agents`); err != nil {
+			if _, err := db.ExecContext(ctx, `DROP TABLE orchestrate_agents`); err != nil {
 				t.Errorf("drop agents: %v", err)
 			}
 		},

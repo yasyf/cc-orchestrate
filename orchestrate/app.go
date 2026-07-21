@@ -10,8 +10,8 @@ import (
 	"github.com/yasyf/cc-interact/channelsetup"
 	"github.com/yasyf/cc-interact/cmd"
 	"github.com/yasyf/cc-interact/daemon"
-	"github.com/yasyf/cc-interact/paths"
 	"github.com/yasyf/cc-interact/procs"
+	"github.com/yasyf/daemonkit/paths"
 	"github.com/yasyf/daemonkit/version"
 )
 
@@ -69,10 +69,13 @@ func appPaths() paths.Paths { return paths.Paths{App: appDir} }
 // one subdirectory per repo: ~/.cc-orchestrate-v1/worktrees/<repo-id>/<name>.
 func worktreesBase() string { return filepath.Join(appPaths().StateDir(), "worktrees") }
 
-func newClient() *daemon.Client { return daemon.NewClient(appPaths().SocketPath()) }
+func newClient(ctx context.Context) (*daemon.Client, error) { return launcher().NewClient(ctx) }
 
 func launcher() daemon.Launcher {
-	return daemon.Launcher{Paths: appPaths(), Version: buildVersion(), Args: []string{"daemon"}}
+	return daemon.Launcher{
+		Paths: appPaths(), Version: buildVersion(), LifecycleBuild: buildVersion(),
+		Args: []string{"daemon"}, DaemonRole: appDaemonRole(),
+	}
 }
 
 // deps builds the substrate wiring every cc-interact command shares: the state
@@ -83,8 +86,8 @@ func deps() cmd.Deps {
 		Paths:                  appPaths(),
 		Version:                buildVersion(),
 		NewClient:              newClient,
-		EnsureCurrent:          func(context.Context) error { return launcher().EnsureCurrent(daemon.UpgradeTimeout) },
-		EnsureCurrentIfRunning: func() error { return launcher().EnsureCurrentIfRunning() },
+		EnsureCurrent:          func(ctx context.Context) error { return launcher().EnsureCurrent(ctx, daemon.UpgradeTimeout) },
+		EnsureCurrentIfRunning: func(ctx context.Context) error { return launcher().EnsureCurrentIfRunning(ctx) },
 		ClaudePID:              procs.ClaudePID,
 		WindowAlive:            procs.LiveClaude,
 		TerminalEvent:          func(t string) bool { return t == EventExited },

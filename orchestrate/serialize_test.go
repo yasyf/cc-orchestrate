@@ -142,7 +142,7 @@ func TestSerializeRestoreRoundTrip(t *testing.T) {
 
 	// Wipe: delete the agent rows (the recreate-from-scratch path), leaving the
 	// workstream and sprint intact so respawnAgent can resolve them.
-	if _, err := db.ExecContext(ctx, `DELETE FROM agents`); err != nil {
+	if _, err := db.ExecContext(ctx, `DELETE FROM orchestrate_agents`); err != nil {
 		t.Fatal(err)
 	}
 	if active, err := listActiveAgents(ctx, db); err != nil || len(active) != 0 {
@@ -217,7 +217,7 @@ func TestRestoreIntoWipedDB(t *testing.T) {
 	}
 
 	// A full wipe: drop every consumer table, the way a ~/.cc-orchestrate wipe would.
-	for _, table := range []string{"agents", "sprints", "workstreams", "repos", "config"} {
+	for _, table := range []string{"orchestrate_agents", "sprints", "workstreams", "repos", "config"} {
 		if _, err := db.ExecContext(ctx, `DELETE FROM `+table); err != nil { //nolint:gosec // G202: table names are hardcoded test fixtures, not user input
 			t.Fatalf("wipe %s: %v", table, err)
 		}

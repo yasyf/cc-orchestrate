@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	_ "modernc.org/sqlite"
+	"github.com/yasyf/cc-interact/store"
 )
 
 // newTestDB opens a real ephemeral on-disk sqlite database with the orchestrate
@@ -14,15 +14,12 @@ import (
 func newTestDB(ctx context.Context, t *testing.T) *sql.DB {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)")
+	st, err := store.Open(ctx, dbPath, databaseStoreSchema())
 	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := initializeDatabaseSchema(ctx, db); err != nil {
-		t.Fatalf("initialize schema: %v", err)
-	}
-	return db
+	t.Cleanup(func() { _ = st.Close() })
+	return st.DB()
 }
 
 func newTestTailerManager(ctx context.Context) *tailerManager {

@@ -37,7 +37,11 @@ func mcpDispatch(ctx context.Context, op daemon.Op, args json.RawMessage) (strin
 	if err != nil {
 		return err.Error(), true
 	}
-	reply, err := newClient().Do(ctx, daemon.Envelope{
+	client, err := newClient(ctx)
+	if err != nil {
+		return err.Error(), true
+	}
+	reply, err := client.Do(ctx, daemon.Envelope{
 		Op: op, Session: AppName, ClaudePID: d.ClaudePID(), Scope: cwd, Body: args,
 	})
 	if err != nil {
@@ -91,7 +95,7 @@ func (m method) mcpTool() channel.Tool {
 		Name:        mcpName(m.name),
 		Description: m.desc,
 		InputSchema: schemaFor(m.reqType),
-		Handler: func(ctx context.Context, args json.RawMessage) (string, bool) {
+		Handler: func(ctx context.Context, args json.RawMessage, _ func(string)) (string, bool) {
 			return mcpDispatch(ctx, m.op(), args)
 		},
 	}
@@ -106,7 +110,7 @@ func mcpTools() []channel.Tool {
 			Name:        "backends_list",
 			Description: "List the agent placement backends, their install status, and the effective default. Needs no running daemon.",
 			InputSchema: objectSchema(map[string]any{}),
-			Handler: func(context.Context, json.RawMessage) (string, bool) {
+			Handler: func(context.Context, json.RawMessage, func(string)) (string, bool) {
 				table, err := backendsTable()
 				if err != nil {
 					return err.Error(), true
@@ -131,7 +135,7 @@ func mcpTools() []channel.Tool {
 
 // mcpBackendSelect validates the named backend is installed (mirroring the CLI's
 // backends select) before persisting it through config-set.
-func mcpBackendSelect(ctx context.Context, args json.RawMessage) (string, bool) {
+func mcpBackendSelect(ctx context.Context, args json.RawMessage, _ func(string)) (string, bool) {
 	var b struct {
 		Backend string `json:"backend"`
 	}

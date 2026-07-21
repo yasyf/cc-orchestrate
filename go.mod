@@ -7,8 +7,8 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.9
-	github.com/yasyf/cc-interact v0.11.0
+	github.com/spf13/pflag v1.0.10
+	github.com/yasyf/cc-interact v0.14.1-0.20260721021908-d3a0a7a9502b
 	github.com/yasyf/cc-notes v0.31.1
 	github.com/yasyf/daemonkit v0.1.1-0.20260721013056-c39154cdbd0a
 	github.com/yasyf/reposync v0.16.0
@@ -66,8 +66,9 @@ require (
 	github.com/vishvananda/netns v0.0.0-20200728191858-db3c7e526aae // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/yasyf/synckit v0.9.0 // indirect
+	github.com/yasyf/synckit v0.23.1-0.20260721024529-9b633bf21646 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
+	go.etcd.io/bbolt v1.5.0 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/net v0.56.0 // indirect

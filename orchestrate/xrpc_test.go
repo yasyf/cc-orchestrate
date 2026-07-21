@@ -20,19 +20,14 @@ import (
 // Dispatch of the same envelope.
 func newXRPCServer(t *testing.T) (*daemon.Server, *httptest.Server) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	s, err := daemon.New(daemon.Config{
-		AppName:        AppName,
-		Paths:          appPaths(),
-		Version:        Version,
-		ActiveStatuses: []string{string(StatusActive)},
-		Migrate:        initializeDatabaseSchema,
-	})
+	shortHome(t)
+	s, err := daemon.New(testDaemonConfig())
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}
 	registerOps(s)
 	mountXRPC(s)
+	startTestDaemon(t, s)
 	ts := httptest.NewServer(s.Mux())
 	t.Cleanup(ts.Close)
 	return s, ts
@@ -380,7 +375,6 @@ func TestXRPCVerbatimBody(t *testing.T) {
 	}
 
 	reply := s.Dispatch(context.Background(), daemon.Envelope{
-		Proto:   daemon.ProtocolVersion,
 		Op:      mConfigGet.op(),
 		Session: AppName,
 		Body:    json.RawMessage(`{"key":"absent"}`),

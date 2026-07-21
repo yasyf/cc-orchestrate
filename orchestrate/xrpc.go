@@ -74,7 +74,6 @@ func serveXRPC(w http.ResponseWriter, r *http.Request, s *daemon.Server) {
 	ctx, cancel := context.WithTimeout(r.Context(), xrpcTimeout)
 	defer cancel()
 	reply := s.Dispatch(ctx, daemon.Envelope{
-		Proto:   daemon.ProtocolVersion,
 		Op:      m.op(),
 		Session: AppName,
 		Body:    body,

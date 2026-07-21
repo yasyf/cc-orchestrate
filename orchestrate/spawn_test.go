@@ -483,7 +483,7 @@ func TestHandleSpawnUnresolvableLauncherLeavesNoSubjectOrAgent(t *testing.T) {
 	var gotSpec backend.SpawnSpec
 	backend.Register(nonCapturingSpawnBackend{spawnBackend{spec: &gotSpec}})
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -566,7 +566,7 @@ func TestHandleSpawn(t *testing.T) {
 
 	// store.Open applies cc-interact's core schema (subjects/events) plus the
 	// orchestrate schema, so the subject resolver has a real table to write.
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -728,7 +728,7 @@ func TestHandleSpawnKillsTerminalOnInsertFailure(t *testing.T) {
 	t.Cleanup(cancel)
 	tailers = newTestTailerManager(ctx)
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -749,7 +749,7 @@ func TestHandleSpawnKillsTerminalOnInsertFailure(t *testing.T) {
 	backend.Register(spawnBackend{
 		killed: killed,
 		onSpawn: func(backend.SpawnSpec) {
-			if _, err := db.ExecContext(ctx, `DROP TABLE agents`); err != nil {
+			if _, err := db.ExecContext(ctx, `DROP TABLE orchestrate_agents`); err != nil {
 				t.Errorf("drop agents: %v", err)
 			}
 		},
@@ -792,7 +792,7 @@ func TestHandleSpawnDefaultsEmptyName(t *testing.T) {
 	var gotSpec backend.SpawnSpec
 	backend.Register(spawnBackend{spec: &gotSpec})
 
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
@@ -904,7 +904,7 @@ func TestHandleSpawnPooling(t *testing.T) {
 			var gotSpec backend.SpawnSpec
 			backend.Register(spawnBackend{spec: &gotSpec})
 
-			st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+			st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 			if err != nil {
 				t.Fatalf("store.Open: %v", err)
 			}
@@ -1039,7 +1039,7 @@ func TestRespawnAgentKillsTerminalOnPersistFailure(t *testing.T) {
 	backend.Register(spawnBackend{
 		killed: killed,
 		onSpawn: func(backend.SpawnSpec) {
-			if _, err := db.ExecContext(ctx, `DROP TABLE agents`); err != nil {
+			if _, err := db.ExecContext(ctx, `DROP TABLE orchestrate_agents`); err != nil {
 				t.Errorf("drop agents: %v", err)
 			}
 		},
@@ -1099,7 +1099,7 @@ func TestRespawnAgentKillFailureSurfacesLeakedTerminal(t *testing.T) {
 
 	killErr := errors.New("cmux gone")
 	backend.Register(failingKillBackend{spawnBackend{onSpawn: func(backend.SpawnSpec) {
-		if _, err := db.ExecContext(ctx, `DROP TABLE agents`); err != nil {
+		if _, err := db.ExecContext(ctx, `DROP TABLE orchestrate_agents`); err != nil {
 			t.Errorf("drop agents: %v", err)
 		}
 	}}, killErr})
@@ -1440,7 +1440,7 @@ func TestSpawnKillOrphanRace(t *testing.T) {
 		log, _ := installTestFleet(t)
 		killed := &[]backend.AgentHandle{}
 		backend.Register(spawnBackend{spec: &backend.SpawnSpec{}, killed: killed})
-		st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+		st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 		if err != nil {
 			t.Fatalf("store.Open: %v", err)
 		}
@@ -1561,7 +1561,7 @@ func TestSpawnFastChildExitSerializesBehindLock(t *testing.T) {
 		enumerate: true,
 		mu:        &bmu, spawns: &spawns, nextTerm: &nextTerm, killed: &killed, spawnSids: &spawnSids,
 	})
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

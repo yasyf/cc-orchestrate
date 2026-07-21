@@ -271,7 +271,7 @@ func TestHandleSendMessageErrors(t *testing.T) {
 // real table to write — newTestDB applies only the orchestrate tables.
 func newFullDB(t *testing.T) *sql.DB {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), initializeDatabaseSchema)
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), databaseStoreSchema())
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
