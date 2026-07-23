@@ -568,17 +568,14 @@ func getAgentBySession(ctx context.Context, db *sql.DB, sessionID string) (agent
 	return a, nil
 }
 
-// agentExists reports whether an agent row is present, the absent-vs-present branch
-// restore needs: an absent agent is re-inserted from its bundle, a present one only
-// has its terminal recreated.
+// agentExists reports whether an agent row is present.
 func agentExists(ctx context.Context, db *sql.DB, id string) (bool, error) {
 	return rowExists(ctx, db, "orchestrate_agents", id)
 }
 
 // rowExists reports whether a row with the given primary-key id is present in table.
 // table is always a trusted internal constant (never user input), so interpolating it
-// is safe. It is the absent-vs-present branch restore takes to recreate a wiped
-// hierarchy without rewriting rows a live DB still holds.
+// is safe.
 func rowExists(ctx context.Context, db *sql.DB, table, id string) (bool, error) {
 	var one int
 	err := db.QueryRowContext(ctx, `SELECT 1 FROM `+table+` WHERE id = ? LIMIT 1`, id).Scan(&one)

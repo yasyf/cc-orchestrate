@@ -199,7 +199,6 @@ func TestFleetEventSchemas(t *testing.T) {
 		FrameRepoCreated: true, FrameRepoActivated: true, FrameRepoKilled: true,
 		FrameWorkstreamCreated: true, FrameWorkstreamActivated: true, FrameWorkstreamKilled: true,
 		FrameSprintCreated: true, FrameSprintActivated: true, FrameSprintKilled: true,
-		FrameSerialized: true, FrameRestored: true,
 	}
 	if len(fleetEventSchemas) == 0 {
 		t.Fatal("fleetEventSchemas is empty; the catalog would advertise no fleet frame types")
@@ -519,58 +518,6 @@ func TestFleetRespawnFrame(t *testing.T) {
 	// A manual respawn resets the budget, so it reports attempt 0.
 	if pl["attempt"].(float64) != 0 {
 		t.Fatalf("restarted frame attempt = %v, want 0 (budget reset)", pl["attempt"])
-	}
-}
-
-func TestFleetSerializeRestoreFrames(t *testing.T) {
-	old := pollInterval
-	pollInterval = time.Millisecond
-	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	tailers = newTestTailerManager(ctx)
-	log, _ := installTestFleet(t)
-	db := newTestDB(ctx, t)
-	backend.Register(serializeTestBackend{})
-	seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
-	mustInsertAgent(ctx, t, db, agentRow{
-		ID: "a1", SprintID: "w1-s", Backend: "sertest", TerminalHandle: "term-1",
-		SessionID: "sess-1", Scope: "/s", Name: "a1", Prompt: "do a1", SubjectID: "subj-a1",
-		Status: StatusActive, State: StateWorking, CreatedAt: "t0",
-	})
-
-	out := filepath.Join(t.TempDir(), "bundle.json")
-	if reply := runTyped(handleSerialize, opCtx(db, mustJSON(t, map[string]string{"out": out}), (&eventLog{}).append)); !reply.OK {
-		t.Fatalf("serialize failed: %s", reply.Error)
-	}
-	if log.count(FrameSerialized) != 1 {
-		t.Fatalf("fleet.serialized count = %d, want 1", log.count(FrameSerialized))
-	}
-	if ser := framePayload(t, log, FrameSerialized); ser["path"] != out || ser["count"].(float64) != 1 {
-		t.Fatalf("serialized frame = %v, want path %q count 1", ser, out)
-	}
-
-	if _, err := db.ExecContext(ctx, `DELETE FROM orchestrate_agents`); err != nil {
-		t.Fatal(err)
-	}
-	if reply := runTyped(handleRestore, opCtx(db, mustJSON(t, map[string]string{"path": out}), (&eventLog{}).append)); !reply.OK {
-		t.Fatalf("restore failed: %s", reply.Error)
-	}
-	// Restore emits one spawned frame per revived agent (the identity + subject a
-	// reconnecting TUI needs) plus one bundle-level restored frame.
-	if log.count(FrameAgentSpawned) != 1 {
-		t.Fatalf("restore fleet.agent.spawned count = %d, want 1 per revived agent", log.count(FrameAgentSpawned))
-	}
-	if rev := framePayload(t, log, FrameAgentSpawned); rev["agent_id"] != "a1" || rev["subject"] != "subj-a1" {
-		t.Fatalf("restore spawned frame = %v, want agent_id a1 subject subj-a1", rev)
-	}
-	if log.count(FrameRestored) != 1 {
-		t.Fatalf("fleet.restored count = %d, want 1", log.count(FrameRestored))
-	}
-	if res := framePayload(t, log, FrameRestored); res["path"] != out || res["count"].(float64) != 1 {
-		t.Fatalf("restored frame = %v, want path %q count 1", res, out)
 	}
 }
 

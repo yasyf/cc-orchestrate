@@ -256,8 +256,6 @@ func formatFleetFrame(data string) string {
 		detail = fmt.Sprintf("%s attempt=%d", f.AgentID, f.Attempt)
 	case FrameAgentAbandoned:
 		detail = fmt.Sprintf("%s attempts=%d", f.AgentID, f.Attempts)
-	case FrameSerialized, FrameRestored:
-		detail = fmt.Sprintf("%s count=%d", f.Path, f.Count)
 	default:
 		detail = strings.TrimSpace(f.ID + " " + f.Name)
 	}
@@ -313,8 +311,6 @@ func formatEventLine(data string) string {
 		label, detail = "restarted", fmt.Sprintf("terminal=%s attempt=%d", e.Terminal, e.Attempt)
 	case EventAbandoned:
 		label, detail = "abandoned", fmt.Sprintf("attempts=%d", e.Attempts)
-	case EventRestored:
-		label, detail = "restored", fmt.Sprintf("terminal=%s", e.Terminal)
 	default:
 		return data
 	}

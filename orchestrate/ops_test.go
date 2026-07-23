@@ -123,6 +123,15 @@ func (b opBackend) KillWorkstream(_ context.Context, project backend.WorkstreamH
 }
 func (opBackend) Caps() backend.Caps { return backend.Caps{} }
 
+type captureTestBackend struct{ opBackend }
+
+func (captureTestBackend) Name() backend.Name { return "capturetest" }
+func (captureTestBackend) Caps() backend.Caps { return backend.Capabilities(backend.CanCapture) }
+func (captureTestBackend) Capture(_ context.Context, agent backend.AgentHandle) (string, error) {
+	return "screen:" + agent.SessionID, nil
+}
+func (captureTestBackend) SendText(context.Context, backend.AgentHandle, string) error { return nil }
+
 // TestResolveBackend covers the explicit, persisted-selection, and unknown-name
 // branches; the no-selection backend.Select() fallback depends on which runtimes
 // are installed, so it is exercised by the spawn-smoke and integration paths.
@@ -789,23 +798,22 @@ func TestHandleAgentKill(t *testing.T) {
 	})
 }
 
-// TestHandleAgentCapture covers cco.agent.capture's error taxonomy and the round trip
-// through captureScreenText, reusing serialize_test.go's CanCapture stub backend.
+// TestHandleAgentCapture covers cco.agent.capture's error taxonomy and round trip.
 func TestHandleAgentCapture(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	tailers = newTestTailerManager(ctx)
 
 	db := newTestDB(ctx, t)
-	backend.Register(serializeTestBackend{})
-	seedWorkstream(ctx, t, db, "w1", "p1", "sertest", "ws-1")
+	backend.Register(captureTestBackend{})
+	seedWorkstream(ctx, t, db, "w1", "p1", "capturetest", "ws-1")
 	mustInsertAgent(ctx, t, db, agentRow{
-		ID: "a1", SprintID: "w1-s", Backend: "sertest", TerminalHandle: "term-1",
+		ID: "a1", SprintID: "w1-s", Backend: "capturetest", TerminalHandle: "term-1",
 		SessionID: "sess-1", Scope: "/s", Name: "worker", SubjectID: "subj-1",
 		Status: StatusActive, State: StateWorking, CreatedAt: "t0",
 	})
 	mustInsertAgent(ctx, t, db, agentRow{
-		ID: "a2", SprintID: "w1-s", Backend: "sertest", TerminalHandle: "term-2",
+		ID: "a2", SprintID: "w1-s", Backend: "capturetest", TerminalHandle: "term-2",
 		SessionID: "sess-2", Scope: "/s", Name: "idle", SubjectID: "subj-2",
 		Status: StatusExited, State: StateIdle, CreatedAt: "t1",
 	})

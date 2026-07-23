@@ -1225,7 +1225,7 @@ func TestHandleSpawnRejectsRelativeCwdWithNoScope(t *testing.T) {
 // TestHandleAgentRespawn covers cco.agent.respawn's eligibility matrix: the
 // agent_id/dead XOR validation, an active or chain-killed agent rejected as a
 // Conflict, an eligible exited agent revived into its same session with a fresh
-// restart budget (not resetRestart's semantics) and an EventRestored, and the dead
+// restart budget (not resetRestart's semantics) and an EventRestarted, and the dead
 // sweep silently skipping ineligible agents.
 func TestHandleAgentRespawn(t *testing.T) {
 	old := pollInterval
@@ -1332,8 +1332,8 @@ func TestHandleAgentRespawn(t *testing.T) {
 		if ag.LastRestartAt == "" || ag.LastRestartAt == "2026-06-01T00:00:00Z" {
 			t.Fatalf("LastRestartAt = %q, want a fresh stamp (resetRestart would blank it instead)", ag.LastRestartAt)
 		}
-		if log.count(EventRestored) != 1 {
-			t.Fatalf("EventRestored count = %d, want 1; events=%v", log.count(EventRestored), log.types())
+		if log.count(EventRestarted) != 1 {
+			t.Fatalf("EventRestarted count = %d, want 1; events=%v", log.count(EventRestarted), log.types())
 		}
 	})
 

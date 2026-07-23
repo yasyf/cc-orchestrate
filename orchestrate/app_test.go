@@ -36,8 +36,8 @@ func TestRootIncludesHiddenDaemonStopControl(t *testing.T) {
 }
 
 // TestTerminalEventOnlyExited proves the daemon's terminal-event predicate closes a
-// subject only on EventExited: every non-terminal lifecycle event (including the
-// restart/abandon/serialize/restore additions) must leave the subject open.
+// subject only on EventExited: every non-terminal lifecycle event must leave the
+// subject open.
 func TestTerminalEventOnlyExited(t *testing.T) {
 	isTerminal := deps().TerminalEvent
 	for _, tc := range []struct {
@@ -47,8 +47,6 @@ func TestTerminalEventOnlyExited(t *testing.T) {
 		{EventExited, true},
 		{EventRestarted, false},
 		{EventAbandoned, false},
-		{EventSerialized, false},
-		{EventRestored, false},
 		{EventStatus, false},
 		{EventSpawned, false},
 		{EventAdopted, false},

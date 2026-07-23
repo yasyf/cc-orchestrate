@@ -64,50 +64,10 @@ func Root() *cobra.Command {
 		agentCmd(),
 		adoptCmd(),
 		fleetCmd(),
-		serializeCmd(),
-		restoreCmd(),
 		mcpCmd(),
 		cmd.SetupChannelsCmd(d, channelPlugin, "Channel delivery is enabled. New agent spawns will now load the cc-orchestrate channel."),
 	)
 	return r
-}
-
-// serializeCmd snapshots every active agent into a restorable bundle: each agent's
-// identity plus its captured terminal screen.
-func serializeCmd() *cobra.Command {
-	var out string
-	c := &cobra.Command{
-		Use:   "serialize",
-		Short: "Snapshot every active agent into a restorable bundle",
-		Args:  cobra.NoArgs,
-		RunE: func(c *cobra.Command, _ []string) error {
-			return runRender(c, mFleetSerialize, map[string]string{"out": out},
-				func(w io.Writer, res fleetSerializeResult) error {
-					_, err := fmt.Fprintf(w, "serialized %d agent(s) to %s\n", res.Count, res.Path)
-					return err
-				})
-		},
-	}
-	c.Flags().StringVar(&out, "out", "", "write the bundle to this path instead of the default serialize dir")
-	return c
-}
-
-// restoreCmd recreates the agents in a bundle: it re-inserts any missing rows and
-// resumes each agent's session into a fresh backend terminal.
-func restoreCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "restore <bundle>",
-		Short: "Restore agents from a serialized bundle",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(c *cobra.Command, args []string) error {
-			return runRender(c, mFleetRestore, map[string]string{"path": args[0]},
-				func(w io.Writer, res fleetRestoreResult) error {
-					_, err := fmt.Fprintf(w, "restored %d agent(s) from %s\n", res.Count, args[0])
-					return err
-				})
-		},
-	}
-	return c
 }
 
 // configCmd is the `config` group: read, write, and list the persisted key-value

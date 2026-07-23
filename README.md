@@ -13,7 +13,7 @@ brew install --cask yasyf/tap/cc-orchestrate
 cco --help
 ```
 
-<img src="docs/assets/demo.png" alt="Terminal running 'cco --help' — the command groups for agents, repos, workstreams, sprints, backends, serialize/restore, and the MCP server" width="700">
+<img src="docs/assets/demo.png" alt="Terminal running 'cco --help' — the command groups for agents, repos, workstreams, sprints, backends, and the MCP server" width="700">
 
 The cask installs `cc-orchestrate` plus a `cco` alias for the same binary; this README uses `cco`.
 
@@ -65,7 +65,7 @@ Orchestrating by hand makes you the router between terminal tabs. Register the c
 }
 ```
 
-The server exposes one request/response tool per orchestration op, named by entity from `backends_list` and `repo_create` through `agent_spawn` and `fleet_restore`. `agent_list` and `agent_show` return point-in-time snapshots, so run `cco agent watch` under a monitor alongside the MCP session for live status.
+The server exposes one request/response tool per orchestration op, named by entity from `backends_list` and `repo_create` through `agent_spawn` and `fleet_status`. `agent_list` and `agent_show` return point-in-time snapshots, so run `cco agent watch` under a monitor alongside the MCP session for live status.
 
 ### Build a live dashboard without shelling out
 
@@ -83,18 +83,6 @@ typed frames (`fleet.agent.spawned`, `fleet.agent.status`, …) from that cursor
 on, gap-free across reconnects. The catalog at `/xrpc/cco.server.describe`
 carries JSON schemas for every method, ready for TypeScript type generation.
 The full protocol lives in [docs/xrpc.md](docs/xrpc.md).
-
-### Snapshot tonight's running fleet and restore it tomorrow
-
-Closing your laptop at 6pm shouldn't cost you the fleet. Serialize every active agent into a bundle, then rehydrate from it:
-
-```bash
-cco serialize
-# the next morning
-cco restore ~/.cc-orchestrate/serialize/20260702T180000Z.json
-```
-
-`serialize` prints `serialized 3 agent(s) to <bundle>`. `restore` re-inserts any missing rows and resumes each agent's session into a fresh backend terminal.
 
 ## The model
 
@@ -143,7 +131,6 @@ its flags.
 | `agent capture <id>` | Grab the agent's current terminal screen as text. |
 | `agent watch --all` / `--id <id>` | Stream agent events, one formatted line per event (`--json` for NDJSON). |
 | `fleet status [--watch]` / `fleet watch` | One fleet-wide snapshot table, live-repainting under `--watch`; or the raw frame stream. |
-| `serialize` / `restore <bundle>` | Snapshot every active agent into a bundle; rehydrate the fleet from one. |
 | `mcp` | Run the parent-facing MCP control server over stdio. |
 
 Every data command takes `--json` and prints the daemon's reply verbatim, so

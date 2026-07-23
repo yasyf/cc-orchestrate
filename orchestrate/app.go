@@ -46,8 +46,6 @@ const (
 
 	EventRestarted  = "orchestrate.restarted"  // supervisor/manual re-spawn of a vanished terminal (non-terminal)
 	EventAbandoned  = "orchestrate.abandoned"  // restart budget exhausted; precedes the terminal EventExited (non-terminal)
-	EventSerialized = "orchestrate.serialized" // a snapshot bundle was written (non-terminal)
-	EventRestored   = "orchestrate.restored"   // an agent was restored from a bundle (non-terminal)
 	EventAdopted    = "orchestrate.adopted"    // a hand-started session was adopted into the fleet (non-terminal)
 )
 

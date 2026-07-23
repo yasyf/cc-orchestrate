@@ -264,8 +264,6 @@ func TestFormatFleetFrame(t *testing.T) {
 		{"repo created", `{"type":"fleet.repo.created","ts":"TS","id":"r1","name":"myrepo"}`, "repo.created", "r1 myrepo", false},
 		{"workstream activated", `{"type":"fleet.workstream.activated","ts":"TS","id":"w1","name":"feat"}`, "workstream.activated", "w1 feat", false},
 		{"sprint killed", `{"type":"fleet.sprint.killed","ts":"TS","id":"s1","name":"main"}`, "sprint.killed", "s1 main", false},
-		{"serialized", `{"type":"fleet.serialized","ts":"TS","path":"/b.json","count":4}`, "serialized", "/b.json count=4", false},
-		{"restored", `{"type":"fleet.restored","ts":"TS","path":"/b.json","count":4}`, "restored", "/b.json count=4", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			line := formatFleetFrame(strings.ReplaceAll(tc.payload, "TS", ts))
@@ -314,7 +312,6 @@ func TestFormatEventLine(t *testing.T) {
 		{"spawned", `{"type":"orchestrate.spawned","backend":"tmux","terminal":"t1"}`, "spawned   backend=tmux terminal=t1", false},
 		{"restarted", `{"type":"orchestrate.restarted","terminal":"t2","attempt":1}`, "restarted terminal=t2 attempt=1", false},
 		{"abandoned", `{"type":"orchestrate.abandoned","attempts":3}`, "abandoned attempts=3", false},
-		{"restored", `{"type":"orchestrate.restored","terminal":"t3"}`, "restored  terminal=t3", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := formatEventLine(tc.payload)

@@ -826,10 +826,28 @@ type agentCaptureResult struct {
 	CapturedAt string `json:"captured_at"`
 }
 
+func captureScreenText(ctx context.Context, db *sql.DB, ag agentRow) (string, error) {
+	mu := agentLock(ag.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	cur, err := getAgent(ctx, db, ag.ID)
+	if err != nil {
+		return "", err
+	}
+	screen, err := resolveScreen(ctx, db, cur)
+	if err != nil {
+		return "", opErr(codeUnsupported, fmt.Errorf("resolve screen for agent %q: %w", cur.ID, err))
+	}
+	text, err := captureWithTimeout(ctx, screen)
+	if err != nil {
+		return "", fmt.Errorf("capture screen for agent %q: %w", cur.ID, err)
+	}
+	return text, nil
+}
+
 // handleAgentCapture answers cco.agent.capture: it reads an active agent's current
-// terminal screen via captureScreenText, the same codepath handleSerialize snapshots
-// through — capture is universal via the pty-host wrapper, so this never gates on a
-// backend's CanCapture.
+// terminal screen. Capture is universal via the pty-host wrapper, so this never gates
+// on a backend's CanCapture.
 func handleAgentCapture(hc daemon.HandlerCtx, req agentCaptureRequest) (agentCaptureResult, error) {
 	ag, err := getAgent(hc.Ctx, hc.DB, req.AgentID)
 	if err != nil {
@@ -846,9 +864,8 @@ func handleAgentCapture(hc daemon.HandlerCtx, req agentCaptureRequest) (agentCap
 }
 
 // killAgentTerminal terminates an agent's backend terminal, resolving the backend and
-// the kill target from the row's current terminal handle. It is the terminal-teardown
-// half handleAgentKill and restore share; callers hold agentLock so the handle it
-// reads cannot be swapped mid-kill by a concurrent respawn.
+// the kill target from the row's current terminal handle. Callers hold agentLock so
+// the handle it reads cannot be swapped mid-kill by a concurrent respawn.
 func killAgentTerminal(ctx context.Context, db *sql.DB, ag agentRow) error {
 	bk, ok := backend.Get(ag.Backend)
 	if !ok {

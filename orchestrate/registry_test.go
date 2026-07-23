@@ -153,7 +153,6 @@ func TestMCPName(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"cco.agent.sendMessage", "agent_send_message"},
 		{"cco.agent.show", "agent_show"},
-		{"cco.fleet.serialize", "fleet_serialize"},
 		{"cco.config.set", "config_set"},
 		{"cco.repo.create", "repo_create"},
 		{"cco.workstream.activate", "workstream_activate"},
@@ -177,7 +176,7 @@ func TestMCPToolParity(t *testing.T) {
 		"sprint_create": true, "sprint_list": true, "sprint_activate": true, "sprint_kill": true,
 		"agent_spawn": true, "agent_list": true, "agent_show": true, "agent_send_message": true, "agent_kill": true,
 		"agent_respawn": true, "agent_adopt": true, "agent_capture": true, "adopt_list": true,
-		"fleet_status": true, "fleet_serialize": true, "fleet_restore": true,
+		"fleet_status": true,
 	}
 	got := map[string]bool{}
 	for _, tool := range mcpTools() {

@@ -64,8 +64,6 @@ const (
 	FrameSprintActivated = "fleet.sprint.activated"
 	FrameSprintKilled    = "fleet.sprint.killed"
 
-	FrameSerialized = "fleet.serialized"
-	FrameRestored   = "fleet.restored"
 )
 
 // fleetFrame is one typed fleet-stream frame. frameType is both the event Type the
@@ -73,7 +71,7 @@ const (
 // reads it and buildCatalog keys the frame's schema by it.
 type fleetFrame interface{ frameType() string }
 
-// fleetAgentSpawned announces a new (or restored) agent on the fleet. Subject is the
+// fleetAgentSpawned announces a new agent on the fleet. Subject is the
 // per-agent subject id — the correlation key a TUI opens GET /events?session=<subject>
 // with — so a late consumer can attach to the agent's own stream without a replay.
 type fleetAgentSpawned struct {
@@ -166,17 +164,6 @@ type fleetContainer struct {
 
 func (f fleetContainer) frameType() string { return f.Type }
 
-// fleetBundle is the shared shape of the serialize/restore frames: the bundle path and
-// the number of agents it covers.
-type fleetBundle struct {
-	Type  string `json:"type"`
-	TS    string `json:"ts"`
-	Path  string `json:"path"`
-	Count int    `json:"count"`
-}
-
-func (f fleetBundle) frameType() string { return f.Type }
-
 func spawnedFrame(ag agentRow) fleetAgentSpawned {
 	return fleetAgentSpawned{
 		Type: FrameAgentSpawned, TS: nowStamp(), AgentID: ag.ID, Name: ag.Name,
@@ -213,10 +200,6 @@ func abandonedFrame(agentID string, attempts int) fleetAgentAbandoned {
 
 func containerFrame(frameType, id, name string) fleetContainer {
 	return fleetContainer{Type: frameType, TS: nowStamp(), ID: id, Name: name}
-}
-
-func bundleFrame(frameType, path string, count int) fleetBundle {
-	return fleetBundle{Type: frameType, TS: nowStamp(), Path: path, Count: count}
 }
 
 // fleetLog is the daemon-lifetime fleet event stream: the single write codepath every
@@ -489,9 +472,6 @@ func init() {
 		FrameSprintCreated:   fleetContainer{},
 		FrameSprintActivated: fleetContainer{},
 		FrameSprintKilled:    fleetContainer{},
-
-		FrameSerialized: fleetBundle{},
-		FrameRestored:   fleetBundle{},
 	} {
 		fleetEventSchemas[frameType] = schemaFor(reflect.TypeOf(sample))
 	}

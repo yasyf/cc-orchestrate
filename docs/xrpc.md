@@ -40,7 +40,7 @@ The method surface spans five namespaces:
 | `cco.repo.*`, `cco.workstream.*`, `cco.sprint.*` | `create`, `list`, `show`, `activate`, `kill` |
 | `cco.agent.*` | `spawn`, `list`, `show`, `sendMessage`, `kill`, `respawn`, `capture` |
 | `cco.config.*` | `get`, `set`, `list`, `unset` |
-| `cco.fleet.*` | `status`, `serialize`, `restore` |
+| `cco.fleet.*` | `status` |
 
 `cco.agent.report` exists on the daemon socket only — it is the child agent's
 reporting channel, not a parent-facing method. The catalog is the canonical
@@ -111,7 +111,7 @@ lifecycle change across the fleet as compact typed frames. Each SSE event's
 
 | Frame | Fields | Emitted when |
 | --- | --- | --- |
-| `fleet.agent.spawned` | `agent_id`, `name`, `sprint_id`, `backend`, `subject` | an agent spawns, or restore revives one |
+| `fleet.agent.spawned` | `agent_id`, `name`, `sprint_id`, `backend`, `subject` | an agent spawns |
 | `fleet.agent.status` | `agent_id`, `state`, `tool`, `target`, `tokens` | the agent's transcript advances |
 | `fleet.agent.message` | `agent_id` | a message is delivered to the agent |
 | `fleet.agent.report` | `agent_id`, `state` | the agent reports back |
@@ -119,7 +119,6 @@ lifecycle change across the fleet as compact typed frames. Each SSE event's
 | `fleet.agent.restarted` | `agent_id`, `attempt` | a respawn (`attempt` 0) or supervisor restart (1+) |
 | `fleet.agent.abandoned` | `agent_id`, `attempts` | the restart budget runs out |
 | `fleet.{repo,workstream,sprint}.{created,activated,killed}` | `id`, `name` | container lifecycle changes |
-| `fleet.serialized`, `fleet.restored` | `path`, `count` | a bundle is written or restored |
 
 The stream can interleave cc-interact substrate frames — a `channel.changed`
 presence marker fires when a registered consumer attaches or detaches — so

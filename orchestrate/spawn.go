@@ -595,7 +595,7 @@ func checkRespawnEligible(hc daemon.HandlerCtx, ag agentRow) error {
 // resetRestart — that drops the stamp and the staleness prober would kill the fresh
 // resume), flips the row active before the spawn (mirroring restoreAgent; a failed
 // spawn self-heals via the supervisor), respawns via respawnAgent verbatim, and
-// appends EventRestored.
+// appends EventRestarted.
 func respawnOneAgent(hc daemon.HandlerCtx, id string) (agentView, error) {
 	mu := agentLock(id)
 	mu.Lock()
@@ -625,7 +625,7 @@ func respawnOneAgent(hc daemon.HandlerCtx, id string) (agentView, error) {
 		return agentView{}, err
 	}
 	if _, err := hc.Append(hc.Ctx, &event.Event{
-		SubjectID: cur.SubjectID, Origin: event.OriginSystem, Type: EventRestored, Payload: restoredPayload(cur.ID, handle.ID),
+		SubjectID: cur.SubjectID, Origin: event.OriginSystem, Type: EventRestarted, Payload: restartedPayload(cur, handle.ID, 0),
 	}); err != nil {
 		return agentView{}, err
 	}
