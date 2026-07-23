@@ -2,6 +2,8 @@ package ptyhost
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"os"
 	"path/filepath"
@@ -10,6 +12,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/yasyf/daemonkit/codeidentity"
+	"github.com/yasyf/daemonkit/proc"
+	"github.com/yasyf/daemonkit/wire"
 )
 
 // shortSock returns a unix socket path under a short-named temp dir, cleaned up on test
@@ -37,6 +43,36 @@ func waitFor(cond func() bool) bool {
 	return cond()
 }
 
+func testOptions(t *testing.T, socket string, argv []string) Options {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classifier := codeidentity.FixedClassifier{Executable: executable}
+	return Options{
+		Socket: socket, Argv: argv, RuntimeBuild: "1.0.0", DaemonRole: classifier,
+		StopVerifier: wire.StopVerifier{
+			Classifier: classifier,
+			Role:       "com.yasyf.cc-orchestrate.test",
+			Store:      &proc.FileStore{Path: filepath.Join(filepath.Dir(socket), "processes.db")},
+		},
+	}
+}
+
+func socketUnavailable(path string) bool {
+	conn, err := net.DialTimeout("unix", path, 20*time.Millisecond)
+	if err != nil {
+		return true
+	}
+	_ = conn.Close()
+	return false
+}
+
 // TestHostRoundTrip drives the full loop against a real PTY with `cat` as the child:
 // inject "hello"+Enter, then assert CAPTURE shows the echoed line. No claude needed.
 func TestHostRoundTrip(t *testing.T) {
@@ -45,15 +81,23 @@ func TestHostRoundTrip(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, Options{Socket: sock, Argv: []string{"sh", "-c", "cat"}}) }()
+	opts := testOptions(t, sock, []string{"sh", "-c", "cat"})
+	go func() { done <- Run(ctx, opts) }()
 
 	if !waitFor(func() bool { _, err := os.Stat(sock); return err == nil }) {
 		t.Fatal("control socket never appeared")
 	}
 
 	cl := Dial(sock)
+	defer func() { _ = cl.Close() }()
 	if err := cl.SendKeys(ctx, "hello", "Enter"); err != nil {
 		t.Fatalf("SendKeys: %v", err)
+	}
+	cl.mu.Lock()
+	firstSession := cl.session
+	cl.mu.Unlock()
+	if firstSession == nil {
+		t.Fatal("SendKeys did not establish a persistent session")
 	}
 
 	var screen string
@@ -67,12 +111,29 @@ func TestHostRoundTrip(t *testing.T) {
 	}) {
 		t.Fatalf("screen never showed the echoed keys: %q", screen)
 	}
+	cl.mu.Lock()
+	secondSession := cl.session
+	cl.mu.Unlock()
+	if secondSession != firstSession {
+		t.Fatal("Capture replaced the live persistent session")
+	}
 
 	cancel() // terminate the child
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not return after cancel")
+	}
+	callCtx, callCancel := context.WithTimeout(context.Background(), time.Second)
+	defer callCancel()
+	if _, err := cl.Capture(callCtx); err == nil {
+		t.Fatal("Capture succeeded after runtime settlement")
+	}
+	cl.mu.Lock()
+	retired := cl.session == nil
+	cl.mu.Unlock()
+	if !retired {
+		t.Fatal("failed persistent session was not retired")
 	}
 }
 
@@ -87,14 +148,16 @@ func TestHostDrainsQueryReplies(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 1)
+	opts := testOptions(t, sock, []string{"sh", "-c", `printf '\033[6n'; printf 'AFTERQUERY'; sleep 5`})
 	go func() {
-		done <- Run(ctx, Options{Socket: sock, Argv: []string{"sh", "-c", `printf '\033[6n'; printf 'AFTERQUERY'; sleep 5`}})
+		done <- Run(ctx, opts)
 	}()
 
 	if !waitFor(func() bool { _, err := os.Stat(sock); return err == nil }) {
 		t.Fatal("control socket never appeared")
 	}
 	cl := Dial(sock)
+	defer func() { _ = cl.Close() }()
 	var screen string
 	if !waitFor(func() bool {
 		s, err := cl.Capture(ctx)
@@ -115,26 +178,59 @@ func TestHostDrainsQueryReplies(t *testing.T) {
 	}
 }
 
+func TestWireBuildMismatchIsRejectedBeforeDispatch(t *testing.T) {
+	sock := shortSock(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opts := testOptions(t, sock, []string{"sh", "-c", "cat"})
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, opts) }()
+	if !waitFor(func() bool { _, err := os.Stat(sock); return err == nil }) {
+		t.Fatal("control socket never appeared")
+	}
+
+	client, err := wire.NewClient(ctx, wire.ClientConfig{
+		Dial:      wire.UnixDialer(sock),
+		WireBuild: "cc-orchestrate.pty.v0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.Call(ctx, opCapture, "", nil)
+	_ = client.Close()
+	if err != nil {
+		t.Fatalf("mismatched wire call transport error = %v", err)
+	}
+	if result.Outcome != wire.Rejected || !strings.Contains(result.Response.Reason, wire.ErrBuildMismatch.Error()) {
+		t.Fatalf("mismatched wire build result = %#v", result)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}
+
 // TestOnChildExitFiresOnNaturalExit proves the exit hook fires exactly once when the
 // hosted child exits on its own — the signal the pty-host turns into its daemon report
-// — and only after the control socket is gone: the hook hands control to the daemon,
-// so the wrapper's whole teardown, its socket removal included, must be complete
-// before it runs.
+// — and only after the control endpoint is no longer dialable: the hook hands
+// control to the daemon, so the wrapper's daemonkit-owned listener must be fully
+// settled before it runs.
 func TestOnChildExitFiresOnNaturalExit(t *testing.T) {
 	sock := shortSock(t)
 	var fired, sockPresent int32
 	done := make(chan error, 1)
+	opts := testOptions(t, sock, []string{"sh", "-c", "exit 0"})
+	opts.OnChildExit = func() {
+		atomic.AddInt32(&fired, 1)
+		if !socketUnavailable(sock) {
+			atomic.StoreInt32(&sockPresent, 1)
+		}
+	}
 	go func() {
-		done <- Run(context.Background(), Options{
-			Socket: sock,
-			Argv:   []string{"sh", "-c", "exit 0"},
-			OnChildExit: func() {
-				atomic.AddInt32(&fired, 1)
-				if _, err := os.Stat(sock); err == nil {
-					atomic.StoreInt32(&sockPresent, 1)
-				}
-			},
-		})
+		done <- Run(context.Background(), opts)
 	}()
 	select {
 	case err := <-done:
@@ -148,16 +244,15 @@ func TestOnChildExitFiresOnNaturalExit(t *testing.T) {
 		t.Fatalf("OnChildExit fired %d times, want exactly 1 on a natural child exit", got)
 	}
 	if atomic.LoadInt32(&sockPresent) != 0 {
-		t.Fatal("OnChildExit ran with the control socket still bound; it must be removed first")
+		t.Fatal("OnChildExit ran with the control endpoint still dialable")
 	}
 }
 
 // TestChildExitTeardownSparesReplacementSocket simulates the kill-driven respawn race
 // at the host level: a replacement pty-host has already bound its own per-incarnation
 // socket while the old wrapper is still tearing down. The old wrapper's teardown must
-// remove only its own socket — the replacement's stays on disk and dialable. (Before
-// socket paths were derived per incarnation both wrappers shared one path, and the old
-// wrapper's deferred removal unlinked the replacement's fresh socket.)
+// settle only its own listener — the replacement's stays dialable. Socket paths are
+// per incarnation, and daemonkit owns stale-socket removal under its permanent lock.
 func TestChildExitTeardownSparesReplacementSocket(t *testing.T) {
 	dir, err := os.MkdirTemp("", "pty")
 	if err != nil {
@@ -183,12 +278,10 @@ func TestChildExitTeardownSparesReplacementSocket(t *testing.T) {
 
 	var fired int32
 	done := make(chan error, 1)
+	opts := testOptions(t, oldSock, []string{"sh", "-c", "exit 0"})
+	opts.OnChildExit = func() { atomic.AddInt32(&fired, 1) }
 	go func() {
-		done <- Run(context.Background(), Options{
-			Socket:      oldSock,
-			Argv:        []string{"sh", "-c", "exit 0"},
-			OnChildExit: func() { atomic.AddInt32(&fired, 1) },
-		})
+		done <- Run(context.Background(), opts)
 	}()
 	select {
 	case err := <-done:
@@ -199,8 +292,8 @@ func TestChildExitTeardownSparesReplacementSocket(t *testing.T) {
 		t.Fatal("Run did not return after the child exited")
 	}
 
-	if _, err := os.Stat(oldSock); !os.IsNotExist(err) {
-		t.Fatalf("old wrapper's own socket still present after teardown: stat err = %v", err)
+	if !socketUnavailable(oldSock) {
+		t.Fatal("old wrapper's control endpoint remained dialable after teardown")
 	}
 	if _, err := os.Stat(replacement); err != nil {
 		t.Fatalf("replacement's socket was disturbed by the old wrapper's teardown: %v", err)
@@ -218,19 +311,17 @@ func TestChildExitTeardownSparesReplacementSocket(t *testing.T) {
 // TestChildExitNotBlockedByWedgedClient proves a client that connects to the control
 // socket and never completes its request cannot stall the wrapper's teardown: Close
 // expires the wedged connection's deadline instead of trusting the client, so the
-// child's exit still drains the server, removes the socket, and fires OnChildExit
+// child's exit still drains the server, closes the endpoint, and fires OnChildExit
 // promptly — the exit report is never held hostage.
 func TestChildExitNotBlockedByWedgedClient(t *testing.T) {
 	sock := shortSock(t)
 	flag := filepath.Join(filepath.Dir(sock), "exit-flag")
 	var fired int32
 	done := make(chan error, 1)
+	opts := testOptions(t, sock, []string{"sh", "-c", "while [ ! -e " + flag + " ]; do sleep 0.05; done"})
+	opts.OnChildExit = func() { atomic.AddInt32(&fired, 1) }
 	go func() {
-		done <- Run(context.Background(), Options{
-			Socket:      sock,
-			Argv:        []string{"sh", "-c", "while [ ! -e " + flag + " ]; do sleep 0.05; done"},
-			OnChildExit: func() { atomic.AddInt32(&fired, 1) },
-		})
+		done <- Run(context.Background(), opts)
 	}()
 	if !waitFor(func() bool { _, err := os.Stat(sock); return err == nil }) {
 		t.Fatal("control socket never appeared")
@@ -257,8 +348,8 @@ func TestChildExitNotBlockedByWedgedClient(t *testing.T) {
 	if got := atomic.LoadInt32(&fired); got != 1 {
 		t.Fatalf("OnChildExit fired %d times, want 1", got)
 	}
-	if _, err := os.Stat(sock); !os.IsNotExist(err) {
-		t.Fatalf("control socket still present after teardown: stat err = %v", err)
+	if !socketUnavailable(sock) {
+		t.Fatal("control endpoint remained dialable after teardown")
 	}
 }
 
@@ -272,12 +363,10 @@ func TestOnChildExitSkippedOnRealSignal(t *testing.T) {
 	sock := shortSock(t)
 	var fired int32
 	done := make(chan error, 1)
+	opts := testOptions(t, sock, []string{"sh", "-c", "sleep 5"})
+	opts.OnChildExit = func() { atomic.AddInt32(&fired, 1) }
 	go func() {
-		done <- Run(context.Background(), Options{
-			Socket:      sock,
-			Argv:        []string{"sh", "-c", "sleep 5"},
-			OnChildExit: func() { atomic.AddInt32(&fired, 1) },
-		})
+		done <- Run(context.Background(), opts)
 	}()
 	if !waitFor(func() bool { _, err := os.Stat(sock); return err == nil }) {
 		t.Fatal("control socket never appeared")
@@ -304,12 +393,10 @@ func TestOnChildExitSkippedOnSignalTeardown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var fired int32
 	done := make(chan error, 1)
+	opts := testOptions(t, sock, []string{"sh", "-c", "sleep 5"})
+	opts.OnChildExit = func() { atomic.AddInt32(&fired, 1) }
 	go func() {
-		done <- Run(ctx, Options{
-			Socket:      sock,
-			Argv:        []string{"sh", "-c", "sleep 5"},
-			OnChildExit: func() { atomic.AddInt32(&fired, 1) },
-		})
+		done <- Run(ctx, opts)
 	}()
 	if !waitFor(func() bool { _, err := os.Stat(sock); return err == nil }) {
 		t.Fatal("control socket never appeared")
@@ -342,5 +429,44 @@ func TestEncodeKeys(t *testing.T) {
 				t.Fatalf("encodeKeys(%v) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPTYSchemaFingerprint(t *testing.T) {
+	sum := sha256.Sum256([]byte(ptySchemaV1))
+	if got := hex.EncodeToString(sum[:]); got != ptySchemaDigest {
+		t.Fatalf("pty schema digest = %s, want %s", got, ptySchemaDigest)
+	}
+	if got := ptyWireBuild; got != "cc-orchestrate.pty.v1."+ptySchemaDigest {
+		t.Fatalf("pty wire build = %q", got)
+	}
+}
+
+func TestDecodeMessageRejectsUnknownAndTrailingFields(t *testing.T) {
+	for _, payload := range []string{
+		`{"data":"aGVsbG8=","extra":true}`,
+		`{"data":"aGVsbG8="}{}`,
+	} {
+		var request keysRequest
+		if err := decodeMessage([]byte(payload), &request); err == nil {
+			t.Fatalf("decodeMessage(%q) succeeded", payload)
+		}
+	}
+}
+
+func TestProtocolMessagesEncodeExactly(t *testing.T) {
+	payload, err := encodeMessage(keysRequest{Data: []byte("hello")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(payload), `{"data":"aGVsbG8="}`; got != want {
+		t.Fatalf("keys request = %s, want %s", got, want)
+	}
+	payload, err = encodeMessage(captureResponse{Text: "screen"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(payload), `{"text":"screen"}`; got != want {
+		t.Fatalf("capture response = %s, want %s", got, want)
 	}
 }

@@ -14,6 +14,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yasyf/cc-interact/daemon"
+	"github.com/yasyf/daemonkit/proc"
+	"github.com/yasyf/daemonkit/wire"
 
 	"github.com/yasyf/cc-orchestrate/backend"
 	"github.com/yasyf/cc-orchestrate/ptyhost"
@@ -32,8 +34,8 @@ const reportChildExitTimeout = 5 * time.Second
 // deterministically from the session id and spawn nonce so the spawn wrapper, the
 // host, and the prober client (via the agent row's nonce) all resolve the same path.
 // Deriving per incarnation is what makes a kill-driven respawn race-free: the
-// replacement binds its own path, so the signaled old wrapper's deferred socket
-// removal can never unlink the replacement's socket. The suffix is 64 bits of the
+// replacement binds its own path, so settling the old daemonkit listener cannot
+// disturb the replacement's socket. The suffix is 64 bits of the
 // full nonce's SHA-256 (16 hex chars) — wide enough that two incarnations of one
 // session can never share a path, unlike a truncated-nonce prefix — while the full
 // path stays inside the OS sun_path limit under the production StateDir.
@@ -100,9 +102,17 @@ func ptyHostCmd() *cobra.Command {
 			return nil
 		},
 		RunE: func(c *cobra.Command, args []string) error {
+			role := appDaemonRole()
 			return ptyhost.Run(c.Context(), ptyhost.Options{
-				Socket:      ptySocketPath(sessionID, spawnNonce),
-				Argv:        args,
+				Socket:       ptySocketPath(sessionID, spawnNonce),
+				Argv:         args,
+				RuntimeBuild: buildVersion(),
+				DaemonRole:   role,
+				StopVerifier: wire.StopVerifier{
+					Classifier: role,
+					Role:       role.RoleID,
+					Store:      &proc.FileStore{Path: filepath.Join(appPaths().StateDir(), "pty", "processes.db")},
+				},
 				OnChildExit: func() { reportChildExit(sessionID, spawnNonce) },
 			})
 		},

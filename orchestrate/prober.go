@@ -146,26 +146,27 @@ func (p ptyScreen) answer(ctx context.Context, keys ...string) error {
 // resolveScreen picks how to read and drive the agent's terminal: a backend that
 // advertises CanCapture is read and typed natively; any other backend (superset) is
 // driven through the pty-host socket the spawn wrapper started.
-func resolveScreen(ctx context.Context, db *sql.DB, ag agentRow) (promptScreen, error) {
+func resolveScreen(ctx context.Context, db *sql.DB, ag agentRow) (promptScreen, func() error, error) {
 	b, ok := backend.Get(ag.Backend)
 	if !ok {
-		return nil, fmt.Errorf("unknown backend %q", ag.Backend)
+		return nil, nil, fmt.Errorf("unknown backend %q", ag.Backend)
 	}
 	if capturer, isCap := b.(backend.Capturer); isCap && b.Caps().Has(backend.CanCapture) {
 		snd, isSnd := b.(backend.Sender)
 		if !isSnd {
-			return nil, fmt.Errorf("backend %q captures but cannot send", ag.Backend)
+			return nil, nil, fmt.Errorf("backend %q captures but cannot send", ag.Backend)
 		}
 		handle, err := backendAgentHandle(ctx, db, ag)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return nativeScreen{cap: capturer, snd: snd, handle: handle}, nil
+		return nativeScreen{cap: capturer, snd: snd, handle: handle}, func() error { return nil }, nil
 	}
 	if ag.SpawnNonce == "" {
-		return nil, fmt.Errorf("agent %q has no spawn nonce", ag.ID)
+		return nil, nil, fmt.Errorf("agent %q has no spawn nonce", ag.ID)
 	}
-	return ptyScreen{client: ptyhost.Dial(ptySocketPath(ag.SessionID, ag.SpawnNonce))}, nil
+	client := ptyhost.Dial(ptySocketPath(ag.SessionID, ag.SpawnNonce))
+	return ptyScreen{client: client}, client.Close, nil
 }
 
 // resolveProbePolicy reads the configured answer policy. The default (unset or
@@ -199,11 +200,16 @@ func runProber(ctx context.Context, db *sql.DB, ag agentRow, emit func(Status) e
 	if appeared() {
 		return
 	}
-	screen, err := resolveScreen(ctx, db, ag)
+	screen, closeScreen, err := resolveScreen(ctx, db, ag)
 	if err != nil {
 		log.Printf("cc-orchestrate: prober for agent %s: %v", ag.ID, err)
 		return
 	}
+	defer func() {
+		if err := closeScreen(); err != nil {
+			log.Printf("cc-orchestrate: close prober screen for agent %s: %v", ag.ID, err)
+		}
+	}()
 	answer, err := resolveProbePolicy(ctx, db)
 	if err != nil {
 		log.Printf("cc-orchestrate: prober policy for agent %s (failing safe to surface-only): %v", ag.ID, err)

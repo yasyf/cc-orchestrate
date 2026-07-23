@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -834,13 +835,20 @@ func captureScreenText(ctx context.Context, db *sql.DB, ag agentRow) (string, er
 	if err != nil {
 		return "", err
 	}
-	screen, err := resolveScreen(ctx, db, cur)
+	screen, closeScreen, err := resolveScreen(ctx, db, cur)
 	if err != nil {
 		return "", opErr(codeUnsupported, fmt.Errorf("resolve screen for agent %q: %w", cur.ID, err))
 	}
 	text, err := captureWithTimeout(ctx, screen)
-	if err != nil {
-		return "", fmt.Errorf("capture screen for agent %q: %w", cur.ID, err)
+	closeErr := closeScreen()
+	if err != nil || closeErr != nil {
+		if err != nil {
+			err = fmt.Errorf("capture screen for agent %q: %w", cur.ID, err)
+		}
+		if closeErr != nil {
+			closeErr = fmt.Errorf("close screen for agent %q: %w", cur.ID, closeErr)
+		}
+		return "", errors.Join(err, closeErr)
 	}
 	return text, nil
 }

@@ -233,7 +233,7 @@ func TestPtyHostCmdReportsChildExitToDaemon(t *testing.T) {
 		t.Fatalf("pty-host command: %v", err)
 	}
 
-	// The wrapper served (and then removed) its per-incarnation control socket.
+	// The wrapper fully settled its daemonkit-owned per-incarnation endpoint.
 	if _, err := os.Stat(ptySocketPath("sc", "n1chain0")); !os.IsNotExist(err) {
 		t.Fatalf("per-incarnation control socket left behind: stat err = %v", err)
 	}
@@ -263,7 +263,7 @@ func TestPtySocketPathDeterministic(t *testing.T) {
 		t.Fatal("ptySocketPath collides across session ids")
 	}
 	// Per-incarnation: two nonces of the same session must derive distinct paths, or a
-	// killed wrapper's deferred socket removal could unlink its replacement's socket.
+	// killed wrapper's listener settlement could disturb its replacement's socket.
 	if ptySocketPath("sid-9", "11111111-aaaa") == ptySocketPath("sid-9", "22222222-bbbb") {
 		t.Fatal("ptySocketPath collides across spawn nonces of the same session")
 	}

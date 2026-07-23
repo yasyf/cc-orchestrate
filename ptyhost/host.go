@@ -2,51 +2,56 @@ package ptyhost
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/yasyf/daemonkit/daemon"
+	"github.com/yasyf/daemonkit/drain"
+	"github.com/yasyf/daemonkit/wire"
 )
+
+const ptyShutdownTimeout = 5 * time.Second
 
 // Options configures a Run.
 type Options struct {
-	Socket string   // unix socket path to serve CAPTURE/KEYS on
-	Argv   []string // the child command to run under the PTY
-	// OnChildExit, when set, fires once the hosted child exits on its own — not when a
-	// parent signal (SIGINT/SIGTERM/SIGHUP) tore it down — as the wrapper's last act,
-	// AFTER the socket and grid are freed: the daemon's response is to kill this
-	// wrapper and respawn the session, so by the time the hook hands control to the
-	// daemon this wrapper's socket must already be gone and never touched again (the
-	// daemon derives the replacement's socket per incarnation, so even an interleaved
-	// replacement binds a different path and this wrapper's removal stays self-scoped).
-	// A signal-driven teardown skips it, leaving that window to the supervisor's
-	// membership/staleness fallbacks.
-	OnChildExit func()
+	Socket       string
+	Argv         []string
+	RuntimeBuild string
+	DaemonRole   wire.ProtectedSessionClassifier
+	StopVerifier wire.StopControlVerifier
+	OnChildExit  func()
 }
 
-// Run hosts opts.Argv under a pseudo-terminal: it tees the child's output to this
-// process's stdout (so the spawning terminal still shows it) and into a virtual
-// screen grid, copies this process's stdin into the child, and serves a control
-// socket answering CAPTURE with the rendered screen and KEYS by writing bytes to the
-// child. It returns when the child exits, propagating the child's wait error, and
-// removes the socket. A parent kill (SIGINT/SIGTERM/SIGHUP) cancels ctx and tears the
-// child down.
-func Run(ctx context.Context, opts Options) error {
-	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+// Run hosts opts.Argv under a pseudo-terminal and serves its exact v1 control
+// protocol through a daemonkit-owned persistent session runtime.
+func Run(parent context.Context, opts Options) error {
+	if len(opts.Argv) == 0 {
+		return errors.New("pty-host child argv is required")
+	}
+	if opts.RuntimeBuild == "" {
+		return errors.New("pty-host runtime build is required")
+	}
+	if opts.DaemonRole == nil {
+		return errors.New("pty-host daemon role is required")
+	}
+	if opts.StopVerifier == nil {
+		return errors.New("pty-host stop verifier is required")
+	}
+
+	ctx, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer cancel()
 
 	ws := ttySize()
-	cmd := exec.CommandContext(ctx, opts.Argv[0], opts.Argv[1:]...) //nolint:gosec // G204: pty-host runs the caller-specified child command by design
+	cmd := exec.CommandContext(ctx, opts.Argv[0], opts.Argv[1:]...) //nolint:gosec // G204: the caller supplies the child command.
 	ptmx, err := pty.StartWithSize(cmd, ws)
 	if err != nil {
 		return fmt.Errorf("pty-host start %s: %w", opts.Argv[0], err)
@@ -60,61 +65,199 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}()
 
-	// The grid drains the emulator's query replies back into the child PTY (see
-	// grid_vt.go), so a TUI that probes for cursor position or device attributes
-	// never stalls waiting for the answer.
 	g := newGrid(int(ws.Cols), int(ws.Rows), ptmx)
-
-	// Read loop: feed the grid first (in-memory, never blocks) then tee to our stdout,
-	// until the PTY closes. readDone gates the grid's release in teardown.
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
 		_, _ = io.Copy(io.MultiWriter(gridWriter{g}, os.Stdout), ptmx)
 	}()
-	// Forward our stdin to the child. os.Stdin.Read is not cancellable, so this
-	// goroutine outlives Run; it is bounded by the pty-host process, which exits as
-	// soon as Run returns.
 	go func() { _, _ = io.Copy(ptmx, os.Stdin) }()
 
-	// teardown stops the read loop and frees the grid in order — closing the PTY wakes
-	// the read loop's Read so it stops feeding before the grid is freed (close-before-
-	// free ordering borrowed from headless-terminal) — for both the happy and error paths.
-	teardown := func() {
-		signal.Stop(winch)
-		close(winch)
-		_ = ptmx.Close()
-		<-readDone
-		g.Close()
-	}
+	resources := &ptyResources{winch: winch, ptmx: ptmx, readDone: readDone, grid: g}
+	worker := newChildWorker(cmd)
 
-	srv, err := serve(opts.Socket, g, ptmx)
+	runtime, err := newRuntime(opts, g, ptmx, worker, resources)
 	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		teardown()
+		worker.Cancel()
+		settleCtx, settleCancel := context.WithTimeout(context.WithoutCancel(ctx), ptyShutdownTimeout)
+		_ = worker.Wait(settleCtx)
+		settleCancel()
+		_ = resources.Close()
 		return err
 	}
+	runtimeDone := make(chan error, 1)
+	go func() { runtimeDone <- runtime.Run(ctx) }()
+	readyDone := make(chan error, 1)
+	go func() { readyDone <- runtime.WaitReady(ctx) }()
 
-	werr := cmd.Wait()
-	_ = srv.Close() // stop accepting and drain in-flight handlers before freeing the grid
-	_ = os.Remove(opts.Socket)
-	teardown()
-	// The child exited on its own (no parent signal cancelled ctx): fire the exit hook
-	// as the wrapper's last act, strictly after the socket removal above, so the whole
-	// teardown is complete before the hook hands control to the daemon — which answers
-	// the report by killing this wrapper and respawning the session. The daemon derives
-	// socket paths per incarnation, so the replacement binds its own path and this
-	// wrapper's removal can never unlink it regardless of interleaving; the ordering
-	// keeps the wrapper from ever touching the filesystem after the daemon has taken
-	// over. A signal-driven teardown leaves ctx.Err() non-nil and skips it.
-	if opts.OnChildExit != nil && ctx.Err() == nil {
+	var childErr, runtimeErr error
+	naturalExit := false
+	select {
+	case runtimeErr = <-runtimeDone:
+		childErr = worker.Result()
+	case readyErr := <-readyDone:
+		if readyErr != nil {
+			childErr = worker.Result()
+			runtimeErr = <-runtimeDone
+			runtimeErr = errors.Join(readyErr, runtimeErr)
+			break
+		}
+		select {
+		case <-worker.done:
+			naturalExit = true
+			childErr = worker.Result()
+			runtimeErr = closeRuntime(ctx, runtime, runtimeDone)
+		case runtimeErr = <-runtimeDone:
+			childErr = worker.Result()
+		}
+	}
+
+	if opts.OnChildExit != nil && naturalExit && ctx.Err() == nil && runtimeErr == nil {
 		opts.OnChildExit()
 	}
-	return werr
+	return errors.Join(childErr, runtimeErr)
 }
 
-// gridWriter adapts a grid to io.Writer so the PTY read loop can tee into it.
+func newRuntime(
+	opts Options,
+	g grid,
+	child io.Writer,
+	worker *childWorker,
+	resources *ptyResources,
+) (*daemon.Runtime, error) {
+	server := &wire.Server{
+		WireBuild:   ptyWireBuild,
+		MaxSessions: 8,
+		Trust: func(ctx context.Context, peer wire.Peer) error {
+			accepted, err := opts.DaemonRole.Classify(ctx, peer)
+			if err != nil {
+				return err
+			}
+			if !accepted {
+				return wire.ErrUntrustedPeer
+			}
+			return nil
+		},
+	}
+	server.RegisterConcurrent(opCapture, func(_ context.Context, request wire.Request) (any, error) {
+		if len(request.Payload) != 0 {
+			return nil, errors.New("pty-host capture payload must be empty")
+		}
+		return captureResponse{Text: g.Text()}, nil
+	})
+	server.RegisterConcurrent(opKeys, func(_ context.Context, request wire.Request) (any, error) {
+		var message keysRequest
+		if err := decodeMessage(request.Payload, &message); err != nil {
+			return nil, err
+		}
+		if _, err := child.Write(message.Data); err != nil {
+			return nil, fmt.Errorf("pty-host write keys: %w", err)
+		}
+		return struct{}{}, nil
+	})
+	intake := &drain.Intake{}
+	runtime, err := wire.NewRuntime(wire.RuntimeConfig{
+		Socket:                    opts.Socket,
+		RuntimeBuild:              opts.RuntimeBuild,
+		RuntimeProtocol:           int(wire.ProtocolVersion),
+		Wire:                      server,
+		Classifier:                opts.DaemonRole,
+		ReservedProtectedSessions: 1,
+		StopVerifier:              opts.StopVerifier,
+		Admission:                 intake,
+		Workers:                   worker,
+		State:                     idleCloser{},
+		Resources:                 resources,
+		Activate:                  func(daemon.Activation) error { return nil },
+		ShutdownTimeout:           ptyShutdownTimeout,
+		Signals:                   make(chan os.Signal),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pty-host runtime: %w", err)
+	}
+	return runtime, nil
+}
+
+func closeRuntime(parent context.Context, runtime *daemon.Runtime, done <-chan error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), ptyShutdownTimeout)
+	defer cancel()
+	if err := runtime.Shutdown(ctx); err != nil {
+		return errors.Join(err, <-done)
+	}
+	return <-done
+}
+
+type childWorker struct {
+	cmd  *exec.Cmd
+	done chan struct{}
+
+	cancelOnce sync.Once
+	mu         sync.Mutex
+	err        error
+}
+
+func newChildWorker(cmd *exec.Cmd) *childWorker {
+	w := &childWorker{cmd: cmd, done: make(chan struct{})}
+	go func() {
+		err := cmd.Wait()
+		w.mu.Lock()
+		w.err = err
+		w.mu.Unlock()
+		close(w.done)
+	}()
+	return w
+}
+
+func (*childWorker) Close() {}
+
+func (w *childWorker) Cancel() {
+	w.cancelOnce.Do(func() {
+		if w.cmd.Process != nil {
+			_ = w.cmd.Process.Kill()
+		}
+	})
+}
+
+func (w *childWorker) Wait(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.done:
+		return nil
+	}
+}
+
+func (w *childWorker) Result() error {
+	<-w.done
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.err
+}
+
+type ptyResources struct {
+	winch    chan os.Signal
+	ptmx     *os.File
+	readDone <-chan struct{}
+	grid     grid
+	once     sync.Once
+	err      error
+}
+
+func (r *ptyResources) Close() error {
+	r.once.Do(func() {
+		signal.Stop(r.winch)
+		close(r.winch)
+		r.err = r.ptmx.Close()
+		<-r.readDone
+		r.grid.Close()
+	})
+	return r.err
+}
+
+type idleCloser struct{}
+
+func (idleCloser) Close() error { return nil }
+
 type gridWriter struct{ g grid }
 
 func (w gridWriter) Write(p []byte) (int, error) {
@@ -122,11 +265,9 @@ func (w gridWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// clampUint16 maps a terminal dimension into uint16 range, guarding the int->uint16
-// narrowing against a negative or absurdly large value rather than wrapping it.
 func clampUint16(n int) uint16 {
-	if n < 0 {
-		return 0
+	if n <= 0 {
+		return 1
 	}
 	if n > math.MaxUint16 {
 		return math.MaxUint16
@@ -134,110 +275,9 @@ func clampUint16(n int) uint16 {
 	return uint16(n)
 }
 
-// ttySize returns the controlling terminal's size, or a sane default when stdin is
-// not a terminal (e.g. under a test harness).
 func ttySize() *pty.Winsize {
 	if rows, cols, err := pty.Getsize(os.Stdin); err == nil && rows > 0 && cols > 0 {
 		return &pty.Winsize{Rows: clampUint16(rows), Cols: clampUint16(cols)}
 	}
 	return &pty.Winsize{Rows: 24, Cols: 80}
-}
-
-// ptyServer serves the control socket; Close stops accepting and waits for in-flight
-// handlers, so no handler reads the grid after Run frees it. Live connections are
-// tracked so Close can expire their deadlines: the drain is bounded by unblocking
-// every handler, never by trusting a client to finish its request.
-type ptyServer struct {
-	ln      net.Listener
-	wg      sync.WaitGroup
-	mu      sync.Mutex
-	conns   map[net.Conn]struct{}
-	closing bool
-}
-
-func serve(socket string, g grid, child io.Writer) (*ptyServer, error) {
-	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
-		return nil, fmt.Errorf("pty-host socket dir: %w", err)
-	}
-	_ = os.Remove(socket)
-	ln, err := net.Listen("unix", socket)
-	if err != nil {
-		return nil, fmt.Errorf("pty-host listen %s: %w", socket, err)
-	}
-	s := &ptyServer{ln: ln, conns: map[net.Conn]struct{}{}}
-	s.wg.Add(1)
-	go s.accept(g, child)
-	return s, nil
-}
-
-func (s *ptyServer) accept(g grid, child io.Writer) {
-	defer s.wg.Done()
-	for {
-		conn, err := s.ln.Accept()
-		if err != nil {
-			return
-		}
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			defer s.untrack(conn)
-			s.track(conn)
-			handleConn(conn, g, child)
-		}()
-	}
-}
-
-// track registers a live connection; a conn accepted while Close is already draining
-// gets its deadline expired immediately, so it can never slip past the drain sweep.
-func (s *ptyServer) track(conn net.Conn) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.conns[conn] = struct{}{}
-	if s.closing {
-		_ = conn.SetDeadline(time.Now())
-	}
-}
-
-func (s *ptyServer) untrack(conn net.Conn) {
-	s.mu.Lock()
-	delete(s.conns, conn)
-	s.mu.Unlock()
-	_ = conn.Close()
-}
-
-// Close stops accepting, expires every in-flight connection's deadline so its handler
-// unblocks with an I/O error, and waits for the handlers to drain. A wedged client
-// that connected but never completes its request therefore cannot stall the wrapper's
-// teardown (or the child-exit report behind it).
-func (s *ptyServer) Close() error {
-	err := s.ln.Close()
-	s.mu.Lock()
-	s.closing = true
-	for conn := range s.conns {
-		_ = conn.SetDeadline(time.Now())
-	}
-	s.mu.Unlock()
-	s.wg.Wait()
-	return err
-}
-
-func handleConn(conn net.Conn, g grid, child io.Writer) {
-	enc := json.NewEncoder(conn)
-	var req request
-	if err := json.NewDecoder(conn).Decode(&req); err != nil {
-		_ = enc.Encode(response{Err: "decode request: " + err.Error()})
-		return
-	}
-	switch req.Op {
-	case opCapture:
-		_ = enc.Encode(response{Text: g.Text()})
-	case opKeys:
-		if _, err := child.Write(req.Data); err != nil {
-			_ = enc.Encode(response{Err: "write keys: " + err.Error()})
-			return
-		}
-		_ = enc.Encode(response{})
-	default:
-		_ = enc.Encode(response{Err: "unknown op: " + req.Op})
-	}
 }

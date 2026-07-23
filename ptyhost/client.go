@@ -2,54 +2,106 @@ package ptyhost
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"net"
+	"sync"
+
+	"github.com/yasyf/daemonkit/wire"
 )
 
-// Client talks to a pty-host's control socket to read the child's screen and inject
-// keystrokes. Each call opens a short-lived connection, so a Client is reusable and
-// needs no explicit close.
-type Client struct{ socket string }
+// Client owns one persistent multiplexed session to a pty-host.
+type Client struct {
+	socket string
 
-// Dial returns a Client for the pty-host listening at socket.
+	mu      sync.Mutex
+	session *wire.Client
+}
+
+// Dial returns a lazy Client for the pty-host listening at socket.
 func Dial(socket string) *Client { return &Client{socket: socket} }
 
 // Capture returns the child's current rendered screen as plain text.
 func (c *Client) Capture(ctx context.Context) (string, error) {
-	resp, err := c.do(ctx, request{Op: opCapture})
-	if err != nil {
+	var response captureResponse
+	if err := c.call(ctx, opCapture, nil, &response); err != nil {
 		return "", err
 	}
-	return resp.Text, nil
+	return response.Text, nil
 }
 
-// SendKeys encodes the given key tokens — named keys like "Enter"/"Down" or literal
-// text — to their terminal byte sequences and writes them to the child PTY.
+// SendKeys encodes the given key tokens and writes them to the child PTY.
 func (c *Client) SendKeys(ctx context.Context, keys ...string) error {
-	_, err := c.do(ctx, request{Op: opKeys, Data: encodeKeys(keys)})
-	return err
+	payload, err := encodeMessage(keysRequest{Data: encodeKeys(keys)})
+	if err != nil {
+		return err
+	}
+	return c.call(ctx, opKeys, payload, nil)
 }
 
-func (c *Client) do(ctx context.Context, req request) (response, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", c.socket)
+// Close closes the persistent session when one was established.
+func (c *Client) Close() error {
+	c.mu.Lock()
+	session := c.session
+	c.session = nil
+	c.mu.Unlock()
+	if session == nil {
+		return nil
+	}
+	return session.Close()
+}
+
+func (c *Client) call(ctx context.Context, op wire.Op, payload []byte, dst any) error {
+	session, err := c.getSession(ctx)
 	if err != nil {
-		return response{}, fmt.Errorf("pty-host dial %s: %w", c.socket, err)
+		return fmt.Errorf("pty-host %s: %w", op, err)
 	}
-	defer func() { _ = conn.Close() }()
-	if dl, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(dl)
+	result, err := session.Call(ctx, op, "", payload)
+	if err != nil {
+		c.retire(session, err)
+		return fmt.Errorf("pty-host %s: %w", op, err)
 	}
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return response{}, fmt.Errorf("pty-host send %s: %w", req.Op, err)
+	if result.Response.Err != "" {
+		return fmt.Errorf("pty-host %s: %s", op, result.Response.Err)
 	}
-	var resp response
-	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
-		return response{}, fmt.Errorf("pty-host recv %s: %w", req.Op, err)
+	if result.Outcome != wire.Delivered {
+		return fmt.Errorf("pty-host %s: %w", op, result.Rejection())
 	}
-	if resp.Err != "" {
-		return response{}, fmt.Errorf("pty-host %s: %s", req.Op, resp.Err)
+	if dst == nil {
+		if len(result.Response.Payload) != 0 && string(result.Response.Payload) != "{}" {
+			return fmt.Errorf("pty-host %s returned unexpected payload", op)
+		}
+		return nil
 	}
-	return resp, nil
+	if err := decodeMessage(result.Response.Payload, dst); err != nil {
+		return fmt.Errorf("pty-host %s response: %w", op, err)
+	}
+	return nil
+}
+
+func (c *Client) getSession(ctx context.Context) (*wire.Client, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.session != nil {
+		return c.session, nil
+	}
+	session, err := wire.NewClient(ctx, wire.ClientConfig{
+		Dial:      wire.UnixDialer(c.socket),
+		WireBuild: ptyWireBuild,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", c.socket, err)
+	}
+	c.session = session
+	return session, nil
+}
+
+func (c *Client) retire(session *wire.Client, cause error) {
+	c.mu.Lock()
+	if c.session != session {
+		c.mu.Unlock()
+		return
+	}
+	c.session = nil
+	c.mu.Unlock()
+	_ = session.Abort(errors.Join(errors.New("pty-host session failed"), cause))
 }
