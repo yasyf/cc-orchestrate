@@ -39,11 +39,11 @@ builds:
       - -s -w -X github.com/yasyf/cc-orchestrate/orchestrate.Version={{ .Version }}
     # Developer ID sign + notarize the darwin binaries via codesign + notarytool
     # (quill SIGKILLs on arm64 — anchore/quill#566), using the shared script the
-    # import-developer-id action drops on the runner ($MACOS_CODESIGN_SCRIPT). The
+    # import-developer-id action drops on the runner. The
     # script is required so every build fails closed instead of shipping unsigned.
     hooks:
       post:
-        - cmd: bash "$MACOS_CODESIGN_SCRIPT" "{{ .Path }}" "{{ .Target }}"
+        - cmd: bash "{{ .Env.MACOS_CODESIGN_SCRIPT }}" "{{ .Path }}" "{{ .Target }}"
           output: true
 
 archives:
