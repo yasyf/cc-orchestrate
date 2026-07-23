@@ -44,9 +44,9 @@ const (
 	EventMessage = "orchestrate.message" // orchestrator → agent message
 	EventReport  = "orchestrate.report"  // agent → orchestrator report
 
-	EventRestarted  = "orchestrate.restarted"  // supervisor/manual re-spawn of a vanished terminal (non-terminal)
-	EventAbandoned  = "orchestrate.abandoned"  // restart budget exhausted; precedes the terminal EventExited (non-terminal)
-	EventAdopted    = "orchestrate.adopted"    // a hand-started session was adopted into the fleet (non-terminal)
+	EventRestarted = "orchestrate.restarted" // supervisor/manual re-spawn of a vanished terminal (non-terminal)
+	EventAbandoned = "orchestrate.abandoned" // restart budget exhausted; precedes the terminal EventExited (non-terminal)
+	EventAdopted   = "orchestrate.adopted"   // a hand-started session was adopted into the fleet (non-terminal)
 )
 
 // LifecycleStatus is the lifecycle state stored on a repo or agent row. It is a

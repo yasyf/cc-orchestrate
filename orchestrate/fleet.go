@@ -63,7 +63,6 @@ const (
 	FrameSprintCreated   = "fleet.sprint.created"
 	FrameSprintActivated = "fleet.sprint.activated"
 	FrameSprintKilled    = "fleet.sprint.killed"
-
 )
 
 // fleetFrame is one typed fleet-stream frame. frameType is both the event Type the
