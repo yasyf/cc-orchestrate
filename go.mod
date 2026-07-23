@@ -9,7 +9,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/yasyf/cc-interact v0.19.0
-	github.com/yasyf/cc-notes v0.43.0
+	github.com/yasyf/cc-notes v0.44.0
 	github.com/yasyf/daemonkit v0.9.0
 	github.com/yasyf/reposync v0.20.0
 	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6
