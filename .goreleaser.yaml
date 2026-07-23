@@ -39,11 +39,11 @@ builds:
       - -s -w -X github.com/yasyf/cc-orchestrate/orchestrate.Version={{ .Version }}
     # Developer ID sign + notarize the darwin binaries via codesign + notarytool
     # (quill SIGKILLs on arm64 — anchore/quill#566), using the shared script the
-    # import-developer-id action drops on the runner ($MACOS_CODESIGN_SCRIPT). Guarded
-    # so a local `goreleaser release --snapshot` (no signing env) is a clean no-op.
+    # import-developer-id action drops on the runner ($MACOS_CODESIGN_SCRIPT). The
+    # script is required so every build fails closed instead of shipping unsigned.
     hooks:
       post:
-        - cmd: sh -c 'if [ -n "${MACOS_CODESIGN_SCRIPT:-}" ]; then bash "$MACOS_CODESIGN_SCRIPT" "$1" "$2"; fi' -- "{{ .Path }}" "{{ .Target }}"
+        - cmd: bash "$MACOS_CODESIGN_SCRIPT" "{{ .Path }}" "{{ .Target }}"
           output: true
 
 archives:
@@ -69,14 +69,6 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/yasyf/cc-orchestrate
     description: Orchestrate fleets of Claude Code agents across pluggable backends.
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr",
-                           args: ["-dr", "com.apple.quarantine", "#{staged_path}/cc-orchestrate"]
-          end
-
 release:
   prerelease: auto
   # Lets the shared workflow's goreleaser retry re-upload after a mid-publish failure.
