@@ -146,8 +146,8 @@ github.com/yasyf/daemonkit v0.9.0 h1:3ow294zgiu74trP3AxZzmEhX2szKyXZSec0PTrS9IN0
 github.com/yasyf/daemonkit v0.9.0/go.mod h1:5tYeENawEKN1GpM12YXTqIZ1fbWv7bj9P4TyIcSZ24Q=
 github.com/yasyf/reposync v0.20.0 h1:92tkgSmAlVeTZ7JY7ZKJhddZL1vUbMgXCqI5YMsKuiM=
 github.com/yasyf/reposync v0.20.0/go.mod h1:1ypKheIjuuCH0bE91rFITqG7/cvfDX9y+OEIMFgAwTM=
-github.com/yasyf/synckit v0.28.0 h1:0tzeK9TcPKhO4jP94/FLZKiBmSEvsv1jdfLEg8ySlX0=
-github.com/yasyf/synckit v0.28.0/go.mod h1:+VupFzvxfgw04+BuIoBcDJdEK9nL77Eng5qTuxkwKro=
+github.com/yasyf/synckit v0.29.0 h1:8R/3yzaha+m4IUF8WvTQVrxnC4R5nxSZsxFtn1AVYdw=
+github.com/yasyf/synckit v0.29.0/go.mod h1:VXdUSlwdQdS0ItlhXYJs6GA7bWIS0+ld24bHPwuVsM8=
 github.com/yusufpapurcu/wmi v1.2.4 h1:zFUKzehAFReQwLys1b/iSMl+JQGSCSjtVqQn9bBrPo0=
 github.com/yusufpapurcu/wmi v1.2.4/go.mod h1:SBZ9tNy3G9/m5Oi98Zks0QjeHVDvuK0qfxQmPyzfmi0=
 go.etcd.io/bbolt v1.5.0 h1:S7GAl7Fxv12yohbwFfIbQCGDWbQbtDGPET4P/bD4lxU=
