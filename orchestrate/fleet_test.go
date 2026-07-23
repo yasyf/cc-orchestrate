@@ -224,6 +224,7 @@ func TestFleetEventSchemas(t *testing.T) {
 }
 
 func TestFleetStatus(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
 	db := newTestDB(ctx, t)
 	installTestFleet(t)
@@ -598,6 +599,7 @@ func TestFleetAbandonFrameOrder(t *testing.T) {
 // yet carries a seq beyond the reported cursor, so resuming re-delivers it rather than
 // skipping it. The window is driven deterministically via the fleetStatusMidRead seam.
 func TestFleetStatusCursorLagsSnapshot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
 	db := newTestDB(ctx, t)
 	installTestFleet(t)
