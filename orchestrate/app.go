@@ -73,8 +73,8 @@ func newClient(ctx context.Context) (*daemon.Client, error) { return launcher().
 
 func launcher() daemon.Launcher {
 	return daemon.Launcher{
-		Paths: appPaths(), Version: buildVersion(), LifecycleBuild: buildVersion(),
-		Args: []string{"daemon"}, DaemonRole: appDaemonRole(),
+		Paths: appPaths(), WireBuild: daemon.WireBuild, RuntimeBuild: buildVersion(),
+		Args: []string{"daemon"}, StopArgs: []string{daemon.StopControlCommand}, DaemonRole: appDaemonRole(),
 	}
 }
 
@@ -88,6 +88,8 @@ func deps() cmd.Deps {
 		NewClient:              newClient,
 		EnsureCurrent:          func(ctx context.Context) error { return launcher().EnsureCurrent(ctx, daemon.UpgradeTimeout) },
 		EnsureCurrentIfRunning: func(ctx context.Context) error { return launcher().EnsureCurrentIfRunning(ctx) },
+		Stop:                   func(ctx context.Context) error { return launcher().Stop(ctx, daemon.UpgradeTimeout) },
+		RunStopControl:         func(ctx context.Context) error { return launcher().RunStopControl(ctx) },
 		ClaudePID:              procs.ClaudePID,
 		WindowAlive:            procs.LiveClaude,
 		TerminalEvent:          func(t string) bool { return t == EventExited },

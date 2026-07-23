@@ -50,8 +50,8 @@ func serve(ctx context.Context) error {
 	s, err := daemon.New(daemon.Config{
 		AppName:        AppName,
 		Paths:          appPaths(),
-		Version:        buildVersion(),
-		LifecycleBuild: buildVersion(),
+		WireBuild:      daemon.WireBuild,
+		RuntimeBuild:   buildVersion(),
 		DaemonRole:     appDaemonRole(),
 		ActiveStatuses: []string{string(StatusActive)},
 		// c.Type() (not c.EventType) so the SSE plane filters the same presence

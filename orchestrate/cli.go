@@ -46,6 +46,7 @@ func Root() *cobra.Command {
 	r.PersistentFlags().Bool(jsonFlag, false, "emit machine-readable JSON (cco's domain commands)")
 	r.AddCommand(
 		cmd.DaemonCmd(d),
+		cmd.DaemonStopControlCmd(d),
 		withSessionDefault(cmd.WatchCmd(d)),
 		withSessionDefault(cmd.StatusCmd(d)),
 		cmd.StopCmd(d),
@@ -220,6 +221,7 @@ func runOpCtx(ctx context.Context, op daemon.Op, body any) (daemon.Reply, error)
 	if err != nil {
 		return daemon.Reply{}, err
 	}
+	defer func() { _ = client.Close() }()
 	reply, err := client.Do(ctx, daemon.Envelope{
 		Op: op, Session: AppName, ClaudePID: d.ClaudePID(), Scope: cwd, Body: raw,
 	})
@@ -979,6 +981,7 @@ func streamAgent(ctx context.Context, d cmd.Deps, a agentView, emit func(string)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = client.Close() }()
 	pid := d.ClaudePID()
 	subjectID, port, err := resolveAgentSubject(ctx, client, a.SessionID, a.Scope, pid)
 	if err != nil {
@@ -1282,6 +1285,7 @@ func consumeFleet(ctx context.Context, d cmd.Deps, subjectID string, port int, c
 	if err != nil {
 		return err
 	}
+	defer func() { _ = client.Close() }()
 	src := consume.StreamSource{
 		Port: port, SubjectID: subjectID, Consumer: consumer, ClaudePID: pid,
 		Paths: d.Paths, WindowAlive: d.WindowAlive,

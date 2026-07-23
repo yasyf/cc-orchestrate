@@ -30,6 +30,7 @@ func channelTools(ctx context.Context, session, scope string) ([]channel.Tool, s
 	if err != nil {
 		return nil, "", "", err
 	}
+	context.AfterFunc(ctx, func() { _ = client.Close() })
 	pid := procs.ClaudePID()
 	report := channel.Tool{
 		Name:        "report",

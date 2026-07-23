@@ -41,6 +41,7 @@ func mcpDispatch(ctx context.Context, op daemon.Op, args json.RawMessage) (strin
 	if err != nil {
 		return err.Error(), true
 	}
+	defer func() { _ = client.Close() }()
 	reply, err := client.Do(ctx, daemon.Envelope{
 		Op: op, Session: AppName, ClaudePID: d.ClaudePID(), Scope: cwd, Body: args,
 	})

@@ -130,5 +130,6 @@ func reportChildExit(sessionID, spawnNonce string) {
 	if err != nil {
 		return
 	}
+	defer func() { _ = client.Close() }()
 	_, _ = client.Do(ctx, daemon.Envelope{Op: mAgentChildExited.op(), Session: AppName, Body: body})
 }

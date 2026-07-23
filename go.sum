@@ -149,12 +149,12 @@ github.com/xanzy/ssh-agent v0.3.3 h1:+/15pJfg/RsTxqYcX6fHqOXZwwMP+2VyYWJeWM2qQFM
 github.com/xanzy/ssh-agent v0.3.3/go.mod h1:6dzNDKs0J9rVPHPhaGCukekBHKqfl+L3KghI1Bc68Uw=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e/go.mod h1:RbqR21r5mrJuqunuUZ/Dhy/avygyECGrLceyNeo4LiM=
-github.com/yasyf/cc-interact v0.15.0 h1:Pigq/OHqZSDz+Ccbp7rP/lemKz6CCCOaWsExzjZ9hbg=
-github.com/yasyf/cc-interact v0.15.0/go.mod h1:MHdPVfQ8ExxR2JDe1HeFaCpstI3xRcihmZCDWuGt0O8=
+github.com/yasyf/cc-interact v0.18.1 h1:nq34Vq878Y6z6XNWj+bScTEEUNJZE18VHhEH/6iBeVQ=
+github.com/yasyf/cc-interact v0.18.1/go.mod h1:yfdZfuZTba6vWW/vCXDjSKsNvMF0iRvRSkYgIlL0lgI=
 github.com/yasyf/cc-notes v0.31.1 h1:KKtVy9PHhCK5qB/JW+2w/EiKPFRhhkYXGNZJmCsHqLU=
 github.com/yasyf/cc-notes v0.31.1/go.mod h1:ozaCHRQL1KMgOEywobSaFQcalyQfqGsWWcx9ZexSads=
-github.com/yasyf/daemonkit v0.7.1 h1:3ukBqpRrbu7Ex+tA8KNPSZ3A6sFAVj0JvXqr6buQWaE=
-github.com/yasyf/daemonkit v0.7.1/go.mod h1:5tYeENawEKN1GpM12YXTqIZ1fbWv7bj9P4TyIcSZ24Q=
+github.com/yasyf/daemonkit v0.8.1 h1:vUVeWwW90TFt6GJTe15us7Ymj5Lc9hDQ1Xo1o2kB+p0=
+github.com/yasyf/daemonkit v0.8.1/go.mod h1:5tYeENawEKN1GpM12YXTqIZ1fbWv7bj9P4TyIcSZ24Q=
 github.com/yasyf/reposync v0.16.0 h1:3J6OrpUvkRCKruvCopA5+nbIkyQLVUw9xkMuqSGUSBQ=
 github.com/yasyf/reposync v0.16.0/go.mod h1:qQD1k8V5ZLQDw/let3vozjwfjn/bvsvHZT+9o+gDYFo=
 github.com/yasyf/synckit v0.24.0 h1:MqZCNYYPXFz+fP6/6JkF/4t+8yrrLnRt+85G4N09U4E=
