@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,8 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yasyf/daemonkit/codeidentity"
-	"github.com/yasyf/daemonkit/proc"
+	"github.com/yasyf/daemonkit/trust"
 	"github.com/yasyf/daemonkit/wire"
 )
 
@@ -45,22 +45,9 @@ func waitFor(cond func() bool) bool {
 
 func testOptions(t *testing.T, socket string, argv []string) Options {
 	t.Helper()
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	executable, err = filepath.EvalSymlinks(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	classifier := codeidentity.FixedClassifier{Executable: executable}
 	return Options{
-		Socket: socket, Argv: argv, RuntimeBuild: "1.0.0", DaemonRole: classifier,
-		StopVerifier: wire.StopVerifier{
-			Classifier: classifier,
-			Role:       "com.yasyf.cc-orchestrate.test",
-			Store:      &proc.FileStore{Path: filepath.Join(filepath.Dir(socket), "processes.db")},
-		},
+		Socket: socket, ProcessStore: filepath.Join(filepath.Dir(socket), "processes.db"),
+		Argv: argv, RuntimeBuild: "1.0.0",
 	}
 }
 
@@ -192,17 +179,13 @@ func TestWireBuildMismatchIsRejectedBeforeDispatch(t *testing.T) {
 	client, err := wire.NewClient(ctx, wire.ClientConfig{
 		Dial:      wire.UnixDialer(sock),
 		WireBuild: "cc-orchestrate.pty.v0",
+		Role:      trust.UnprotectedRole,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := client.Call(ctx, opCapture, "", nil)
-	_ = client.Close()
-	if err != nil {
-		t.Fatalf("mismatched wire call transport error = %v", err)
-	}
-	if result.Outcome != wire.Rejected || !strings.Contains(result.Response.Reason, wire.ErrBuildMismatch.Error()) {
-		t.Fatalf("mismatched wire build result = %#v", result)
+	if !errors.Is(err, wire.ErrBuildMismatch) {
+		if client != nil {
+			_ = client.Close()
+		}
+		t.Fatalf("mismatched wire handshake error = %v, want %v", err, wire.ErrBuildMismatch)
 	}
 
 	cancel()
@@ -328,9 +311,13 @@ func TestChildExitNotBlockedByWedgedClient(t *testing.T) {
 	}
 
 	// Wedge: connect, send nothing, and hold the connection open across the exit.
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		t.Fatal(err)
+	var conn net.Conn
+	if !waitFor(func() bool {
+		var err error
+		conn, err = net.DialTimeout("unix", sock, 20*time.Millisecond)
+		return err == nil
+	}) {
+		t.Fatal("control socket never accepted the wedged client")
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 

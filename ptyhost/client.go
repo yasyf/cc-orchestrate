@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
+	"github.com/yasyf/daemonkit/trust"
 	"github.com/yasyf/daemonkit/wire"
 )
 
@@ -55,10 +57,24 @@ func (c *Client) call(ctx context.Context, op wire.Op, payload []byte, dst any) 
 	if err != nil {
 		return fmt.Errorf("pty-host %s: %w", op, err)
 	}
-	result, err := session.Call(ctx, op, "", payload)
-	if err != nil {
-		c.retire(session, err)
-		return fmt.Errorf("pty-host %s: %w", op, err)
+	var result wire.Result
+	for {
+		result, err = session.Call(ctx, op, "", payload)
+		if err != nil {
+			c.retire(session, err)
+			return fmt.Errorf("pty-host %s: %w", op, err)
+		}
+		rejection := result.Rejection()
+		if !errors.Is(rejection, wire.ErrNotReady) {
+			break
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("pty-host %s: %w", op, ctx.Err())
+		case <-timer.C:
+		}
 	}
 	if result.Response.Err != "" {
 		return fmt.Errorf("pty-host %s: %s", op, result.Response.Err)
@@ -87,6 +103,7 @@ func (c *Client) getSession(ctx context.Context) (*wire.Client, error) {
 	session, err := wire.NewClient(ctx, wire.ClientConfig{
 		Dial:      wire.UnixDialer(c.socket),
 		WireBuild: ptyWireBuild,
+		Role:      trust.UnprotectedRole,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", c.socket, err)

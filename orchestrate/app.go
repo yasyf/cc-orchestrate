@@ -67,13 +67,23 @@ func appPaths() paths.Paths { return paths.Paths{App: appDir} }
 // one subdirectory per repo: ~/.cc-orchestrate-v1/worktrees/<repo-id>/<name>.
 func worktreesBase() string { return filepath.Join(appPaths().StateDir(), "worktrees") }
 
-func newClient(ctx context.Context) (*daemon.Client, error) { return launcher().NewClient(ctx) }
+func newClient(ctx context.Context) (*daemon.Client, error) {
+	l, err := launcher()
+	if err != nil {
+		return nil, err
+	}
+	return l.NewClient(ctx)
+}
 
-func launcher() daemon.Launcher {
+func launcher() (daemon.Launcher, error) {
+	agent, err := appAgent()
+	if err != nil {
+		return daemon.Launcher{}, err
+	}
 	return daemon.Launcher{
 		Paths: appPaths(), WireBuild: daemon.WireBuild, RuntimeBuild: buildVersion(),
-		Args: []string{"daemon"}, StopArgs: []string{daemon.StopControlCommand}, DaemonRole: appDaemonRole(),
-	}
+		Agent: agent, Roles: appRoles(),
+	}, nil
 }
 
 // deps builds the substrate wiring every cc-interact command shares: the state
@@ -84,14 +94,37 @@ func deps() cmd.Deps {
 		Paths:                  appPaths(),
 		Version:                buildVersion(),
 		NewClient:              newClient,
-		EnsureCurrent:          func(ctx context.Context) error { return launcher().EnsureCurrent(ctx, daemon.UpgradeTimeout) },
-		EnsureCurrentIfRunning: func(ctx context.Context) error { return launcher().EnsureCurrentIfRunning(ctx) },
-		Stop:                   func(ctx context.Context) error { return launcher().Stop(ctx, daemon.UpgradeTimeout) },
-		RunStopControl:         func(ctx context.Context) error { return launcher().RunStopControl(ctx) },
+		EnsureCurrent:          ensureCurrent,
+		EnsureCurrentIfRunning: ensureCurrentIfRunning,
+		Stop:                   stop,
 		ClaudePID:              procs.ClaudePID,
 		WindowAlive:            procs.LiveClaude,
 		TerminalEvent:          func(t string) bool { return t == EventExited },
 		Serve:                  serve,
 		ChannelTools:           channelTools,
 	}
+}
+
+func ensureCurrent(ctx context.Context) error {
+	l, err := launcher()
+	if err != nil {
+		return err
+	}
+	return l.EnsureCurrent(ctx, daemon.UpgradeTimeout)
+}
+
+func ensureCurrentIfRunning(ctx context.Context) error {
+	l, err := launcher()
+	if err != nil {
+		return err
+	}
+	return l.EnsureCurrentIfRunning(ctx)
+}
+
+func stop(ctx context.Context) error {
+	l, err := launcher()
+	if err != nil {
+		return err
+	}
+	return l.Stop(ctx, daemon.UpgradeTimeout)
 }
