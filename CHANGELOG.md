@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-07-24
+
+### Fixed
+
+- **The release publishes again.** The pinned tap release workflow predated
+  the publish-guard relaxation and rejected the tap's packaged product
+  helpers; v0.14.0's release never published. No runtime change from 0.14.0.
+
 ## [0.14.0] - 2026-07-24
 
 ### Changed
