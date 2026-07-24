@@ -311,9 +311,13 @@ func TestChildExitNotBlockedByWedgedClient(t *testing.T) {
 	}
 
 	// Wedge: connect, send nothing, and hold the connection open across the exit.
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		t.Fatal(err)
+	var conn net.Conn
+	if !waitFor(func() bool {
+		var err error
+		conn, err = net.DialTimeout("unix", sock, 20*time.Millisecond)
+		return err == nil
+	}) {
+		t.Fatal("control socket never accepted the wedged client")
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
