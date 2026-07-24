@@ -65,25 +65,26 @@ func Run(parent context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	if err := recoverPTYChild(activation, components.reaper); err != nil {
+	waitCtx := context.WithoutCancel(parent)
+	if err := recoverPTYChild(parent, activation, components.reaper); err != nil {
 		_ = activation.Fail(err)
-		return errors.Join(err, components.runtime.Wait(context.Background()))
+		return errors.Join(err, components.runtime.Wait(waitCtx))
 	}
 	settlement, err := activation.ClaimProductSettlement()
 	if err != nil {
 		_ = activation.Fail(err)
-		return errors.Join(err, components.runtime.Wait(context.Background()))
+		return errors.Join(err, components.runtime.Wait(waitCtx))
 	}
 	product, err := startPTYProduct(parent, opts.Argv, components.reaper)
 	if err != nil {
 		_ = activation.Fail(err)
 		<-activation.Context().Done()
-		return errors.Join(err, settlement.Complete(), components.runtime.Wait(context.Background()))
+		return errors.Join(err, settlement.Complete(), components.runtime.Wait(waitCtx))
 	}
 	settled := make(chan error, 1)
 	go func() {
 		<-activation.Context().Done()
-		ctx, cancel := context.WithTimeout(context.Background(), ptyShutdownTimeout)
+		ctx, cancel := context.WithTimeout(waitCtx, ptyShutdownTimeout)
 		defer cancel()
 		if closeErr := product.Close(ctx); closeErr != nil {
 			settled <- closeErr
@@ -97,10 +98,10 @@ func Run(parent context.Context, opts Options) error {
 	}
 	if err != nil {
 		_ = activation.Fail(err)
-		return errors.Join(err, <-settled, components.runtime.Wait(context.Background()))
+		return errors.Join(err, <-settled, components.runtime.Wait(waitCtx))
 	}
 	runtimeDone := make(chan error, 1)
-	go func() { runtimeDone <- components.runtime.Wait(context.Background()) }()
+	go func() { runtimeDone <- components.runtime.Wait(waitCtx) }()
 
 	var childErr, runtimeErr error
 	naturalExit := false
@@ -204,7 +205,7 @@ func closeRuntime(parent context.Context, runtime *daemon.Runtime, done <-chan e
 	return <-done
 }
 
-func recoverPTYChild(activation daemon.Activation, reaper *proc.Reaper) error {
+func recoverPTYChild(ctx context.Context, activation daemon.Activation, reaper *proc.Reaper) error {
 	capability, err := activation.RecoveryCapability(ptyChildRecoveryID)
 	if err != nil {
 		return fmt.Errorf("pty-host recovery capability: %w", err)
@@ -216,7 +217,7 @@ func recoverPTYChild(activation daemon.Activation, reaper *proc.Reaper) error {
 	settled := receipt.Settled()
 	observed := make(map[proc.OwnerGeneration]struct{}, len(settled))
 	if _, err := reaper.RecoverReapReceipts(
-		activation.Context(),
+		ctx,
 		ptyChildRecoveryID,
 		func(ctx context.Context, reap proc.ReapReceipt) error {
 			if err := reaper.VerifyReapReceipt(ctx, reap); err != nil {
@@ -264,13 +265,20 @@ func startPTYProduct(ctx context.Context, argv []string, reaper *proc.Reaper) (*
 
 	inputFD, err := unix.Dup(int(os.Stdin.Fd()))
 	if err != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), ptyShutdownTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ptyShutdownTimeout)
 		defer cancel()
 		return nil, errors.Join(fmt.Errorf("pty-host duplicate stdin: %w", err), child.Close(cleanupCtx), ptmx.Close())
 	}
+	if inputFD > math.MaxInt32 {
+		_ = unix.Close(inputFD)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ptyShutdownTimeout)
+		defer cancel()
+		return nil, errors.Join(errors.New("pty-host duplicated stdin exceeds poll descriptor range"), child.Close(cleanupCtx), ptmx.Close())
+	}
+	inputPollFD := int32(inputFD) //nolint:gosec // the descriptor is range-checked immediately above
 	if err := unix.SetNonblock(inputFD, true); err != nil {
 		_ = unix.Close(inputFD)
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), ptyShutdownTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ptyShutdownTimeout)
 		defer cancel()
 		return nil, errors.Join(fmt.Errorf("pty-host make stdin relay nonblocking: %w", err), child.Close(cleanupCtx), ptmx.Close())
 	}
@@ -290,11 +298,11 @@ func startPTYProduct(ctx context.Context, argv []string, reaper *proc.Reaper) (*
 		defer close(readDone)
 		_, _ = io.Copy(io.MultiWriter(gridWriter{g}, os.Stdout), ptmx)
 	}()
-	inputCtx, cancelInput := context.WithCancel(context.Background())
+	inputCtx, cancelInput := context.WithCancel(context.WithoutCancel(ctx))
 	inputDone := make(chan struct{})
 	go func() {
 		defer close(inputDone)
-		copyPTYInput(inputCtx, ptmx, input, inputFD)
+		copyPTYInput(inputCtx, ptmx, input, inputPollFD)
 	}()
 	resources := &ptyResources{
 		winch: winch, ptmx: ptmx, readDone: readDone, grid: g,
@@ -303,12 +311,12 @@ func startPTYProduct(ctx context.Context, argv []string, reaper *proc.Reaper) (*
 	product := &ptyProduct{child: child, resources: resources}
 	if _, err := io.WriteString(release, "start\n"); err != nil {
 		_ = release.Close()
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), ptyShutdownTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ptyShutdownTimeout)
 		defer cancel()
 		return nil, errors.Join(fmt.Errorf("pty-host release child: %w", err), product.Close(cleanupCtx))
 	}
 	if err := release.Close(); err != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), ptyShutdownTimeout)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ptyShutdownTimeout)
 		defer cancel()
 		return nil, errors.Join(fmt.Errorf("pty-host close child release: %w", err), product.Close(cleanupCtx))
 	}
@@ -459,9 +467,9 @@ func (r *ptyResources) Close() error {
 	return r.err
 }
 
-func copyPTYInput(ctx context.Context, dst, src *os.File, inputFD int) {
+func copyPTYInput(ctx context.Context, dst, src *os.File, inputFD int32) {
 	buffer := make([]byte, 32*1024)
-	poll := []unix.PollFd{{Fd: int32(inputFD), Events: unix.POLLIN}}
+	poll := []unix.PollFd{{Fd: inputFD, Events: unix.POLLIN}}
 	for {
 		if ctx.Err() != nil {
 			return
