@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-24
+
+### Changed
+- Adopt daemonkit v0.18.0, with cc-interact v0.29.0, reposync v0.27.0, and
+  synckit v0.35.0. The pty-host process store now archives a drifted store aside
+  instead of failing closed, so a session's store surviving the daemonkit upgrade
+  cannot wedge its respawns.
+
+### Fixed
+- Dispatch `trust.RunVerifierChild` at the top of `main`. The signed lifecycle
+  and stop-control roles added in 0.12.0 need the daemon executable to answer
+  daemonkit's verifier-child probe; without the dispatch the runtime rejected its
+  own launcher's lifecycle and stop-control sessions as untrusted, and daemonkit
+  v0.18.0's serve-time self-probe refuses to start the daemon outright
+  (`daemon.ErrTrustVerifierProbe`) rather than failing silently.
+
 ## [0.13.0] - 2026-07-24
 
 ### Changed

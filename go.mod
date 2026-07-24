@@ -8,10 +8,10 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/yasyf/cc-interact v0.28.0
+	github.com/yasyf/cc-interact v0.29.0
 	github.com/yasyf/cc-notes v0.45.0
-	github.com/yasyf/daemonkit v0.17.4
-	github.com/yasyf/reposync v0.24.0
+	github.com/yasyf/daemonkit v0.18.0
+	github.com/yasyf/reposync v0.27.0
 	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6
 	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.54.0
@@ -59,7 +59,7 @@ require (
 	github.com/vishvananda/netlink v1.2.1-beta.2 // indirect
 	github.com/vishvananda/netns v0.0.0-20200728191858-db3c7e526aae // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/yasyf/synckit v0.31.0 // indirect
+	github.com/yasyf/synckit v0.35.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.etcd.io/bbolt v1.5.0 // indirect
 	golang.org/x/crypto v0.53.0 // indirect

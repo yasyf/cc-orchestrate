@@ -57,6 +57,13 @@ func Run(parent context.Context, opts Options) error {
 		return errors.New("pty-host process store is required")
 	}
 
+	// Arm signal handling before the runtime binds its socket: the daemon runtime
+	// only installs its own handler after Begin's listener and trust self-probe,
+	// so a signal arriving in that startup window would otherwise kill the wrapper
+	// by the default disposition instead of draining it.
+	parent, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer cancel()
+
 	components, err := newRuntime(opts)
 	if err != nil {
 		return err
@@ -135,7 +142,7 @@ func newRuntime(opts Options) (runtimeComponents, error) {
 	if err != nil {
 		return runtimeComponents{}, fmt.Errorf("pty-host process generation: %w", err)
 	}
-	store := &proc.FileStore{Path: opts.ProcessStore}
+	store := &proc.FileStore{Path: opts.ProcessStore, UnsupportedSchema: proc.ArchiveUnsupportedSchema}
 	reaper := &proc.Reaper{
 		Store: store, Generation: generation,
 		Grace: 500 * time.Millisecond, Settlement: 2 * time.Second,
