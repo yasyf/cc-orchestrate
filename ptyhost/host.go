@@ -294,7 +294,7 @@ func startPTYProduct(ctx context.Context, argv []string, reaper *proc.Reaper) (*
 	inputDone := make(chan struct{})
 	go func() {
 		defer close(inputDone)
-		copyPTYInput(inputCtx, ptmx, input)
+		copyPTYInput(inputCtx, ptmx, input, inputFD)
 	}()
 	resources := &ptyResources{
 		winch: winch, ptmx: ptmx, readDone: readDone, grid: g,
@@ -459,9 +459,9 @@ func (r *ptyResources) Close() error {
 	return r.err
 }
 
-func copyPTYInput(ctx context.Context, dst, src *os.File) {
+func copyPTYInput(ctx context.Context, dst, src *os.File, inputFD int) {
 	buffer := make([]byte, 32*1024)
-	poll := []unix.PollFd{{Fd: int32(src.Fd()), Events: unix.POLLIN}}
+	poll := []unix.PollFd{{Fd: int32(inputFD), Events: unix.POLLIN}}
 	for {
 		if ctx.Err() != nil {
 			return
