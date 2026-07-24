@@ -21,3 +21,59 @@ jobs:
         echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
         echo "LIBGHOSTTY_ROOT=$GITHUB_WORKSPACE/.libghostty" >> "$GITHUB_ENV"
         echo "GOTOOLCHAIN=auto" >> "$GITHUB_ENV"
+
+  # Refresh the committed binrun descriptor (plugins/cc-orchestrate/bin/cco.binrun)
+  # to pin the just-released version, and move the plugin manifest to the same
+  # version in the same commit. It gates on `release` (rather than a
+  # `release: published` trigger) because a release goreleaser creates with the
+  # default GITHUB_TOKEN does not fire `release` events for other workflows. Both
+  # files are committed back to main because the plugin marketplace serves main
+  # HEAD, and the descriptor is re-uploaded to the release for parity. Bumping
+  # plugin.json here (not in a separate hand commit) keeps it in lockstep with
+  # the descriptor, so the CI agreement gate stays green after every release.
+  descriptor:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --dir dist --pattern '*.tar.gz' --pattern 'checksums.txt'
+      - name: Render descriptor and sync manifest version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          plugins/cc-orchestrate/scripts/render-descriptor.sh dist "$version" \
+            > plugins/cc-orchestrate/bin/cco.binrun
+          chmod +x plugins/cc-orchestrate/bin/cco.binrun
+          jq --arg v "$version" '.version = $v' plugins/cc-orchestrate/.claude-plugin/plugin.json > plugins/cc-orchestrate/.claude-plugin/plugin.json.tmp
+          mv plugins/cc-orchestrate/.claude-plugin/plugin.json.tmp plugins/cc-orchestrate/.claude-plugin/plugin.json
+      - name: Validate descriptor
+        run: go run github.com/yasyf/binrun/cmd/binrun@v0.1.1 -- parse plugins/cc-orchestrate/bin/cco.binrun
+      - name: Commit refreshed descriptor and manifest to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- plugins/cc-orchestrate/bin/cco.binrun plugins/cc-orchestrate/.claude-plugin/plugin.json; then
+            echo "descriptor and manifest already current for ${GITHUB_REF_NAME}"
+          else
+            git add plugins/cc-orchestrate/bin/cco.binrun plugins/cc-orchestrate/.claude-plugin/plugin.json
+            git commit -m "chore: sync cco.binrun + manifest to ${GITHUB_REF_NAME}"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+      - name: Upload descriptor to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" plugins/cc-orchestrate/bin/cco.binrun --repo "${GITHUB_REPOSITORY}" --clobber
