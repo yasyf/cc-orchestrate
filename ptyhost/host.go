@@ -173,9 +173,9 @@ func newRuntime(opts Options) (runtimeComponents, error) {
 		if len(request.Payload) != 0 {
 			return nil, errors.New("pty-host capture payload must be empty")
 		}
-		product, ok := products.LoadPinned(request.Publication)
-		if !ok {
-			return nil, daemon.ErrPublicationStale
+		product, err := products.Value(request.Publication)
+		if err != nil {
+			return nil, err
 		}
 		return captureResponse{Text: product.resources.grid.Text()}, nil
 	}})
@@ -184,9 +184,9 @@ func newRuntime(opts Options) (runtimeComponents, error) {
 		if err := decodeMessage(request.Payload, &message); err != nil {
 			return nil, err
 		}
-		product, ok := products.LoadPinned(request.Publication)
-		if !ok {
-			return nil, daemon.ErrPublicationStale
+		product, err := products.Value(request.Publication)
+		if err != nil {
+			return nil, err
 		}
 		if _, err := product.resources.ptmx.Write(message.Data); err != nil {
 			return nil, fmt.Errorf("pty-host write keys: %w", err)

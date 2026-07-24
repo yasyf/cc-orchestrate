@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-24
+
+### Changed
+- Resolve each pty-host request from its exact daemonkit admission publication,
+  and pin daemonkit v0.17.2 plus cc-interact v0.28.0.
+
 ### Added
 - Immediate child-exit liveness: a pty-hosted child's exit is now reported to the
   daemon by the wrapper as its last act, after its own socket teardown (the
@@ -139,6 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cc-orchestrate backends` command reporting which backends (cmux, superset)
   are installed.
 
-[Unreleased]: https://github.com/yasyf/cc-orchestrate/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/yasyf/cc-orchestrate/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.11.0...v0.12.0
 [0.3.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/yasyf/cc-orchestrate/releases/tag/v0.1.0

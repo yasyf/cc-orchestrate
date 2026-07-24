@@ -8,9 +8,9 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/yasyf/cc-interact v0.23.0
+	github.com/yasyf/cc-interact v0.28.0
 	github.com/yasyf/cc-notes v0.45.0
-	github.com/yasyf/daemonkit v0.16.0
+	github.com/yasyf/daemonkit v0.17.2
 	github.com/yasyf/reposync v0.24.0
 	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6
 	golang.org/x/sys v0.47.0
