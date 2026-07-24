@@ -291,3 +291,29 @@ func TestPtySocketPathDeterministic(t *testing.T) {
 		_ = ptySocketPath("sid-9", "")
 	})
 }
+
+func TestPtyProcessStorePathIsStablePerSession(t *testing.T) {
+	shortHome(t)
+	path := ptyProcessStorePath("sid-9")
+	if path != ptyProcessStorePath("sid-9") {
+		t.Fatal("ptyProcessStorePath is not deterministic")
+	}
+	if path == ptyProcessStorePath("sid-10") {
+		t.Fatal("ptyProcessStorePath collides across sessions")
+	}
+	base := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "process-"), ".db")
+	if len(base) != 16 {
+		t.Fatalf("process store suffix = %q (%d chars), want 16 hex chars", base, len(base))
+	}
+	if _, err := hex.DecodeString(base); err != nil {
+		t.Fatalf("process store suffix %q is not hex: %v", base, err)
+	}
+	t.Run("empty session panics", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("ptyProcessStorePath accepted an empty session id")
+			}
+		}()
+		_ = ptyProcessStorePath("")
+	})
+}

@@ -14,8 +14,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yasyf/cc-interact/daemon"
-	"github.com/yasyf/daemonkit/proc"
-	"github.com/yasyf/daemonkit/wire"
 
 	"github.com/yasyf/cc-orchestrate/backend"
 	"github.com/yasyf/cc-orchestrate/ptyhost"
@@ -46,6 +44,14 @@ func ptySocketPath(sessionID, spawnNonce string) string {
 	sum := sha256.Sum256([]byte(spawnNonce))
 	name := sessionID + "-" + hex.EncodeToString(sum[:8])
 	return filepath.Join(appPaths().StateDir(), "pty", name+".sock")
+}
+
+func ptyProcessStorePath(sessionID string) string {
+	if sessionID == "" {
+		panic("pty process store requires session id")
+	}
+	sum := sha256.Sum256([]byte(sessionID))
+	return filepath.Join(appPaths().StateDir(), "pty", "process-"+hex.EncodeToString(sum[:8])+".db")
 }
 
 // wrapForCapture composes the launcher prefix and child argv, wrapping the result
@@ -96,24 +102,21 @@ func ptyHostCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.MinimumNArgs(1),
 		PreRunE: func(*cobra.Command, []string) error {
+			if sessionID == "" {
+				return errors.New("pty-host requires --session-id")
+			}
 			if spawnNonce == "" {
 				return errors.New("pty-host requires --spawn-nonce")
 			}
 			return nil
 		},
 		RunE: func(c *cobra.Command, args []string) error {
-			role := appDaemonRole()
 			return ptyhost.Run(c.Context(), ptyhost.Options{
 				Socket:       ptySocketPath(sessionID, spawnNonce),
+				ProcessStore: ptyProcessStorePath(sessionID),
 				Argv:         args,
 				RuntimeBuild: buildVersion(),
-				DaemonRole:   role,
-				StopVerifier: wire.StopVerifier{
-					Classifier: role,
-					Role:       role.RoleID,
-					Store:      &proc.FileStore{Path: filepath.Join(appPaths().StateDir(), "pty", "processes.db")},
-				},
-				OnChildExit: func() { reportChildExit(sessionID, spawnNonce) },
+				OnChildExit:  func() { reportChildExit(sessionID, spawnNonce) },
 			})
 		},
 	}
