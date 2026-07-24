@@ -167,7 +167,7 @@ func TestReportChildExitToleratesUnreachableDaemon(t *testing.T) {
 func startChildExitCapture(t *testing.T) <-chan daemon.Envelope {
 	t.Helper()
 	got := make(chan daemon.Envelope, 1)
-	s, err := daemon.New(testDaemonConfig())
+	s, err := daemon.New(testDaemonConfig(t))
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}

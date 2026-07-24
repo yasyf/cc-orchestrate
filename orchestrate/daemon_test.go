@@ -9,10 +9,15 @@ import (
 	"github.com/yasyf/cc-interact/daemon"
 )
 
-func testDaemonConfig() daemon.Config {
+func testDaemonConfig(t *testing.T) daemon.Config {
+	t.Helper()
+	trustPolicy, err := appTrustPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
 	return daemon.Config{
 		AppName: AppName, Paths: appPaths(), WireBuild: daemon.WireBuild, RuntimeBuild: buildVersion(),
-		DaemonRole: appDaemonRole(), ActiveStatuses: []string{string(StatusActive)}, StoreSchema: databaseStoreSchema(),
+		TrustPolicy: trustPolicy, Roles: appRoles(), ActiveStatuses: []string{string(StatusActive)}, StoreSchema: databaseStoreSchema(),
 	}
 }
 

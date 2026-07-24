@@ -114,7 +114,7 @@ func TestAgentWatchObservesReport(t *testing.T) {
 	shortHome(t)
 	ctx := context.Background()
 
-	s, err := daemon.New(testDaemonConfig())
+	s, err := daemon.New(testDaemonConfig(t))
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestBackendsSelectValidatesBeforeDaemon(t *testing.T) {
 // the caller, while cancelling the parent context remains a clean watch exit.
 func TestWatchFleetStatusPropagatesStreamErrors(t *testing.T) {
 	shortHome(t)
-	s, err := daemon.New(testDaemonConfig())
+	s, err := daemon.New(testDaemonConfig(t))
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}

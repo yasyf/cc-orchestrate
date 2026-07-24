@@ -46,7 +46,6 @@ func Root() *cobra.Command {
 	r.PersistentFlags().Bool(jsonFlag, false, "emit machine-readable JSON (cco's domain commands)")
 	r.AddCommand(
 		cmd.DaemonCmd(d),
-		cmd.DaemonStopControlCmd(d),
 		withSessionDefault(cmd.WatchCmd(d)),
 		withSessionDefault(cmd.StatusCmd(d)),
 		cmd.StopCmd(d),

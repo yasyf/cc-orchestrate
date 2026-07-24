@@ -21,7 +21,7 @@ import (
 func newXRPCServer(t *testing.T) (*daemon.Server, *httptest.Server) {
 	t.Helper()
 	shortHome(t)
-	s, err := daemon.New(testDaemonConfig())
+	s, err := daemon.New(testDaemonConfig(t))
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}
