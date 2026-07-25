@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   release:
-    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@c2be85efce5b3fd94f8b9b4ed53cf90bb4514919
+    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@7cc8a6c981cbec10fcb7f19bd75b36e9ee65ea7e
     secrets: inherit
     with:
       # cgo (libghostty-vt) → native clang for darwin + zig for static linux, so the
