@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Pin cc-interact v0.30.0, cc-notes v0.47.2, reposync v0.27.2, and synckit
-  v0.35.1 so the shipped binary uses the fleet's final runtime dependency set.
+- Pin cc-interact v0.30.1, daemonkit v0.19.1, reposync v0.27.3, and synckit
+  v0.35.2 to the fleet's final runtime substrate.
 
 ## [0.14.1] - 2026-07-24
 
