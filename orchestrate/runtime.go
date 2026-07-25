@@ -35,7 +35,7 @@ func appTrustPolicy() (trust.TrustPolicy, error) {
 }
 
 func appAgent() (service.Agent, error) {
-	executable, err := service.CanonicalExecutable()
+	executable, err := service.StableProgram("cco", buildVersion())
 	if err != nil {
 		return service.Agent{}, err
 	}
