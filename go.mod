@@ -8,10 +8,10 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/yasyf/cc-interact v0.29.0
-	github.com/yasyf/cc-notes v0.45.0
+	github.com/yasyf/cc-interact v0.30.0
+	github.com/yasyf/cc-notes v0.47.2
 	github.com/yasyf/daemonkit v0.18.0
-	github.com/yasyf/reposync v0.27.0
+	github.com/yasyf/reposync v0.27.2
 	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6
 	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.54.0
@@ -43,7 +43,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/miekg/dns v1.1.61 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
