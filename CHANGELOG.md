@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-07-25
+
+### Changed
+
+- Pin daemonkit v0.20.6. Daemon-context subprocesses now resolve
+  user-installed CLIs (`claude` among them) from the daemon's inherited
+  `PATH`, a service booted out reads as drift instead of hard-failing
+  controller recovery, and durable untrack moved off the child settlement
+  path so store latency can no longer terminalize a worker claim.
+
 ## [0.15.1] - 2026-07-24
 
 ### Changed
