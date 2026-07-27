@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-07-27
+
+### Changed
+
+- Pin daemonkit v0.20.9. The real home directory resolves through the passwd
+  database, so helper installs survive Homebrew postinstall's sandboxed temp
+  `HOME`; a launchctl exit 5 is no longer retried as transient; and
+  recovery-mode reconcile clears installs that wedged themselves.
+
 ## [0.15.2] - 2026-07-25
 
 ### Changed
@@ -200,7 +209,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cc-orchestrate backends` command reporting which backends (cmux, superset)
   are installed.
 
-[Unreleased]: https://github.com/yasyf/cc-orchestrate/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/yasyf/cc-orchestrate/compare/v0.15.3...HEAD
+[0.15.3]: https://github.com/yasyf/cc-orchestrate/compare/v0.15.2...v0.15.3
 [0.12.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.11.0...v0.12.0
 [0.3.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/yasyf/cc-orchestrate/releases/tag/v0.1.0
