@@ -13,7 +13,7 @@ import (
 // feeds three newline-delimited JSON-RPC messages; the server answers each and
 // exits at EOF, so every reply is in the buffer once runMCP returns.
 func TestMCPServer(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // backends_list reads state off disk; keep it hermetic
+	sandboxHome(t) // backends_list reads state off disk; keep it hermetic
 
 	requests := strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,

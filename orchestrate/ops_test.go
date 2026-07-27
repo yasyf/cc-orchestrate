@@ -1021,7 +1021,7 @@ func gitWorktreeCount(ctx context.Context, t *testing.T, repoRoot string) int {
 func TestHandleWorkstreamCreate(t *testing.T) {
 	ctx := context.Background()
 	t.Run("non-ManagesWorktree backend gets a git worktree we create", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir()) // worktreesBase resolves under the temp home
+		sandboxHome(t) // worktreesBase resolves under the temp home
 		repo := gitRepo(ctx, t, "main")
 		db := newTestDB(ctx, t)
 		if err := insertRepo(ctx, db, repoRow{
@@ -1103,7 +1103,7 @@ func TestHandleWorkstreamCreate(t *testing.T) {
 	})
 
 	t.Run("ManagesWorktree backend forks its own; no git worktree add", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
+		sandboxHome(t)
 		repo := gitRepo(ctx, t, "main")
 		db := newTestDB(ctx, t)
 		if err := insertRepo(ctx, db, repoRow{

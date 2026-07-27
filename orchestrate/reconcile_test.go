@@ -116,7 +116,7 @@ func TestReconcile(t *testing.T) {
 	old := pollInterval
 	pollInterval = time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

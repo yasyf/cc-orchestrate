@@ -9,13 +9,14 @@ import (
 )
 
 func TestAppPathsUseEpochOneNamespace(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 	if got, want := appPaths().StateDir(), filepath.Join(os.Getenv("HOME"), ".cc-orchestrate-v1"); got != want {
 		t.Fatalf("StateDir() = %q, want %q", got, want)
 	}
 }
 
 func TestLauncherUsesSharedWireBuildAndCurrentRuntimeBuild(t *testing.T) {
+	sandboxHome(t) // launcher stages the test binary as the stable program under the home
 	l, err := launcher()
 	if err != nil {
 		t.Fatal(err)

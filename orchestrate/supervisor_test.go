@@ -161,7 +161,7 @@ func TestSupervisorTick(t *testing.T) {
 	old := pollInterval
 	pollInterval = time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	t.Run("vanish under budget re-spawns and increments", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -423,8 +423,7 @@ func TestTailerResetsRestartBudgetOnLiveHealthOnly(t *testing.T) {
 		{"never-restarted agent never resets", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
+			home := sandboxHome(t)
 			t.Setenv("CLAUDE_CONFIG_DIR", "")
 			dir := filepath.Join(home, ".claude", "projects", "p")
 			if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -499,8 +498,7 @@ func TestSupervisorFirstRestartResetsBudgetViaTailer(t *testing.T) {
 	pollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
 
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := sandboxHome(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	dir := filepath.Join(home, ".claude", "projects", "p")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -580,8 +578,7 @@ func TestSupervisorCrashLoopAbandonsAtBudget(t *testing.T) {
 	pollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
 
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := sandboxHome(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	dir := filepath.Join(home, ".claude", "projects", "p")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -675,8 +672,7 @@ func TestSupervisorStaleness(t *testing.T) {
 	}
 	newStaleAgent := func(t *testing.T, aliveResp, probeErr bool, createdAt string) fixture {
 		t.Helper()
-		home := t.TempDir()
-		t.Setenv("HOME", home)
+		home := sandboxHome(t)
 		t.Setenv("CLAUDE_CONFIG_DIR", "")
 		writeStaleTranscript(t, home)
 
@@ -776,7 +772,7 @@ func TestHandleChildExited(t *testing.T) {
 	old := pollInterval
 	pollInterval = time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	newAgent := func(t *testing.T, status LifecycleStatus) (context.Context, *sql.DB, *eventLog, *sync.Mutex, *int, *[]string, *[]string) {
 		t.Helper()
@@ -976,7 +972,7 @@ func TestQueuedOldNonceReportAfterKillAndManualRespawn(t *testing.T) {
 	old := pollInterval
 	pollInterval = time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -1075,7 +1071,7 @@ func TestManualRespawnRotatesNonceUnderLock(t *testing.T) {
 	old := pollInterval
 	pollInterval = time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -1147,7 +1143,7 @@ func TestReconcileVanishedSkipsReplacedTerminal(t *testing.T) {
 	old := pollInterval
 	pollInterval = time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

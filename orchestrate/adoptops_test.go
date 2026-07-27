@@ -94,11 +94,7 @@ func newAdoptOpEnv(t *testing.T) (context.Context, *sql.DB) {
 	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
 	t.Cleanup(func() { lookupPath = oldLookup })
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	home, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatalf("resolve home: %v", err)
-	}
-	t.Setenv("HOME", home)
+	sandboxHome(t)
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 

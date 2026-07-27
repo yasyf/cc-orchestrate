@@ -278,7 +278,7 @@ func TestChildLauncherComposition(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", bin)
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	const (
 		self  = "/opt/cc-orchestrate"
@@ -375,7 +375,7 @@ func TestTailerManagerStartStop(t *testing.T) {
 	old := pollInterval
 	pollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir()) // no transcript will ever resolve, so tailers just poll
+	sandboxHome(t) // no transcript will ever resolve, so tailers just poll
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -463,7 +463,7 @@ type nonCapturingSpawnBackend struct {
 func (nonCapturingSpawnBackend) Caps() backend.Caps { return backend.Caps{} }
 
 func TestHandleSpawnUnresolvableLauncherLeavesNoSubjectOrAgent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 	oldLookup := lookupPath
 	lookupPath = func(name string) (string, error) {
 		if name == "ccp" {
@@ -555,7 +555,7 @@ func TestHandleSpawn(t *testing.T) {
 	oldLookup := lookupPath
 	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
 	t.Cleanup(func() { lookupPath = oldLookup })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -722,7 +722,7 @@ func TestHandleSpawnKillsTerminalOnInsertFailure(t *testing.T) {
 	oldLookup := lookupPath
 	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
 	t.Cleanup(func() { lookupPath = oldLookup })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -783,7 +783,7 @@ func TestHandleSpawnDefaultsEmptyName(t *testing.T) {
 	oldLookup := lookupPath
 	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
 	t.Cleanup(func() { lookupPath = oldLookup })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -889,7 +889,7 @@ func TestHandleSpawnPooling(t *testing.T) {
 	old := pollInterval
 	pollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	for _, tc := range pooledLookupCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -943,7 +943,7 @@ func TestRespawnAgentPooling(t *testing.T) {
 	old := pollInterval
 	pollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	for _, tc := range pooledLookupCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -991,7 +991,7 @@ func respawnPersistFixture(t *testing.T) (context.Context, context.CancelFunc, *
 	old := pollInterval
 	pollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -1231,7 +1231,7 @@ func TestHandleAgentRespawn(t *testing.T) {
 	old := pollInterval
 	pollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -1368,7 +1368,7 @@ func TestHandleAgentRespawnDeadSweepReportsFailures(t *testing.T) {
 	oldLookup := lookupPath
 	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
 	t.Cleanup(func() { lookupPath = oldLookup })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -1433,7 +1433,7 @@ func TestSpawnKillOrphanRace(t *testing.T) {
 
 	newEnv := func(t *testing.T) (context.Context, *sql.DB, *eventLog, *[]backend.AgentHandle) {
 		t.Helper()
-		t.Setenv("HOME", t.TempDir())
+		sandboxHome(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 		tailers = newTestTailerManager(ctx)
@@ -1546,7 +1546,7 @@ func TestSpawnFastChildExitSerializesBehindLock(t *testing.T) {
 	oldLookup := lookupPath
 	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
 	t.Cleanup(func() { lookupPath = oldLookup })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

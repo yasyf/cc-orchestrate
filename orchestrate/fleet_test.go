@@ -223,7 +223,7 @@ func TestFleetEventSchemas(t *testing.T) {
 }
 
 func TestFleetStatus(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 	ctx := context.Background()
 	db := newTestDB(ctx, t)
 	installTestFleet(t)
@@ -295,7 +295,7 @@ func TestFleetSpawnFrame(t *testing.T) {
 	oldLookup := lookupPath
 	lookupPath = func(string) (string, error) { return "", exec.ErrNotFound }
 	t.Cleanup(func() { lookupPath = oldLookup })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -478,7 +478,7 @@ func TestFleetRespawnFrame(t *testing.T) {
 	old := pollInterval
 	pollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -546,7 +546,7 @@ func TestFleetAbandonFrameOrder(t *testing.T) {
 // yet carries a seq beyond the reported cursor, so resuming re-delivers it rather than
 // skipping it. The window is driven deterministically via the fleetStatusMidRead seam.
 func TestFleetStatusCursorLagsSnapshot(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 	ctx := context.Background()
 	db := newTestDB(ctx, t)
 	installTestFleet(t)

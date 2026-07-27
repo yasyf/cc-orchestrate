@@ -23,7 +23,7 @@ import (
 // It exercises the real ccnotes.Enabled against a real git repo rather than a stub,
 // so the false branch is what production hits for a non-cc-notes repo.
 func TestCCNotesDisabledLeavesBindingsEmpty(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // worktreesBase resolves under the temp home
+	sandboxHome(t) // worktreesBase resolves under the temp home
 	ctx := context.Background()
 	repo := gitRepo(ctx, t, "main")
 
@@ -96,7 +96,7 @@ func TestCCNotesDisabledSpawnLeavesTaskEmpty(t *testing.T) {
 	old := pollInterval
 	pollInterval = 5 * time.Millisecond
 	t.Cleanup(func() { pollInterval = old })
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

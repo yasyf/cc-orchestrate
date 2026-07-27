@@ -7,6 +7,7 @@ import (
 )
 
 func TestRuntimeIdentityIsExact(t *testing.T) {
+	sandboxHome(t) // appAgent stages the test binary as the stable program; Plist writes under the home
 	roles := appRoles()
 	if roles.Business != trust.UnprotectedRole || roles.Lifecycle != lifecycleRole || roles.StopControl != stopControlRole {
 		t.Fatalf("roles = %+v", roles)

@@ -45,8 +45,7 @@ func expectNoStatus(t *testing.T, ch <-chan Status) {
 func TestRunTailerStreamsStatuses(t *testing.T) {
 	interval := 5 * time.Millisecond
 
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := sandboxHome(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	dir := filepath.Join(home, ".claude", "projects", "test-proj")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -102,8 +101,7 @@ func TestRunTailerStreamsStatuses(t *testing.T) {
 }
 
 func TestFindTranscriptPicksNewest(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := sandboxHome(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	session := "dup-sess"
 	older := filepath.Join(home, ".claude", "projects", "alpha")
@@ -131,7 +129,7 @@ func TestFindTranscriptPicksNewest(t *testing.T) {
 }
 
 func TestFindTranscriptMissing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	sandboxHome(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	if got, ok, err := findTranscript("nope"); ok || err != nil {
 		t.Fatalf("findTranscript() = %q, %v, %v; want \"\", false, nil", got, ok, err)
@@ -143,8 +141,7 @@ func TestFindTranscriptMissing(t *testing.T) {
 // relocated child's transcript there, so a tailer reading only ~/.claude would
 // never find it.
 func TestFindTranscriptHonorsConfigDir(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := sandboxHome(t)
 	cfg := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
 
@@ -175,6 +172,7 @@ func TestFindTranscriptHonorsConfigDir(t *testing.T) {
 func TestFindTranscriptHomeError(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("HOME", "")
+	t.Setenv("DAEMONKIT_HOME", "")
 	if _, ok, err := findTranscript("any"); err == nil || ok {
 		t.Fatalf("findTranscript() = ok %v, err %v; want false and a wrapped home error", ok, err)
 	}

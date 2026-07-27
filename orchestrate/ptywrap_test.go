@@ -26,6 +26,7 @@ func shortHome(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("HOME", home)
+	t.Setenv("DAEMONKIT_HOME", home)
 	return home
 }
 
@@ -84,7 +85,7 @@ func TestWrapForCapture(t *testing.T) {
 			t.Fatalf("write fake claude: %v", err)
 		}
 		t.Setenv("PATH", bin)
-		t.Setenv("HOME", t.TempDir())
+		sandboxHome(t)
 
 		got, err := wrapForCapture(self, "sid-1", "nonce-1", nil, claudeCmd, backend.Capabilities())
 		if err != nil {
@@ -108,7 +109,7 @@ func TestWrapForCapture(t *testing.T) {
 			}
 		}
 		t.Setenv("PATH", bin)
-		t.Setenv("HOME", t.TempDir())
+		sandboxHome(t)
 
 		got, err := wrapForCapture(self, "sid-1", "nonce-1", []string{"cc-runtime", "wrap", "--"}, claudeCmd, backend.Capabilities())
 		if err != nil {
@@ -151,7 +152,7 @@ func TestWrapForCapture(t *testing.T) {
 // listening on the derived socket, reportChildExit swallows the dial error and returns
 // promptly, so the wrapper exits cleanly and the fallbacks cover the window.
 func TestReportChildExitToleratesUnreachableDaemon(t *testing.T) {
-	t.Setenv("HOME", t.TempDir()) // a socket path under a home with no daemon listening
+	sandboxHome(t) // a socket path under a home with no daemon listening
 	done := make(chan struct{})
 	go func() {
 		reportChildExit("sess-unreachable", "nonce-1")
@@ -185,13 +186,8 @@ func startChildExitCapture(t *testing.T) <-chan daemon.Envelope {
 // returns once the reply lands.
 func TestReportChildExitReachesDaemon(t *testing.T) {
 	// t.TempDir embeds the (long) test name, which can push HOME/.cc-orchestrate-v1/
-	// daemon.sock past the OS sun_path limit; a bare MkdirTemp stays short.
-	home, err := os.MkdirTemp("", "cco")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(home) })
-	t.Setenv("HOME", home)
+	// daemon.sock past the OS sun_path limit; shortHome's /tmp anchor stays short.
+	shortHome(t)
 
 	got := startChildExitCapture(t)
 
