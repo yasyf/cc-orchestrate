@@ -2,6 +2,8 @@ package ptyhost
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -9,285 +11,243 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"slices"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/yasyf/daemonkit/daemon"
-	"github.com/yasyf/daemonkit/proc"
-	"github.com/yasyf/daemonkit/trust"
-	"github.com/yasyf/daemonkit/wire"
-	"github.com/yasyf/daemonkit/worker"
+	"github.com/yasyf/daemonkit"
 	"golang.org/x/sys/unix"
 )
 
 const (
-	ptyShutdownTimeout                 = 5 * time.Second
-	ptyChildRecoveryID proc.RecoveryID = "cc-orchestrate.pty-child.v1"
-	ptyPauseScript                     = `trap ':' TERM
-printf r >&3
-exec 3>&-
-if ! IFS= read -r marker <&4 || [ "$marker" != start ]; then exit 125; fi
-exec 4<&-
-trap - TERM
-exec "$@"`
+	ptyShutdown  = daemonkit.Grace(5 * time.Second)
+	ptyHandshake = daemonkit.Grace(500 * time.Millisecond)
+
+	// ptyStartup bounds the parked child's readiness signal and its adoption,
+	// so a wrapper whose child never reaches the gate fails instead of hanging
+	// the spawn.
+	ptyStartup = 5 * time.Second
+
+	// ptyLabelPrefix names this binary's per-incarnation pty daemons. Every
+	// path one owns — socket, record file, state dir — derives from the label,
+	// so the prefix is what makes an abandoned incarnation's residue greppable.
+	ptyLabelPrefix = "com.yasyf.cco-pty."
 )
+
+// ptyDaemon is the one declaration the host and the prober client both read.
+// The label carries 64 bits of the spawn nonce's SHA-256 — wide enough that two
+// incarnations of one session can never collide — which is what makes a
+// kill-driven respawn race-free: the replacement derives its own label, so
+// settling the old incarnation's listener cannot disturb the replacement's
+// socket. Program is unset, because the spawn wrapper's argv starts the host
+// and nothing ever Ensures it.
+func ptyDaemon(spawnNonce string) daemonkit.Daemon {
+	if spawnNonce == "" {
+		panic("pty daemon requires spawn nonce")
+	}
+	sum := sha256.Sum256([]byte(spawnNonce))
+	return daemonkit.Daemon{
+		Label:     daemonkit.Label(ptyLabelPrefix + hex.EncodeToString(sum[:8])),
+		Schemas:   []daemonkit.Schema{ptyWireBuild},
+		Shutdown:  ptyShutdown,
+		Handshake: ptyHandshake,
+		Trust:     daemonkit.Trust{Serving: daemonkit.ServingSameUser()},
+	}
+}
 
 // Options configures a Run.
 type Options struct {
-	Socket       string
-	ProcessStore string
-	Argv         []string
-	RuntimeBuild string
-	OnChildExit  func()
+	SpawnNonce  string
+	Argv        []string
+	OnChildExit func()
 }
 
 // Run hosts opts.Argv under a pseudo-terminal and serves its exact v1 control
-// protocol through a daemonkit-owned persistent session runtime.
+// protocol for this incarnation's lifetime.
 func Run(parent context.Context, opts Options) error {
 	if len(opts.Argv) == 0 {
 		return errors.New("pty-host child argv is required")
 	}
-	if opts.RuntimeBuild == "" {
-		return errors.New("pty-host runtime build is required")
-	}
-	if opts.ProcessStore == "" {
-		return errors.New("pty-host process store is required")
-	}
+	d := ptyDaemon(opts.SpawnNonce)
+	defer func() { _ = os.RemoveAll(filepath.Dir(d.RecordPath())) }()
 
-	// Arm signal handling before the runtime binds its socket: the daemon runtime
-	// only installs its own handler after Begin's listener and trust self-probe,
-	// so a signal arriving in that startup window would otherwise kill the wrapper
-	// by the default disposition instead of draining it.
-	parent, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer cancel()
-
-	components, err := newRuntime(opts)
-	if err != nil {
-		return err
-	}
-	activation, err := components.runtime.Begin(parent)
-	if err != nil {
-		return err
-	}
-	waitCtx := context.WithoutCancel(parent)
-	if err := recoverPTYChild(parent, activation, components.reaper); err != nil {
-		_ = activation.Fail(err)
-		return errors.Join(err, components.runtime.Wait(waitCtx))
-	}
-	settlement, err := activation.ClaimProductSettlement()
-	if err != nil {
-		_ = activation.Fail(err)
-		return errors.Join(err, components.runtime.Wait(waitCtx))
-	}
-	product, err := startPTYProduct(parent, opts.Argv, components.reaper)
-	if err != nil {
-		_ = activation.Fail(err)
-		<-activation.Context().Done()
-		return errors.Join(err, settlement.Complete(), components.runtime.Wait(waitCtx))
-	}
-	settled := make(chan error, 1)
-	go func() {
-		<-activation.Context().Done()
-		ctx, cancel := context.WithTimeout(waitCtx, ptyShutdownTimeout)
-		defer cancel()
-		if closeErr := product.Close(ctx); closeErr != nil {
-			settled <- closeErr
-			return
+	var product *ptyProduct
+	_, err := daemonkit.Serve(parent, d, func(c daemonkit.Ctx) (daemonkit.Product, error) { //nolint:contextcheck // resources live until Product.Close, not until a ctx cancels
+		started, startErr := startPTYProduct(c, opts.Argv)
+		if startErr != nil {
+			return nil, startErr
 		}
-		settled <- settlement.Complete()
-	}()
-	publication, err := components.products.Stage(activation, product)
-	if err == nil {
-		err = activation.CommitReady(publication)
+		product = started
+		return started, nil
+	})
+	if product == nil {
+		return err
 	}
-	if err != nil {
-		_ = activation.Fail(err)
-		return errors.Join(err, <-settled, components.runtime.Wait(waitCtx))
-	}
-	runtimeDone := make(chan error, 1)
-	go func() { runtimeDone <- components.runtime.Wait(waitCtx) }()
-
-	var childErr, runtimeErr error
-	naturalExit := false
-	select {
-	case <-product.child.done:
-		naturalExit = parent.Err() == nil && activation.Context().Err() == nil
-		childErr = product.child.Result()
-		runtimeErr = closeRuntime(parent, components.runtime, runtimeDone)
-	case <-parent.Done():
-		runtimeErr = closeRuntime(parent, components.runtime, runtimeDone)
-		childErr = product.child.Result()
-	case runtimeErr = <-runtimeDone:
-		childErr = product.child.Result()
-	}
-	settlementErr := <-settled
-
-	if opts.OnChildExit != nil && naturalExit && runtimeErr == nil && settlementErr == nil {
+	if opts.OnChildExit != nil && err == nil && parent.Err() == nil && product.natural.Load() {
 		opts.OnChildExit()
 	}
-	return errors.Join(childErr, runtimeErr, settlementErr)
+	return errors.Join(product.childResult(), err)
 }
 
-type runtimeComponents struct {
-	runtime  *daemon.Runtime
-	products *daemon.PublicationSlot[*ptyProduct]
-	reaper   *proc.Reaper
-}
-
-func newRuntime(opts Options) (runtimeComponents, error) {
-	generation, err := proc.ProcessGeneration()
-	if err != nil {
-		return runtimeComponents{}, fmt.Errorf("pty-host process generation: %w", err)
-	}
-	store := &proc.FileStore{Path: opts.ProcessStore, UnsupportedSchema: proc.ArchiveUnsupportedSchema}
-	reaper := &proc.Reaper{
-		Store: store, Generation: generation,
-		Grace: 500 * time.Millisecond, Settlement: 2 * time.Second,
-	}
-	workers, err := worker.NewPool(worker.Config{
-		Capacity: 1, QueueCapacity: 0, MaxTotalRun: ptyShutdownTimeout,
-		MaxStdinBytes: 0, MaxStdoutBytes: 4096, MaxStderrBytes: 4096,
-	}, reaper)
-	if err != nil {
-		return runtimeComponents{}, fmt.Errorf("pty-host worker pool: %w", err)
-	}
-	children, err := proc.NewManager(1, reaper)
-	if err != nil {
-		return runtimeComponents{}, fmt.Errorf("pty-host process manager: %w", err)
-	}
-	policy, err := trust.NewTrustPolicy(trust.TrustPolicyConfig{
-		ExpectedUID: os.Geteuid(), AllowUnprotected: true,
-	})
-	if err != nil {
-		return runtimeComponents{}, fmt.Errorf("pty-host trust policy: %w", err)
-	}
-	server := &wire.Server{
-		WireBuild: ptyWireBuild, MaxSessions: 8, HandshakeTimeout: 500 * time.Millisecond,
-	}
-	runtime, err := wire.NewRuntime(wire.RuntimeConfig{
-		Socket: opts.Socket, RuntimeBuild: opts.RuntimeBuild, RuntimeProtocol: int(wire.ProtocolVersion),
-		Wire: server, TrustPolicy: policy, StopControlStore: store, Workers: workers, Children: children,
-		ShutdownTimeout: ptyShutdownTimeout,
-	})
-	if err != nil {
-		return runtimeComponents{}, fmt.Errorf("pty-host runtime: %w", err)
-	}
-	products := daemon.NewPublicationSlot[*ptyProduct](runtime)
-	server.Register(wire.HandlerSpec{Op: opCapture, Concurrent: true, Handler: func(_ context.Context, request wire.Request) (any, error) {
-		if len(request.Payload) != 0 {
-			return nil, errors.New("pty-host capture payload must be empty")
-		}
-		product, err := products.Value(request.Publication)
-		if err != nil {
-			return nil, err
-		}
-		return captureResponse{Text: product.resources.grid.Text()}, nil
-	}})
-	server.Register(wire.HandlerSpec{Op: opKeys, Concurrent: true, Handler: func(_ context.Context, request wire.Request) (any, error) {
-		var message keysRequest
-		if err := decodeMessage(request.Payload, &message); err != nil {
-			return nil, err
-		}
-		product, err := products.Value(request.Publication)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := product.resources.ptmx.Write(message.Data); err != nil {
-			return nil, fmt.Errorf("pty-host write keys: %w", err)
-		}
-		return struct{}{}, nil
-	}})
-	return runtimeComponents{runtime: runtime, products: products, reaper: reaper}, nil
-}
-
-func closeRuntime(parent context.Context, runtime *daemon.Runtime, done <-chan error) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), ptyShutdownTimeout)
-	defer cancel()
-	if err := runtime.Close(ctx); err != nil {
-		return err
-	}
-	return <-done
-}
-
-func recoverPTYChild(ctx context.Context, activation daemon.Activation, reaper *proc.Reaper) error {
-	capability, err := activation.RecoveryCapability(ptyChildRecoveryID)
-	if err != nil {
-		return fmt.Errorf("pty-host recovery capability: %w", err)
-	}
-	receipt := capability.Receipt()
-	if err := receipt.Validate(); err != nil {
-		return fmt.Errorf("pty-host recovery proof: %w", err)
-	}
-	settled := receipt.Settled()
-	observed := make(map[proc.OwnerGeneration]struct{}, len(settled))
-	if _, err := reaper.RecoverReapReceipts(
-		ctx,
-		ptyChildRecoveryID,
-		func(ctx context.Context, reap proc.ReapReceipt) error {
-			if err := reaper.VerifyReapReceipt(ctx, reap); err != nil {
-				return err
-			}
-			if !slices.Contains(settled, reap.Record.Generation) {
-				return errors.New("pty-host reap receipt is outside the runtime recovery proof")
-			}
-			observed[reap.Record.Generation] = struct{}{}
-			return nil
-		},
-	); err != nil {
-		return fmt.Errorf("pty-host settle recovery receipts: %w", err)
-	}
-	for _, generation := range settled {
-		if _, ok := observed[generation]; !ok {
-			return errors.New("pty-host runtime recovery proof has no durable reap receipt")
-		}
-	}
-	if err := capability.Consume(); err != nil {
-		return fmt.Errorf("pty-host consume recovery capability: %w", err)
-	}
-	return nil
-}
-
+// ptyProduct is the hosted child and the screen it renders into. The child is
+// adopted rather than spawned because creack/pty owns the fork; daemonkit
+// never wait(2)s an adopted process, so the reap stays here.
 type ptyProduct struct {
-	child     *childWorker
+	tracked   *daemonkit.Tracked
 	resources *ptyResources
+
+	exited  chan struct{}
+	waitErr error
+	natural atomic.Bool
+
+	drainOnce sync.Once
+	drainErr  error
+	closeOnce sync.Once
+	closeErr  error
 }
 
-func (p *ptyProduct) Close(ctx context.Context) error {
-	return errors.Join(p.child.Close(ctx), p.resources.Close())
+func (p *ptyProduct) Handle(_ context.Context, req daemonkit.Request) (daemonkit.Reply, error) {
+	switch req.Op {
+	case opCapture:
+		if len(req.Body) != 0 {
+			return daemonkit.Reply{}, errors.New("pty-host capture payload must be empty")
+		}
+		body, err := encodeMessage(captureResponse{Text: p.resources.grid.Text()})
+		if err != nil {
+			return daemonkit.Reply{}, err
+		}
+		return daemonkit.Reply{Body: body}, nil
+	case opKeys:
+		var message keysRequest
+		if err := decodeMessage(req.Body, &message); err != nil {
+			return daemonkit.Reply{}, err
+		}
+		if _, err := p.resources.ptmx.Write(message.Data); err != nil {
+			return daemonkit.Reply{}, fmt.Errorf("pty-host write keys: %w", err)
+		}
+		return daemonkit.Reply{}, nil
+	default:
+		return daemonkit.Reply{}, fmt.Errorf("pty-host unknown op %q", req.Op)
+	}
 }
 
-func startPTYProduct(ctx context.Context, argv []string, reaper *proc.Reaper) (*ptyProduct, error) {
-	if err := ctx.Err(); err != nil {
+// Drain retires the child: the record is released when this process's own Wait
+// already proved the exit, and signalled out of the process table otherwise.
+// Retiring here rather than in Close is what keeps the screen the child is
+// still writing into alive until the child is gone.
+func (p *ptyProduct) Drain(budget daemonkit.Budget) error {
+	p.drainOnce.Do(func() {
+		ctx, cancel := budget.Context(context.Background())
+		defer cancel()
+		select {
+		case <-p.exited:
+			p.drainErr = p.tracked.Release()
+			return
+		default:
+		}
+		if _, err := p.tracked.Stop(ctx); err != nil {
+			p.drainErr = err
+			return
+		}
+		select {
+		case <-p.exited:
+		case <-ctx.Done():
+			p.drainErr = ctx.Err()
+		}
+	})
+	return p.drainErr
+}
+
+func (p *ptyProduct) Close(daemonkit.Budget) error {
+	p.closeOnce.Do(func() { p.closeErr = p.resources.Close() })
+	return p.closeErr
+}
+
+// childResult is the hosted child's own exit, reported only once this process
+// reaped it. A drain that outran its budget leaves the child unproven, and its
+// abandonment is already the failure Serve reports.
+func (p *ptyProduct) childResult() error {
+	select {
+	case <-p.exited:
+		return p.waitErr
+	default:
+		return nil
+	}
+}
+
+func startPTYProduct(c daemonkit.Ctx, argv []string) (*ptyProduct, error) {
+	gate, err := daemonkit.NewGate(argv)
+	if err != nil {
 		return nil, err
 	}
 	ws := ttySize()
-	cmd, ptmx, record, release, err := prepareTrackedPTY(ctx, argv, ws, reaper)
+	gateArgv := gate.Argv()
+	cmd := exec.Command(gateArgv[0], gateArgv[1:]...) //nolint:gosec // the gate wrapper fixes argv[0]; the caller's argv is the parked target.
+	cmd.ExtraFiles = gate.Files()
+	ptmx, err := pty.StartWithSize(cmd, ws)
 	if err != nil {
-		return nil, err
+		_ = gate.Close()
+		return nil, fmt.Errorf("pty-host start %s: %w", argv[0], err)
 	}
-	child := newChildWorker(cmd, reaper, record)
 
+	product := &ptyProduct{exited: make(chan struct{})}
+	go func() {
+		waitErr := cmd.Wait()
+		product.waitErr = waitErr
+		if c.Context.Err() == nil {
+			product.natural.Store(true)
+		}
+		close(product.exited)
+		c.Stop(nil)
+	}()
+	abort := func(cause error) (*ptyProduct, error) {
+		_ = gate.Close()
+		_ = cmd.Process.Kill()
+		<-product.exited
+		return nil, errors.Join(cause, product.waitErr, ptmx.Close())
+	}
+
+	startCtx, cancel := context.WithTimeout(c.Context, ptyStartup)
+	defer cancel()
+	if err := gate.Ready(startCtx); err != nil {
+		return abort(fmt.Errorf("pty-host child readiness: %w", err))
+	}
+	tracked, err := c.Adopt(startCtx, cmd.Process.Pid)
+	if err != nil {
+		return abort(fmt.Errorf("pty-host adopt child: %w", err))
+	}
+	product.tracked = tracked
+
+	resources, err := startPTYResources(ptmx, ws)
+	if err != nil {
+		return abort(err)
+	}
+	product.resources = resources
+	if err := gate.Release(); err != nil {
+		closeErr := resources.Close()
+		_ = cmd.Process.Kill()
+		<-product.exited
+		return nil, errors.Join(fmt.Errorf("pty-host release child: %w", err), product.waitErr, closeErr)
+	}
+	return product, nil
+}
+
+func startPTYResources(ptmx *os.File, ws *pty.Winsize) (*ptyResources, error) {
 	inputFD, err := unix.Dup(int(os.Stdin.Fd()))
 	if err != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ptyShutdownTimeout)
-		defer cancel()
-		return nil, errors.Join(fmt.Errorf("pty-host duplicate stdin: %w", err), child.Close(cleanupCtx), ptmx.Close())
+		return nil, fmt.Errorf("pty-host duplicate stdin: %w", err)
 	}
 	if inputFD > math.MaxInt32 {
 		_ = unix.Close(inputFD)
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ptyShutdownTimeout)
-		defer cancel()
-		return nil, errors.Join(errors.New("pty-host duplicated stdin exceeds poll descriptor range"), child.Close(cleanupCtx), ptmx.Close())
+		return nil, errors.New("pty-host duplicated stdin exceeds poll descriptor range")
 	}
 	inputPollFD := int32(inputFD) //nolint:gosec // the descriptor is range-checked immediately above
 	if err := unix.SetNonblock(inputFD, true); err != nil {
 		_ = unix.Close(inputFD)
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ptyShutdownTimeout)
-		defer cancel()
-		return nil, errors.Join(fmt.Errorf("pty-host make stdin relay nonblocking: %w", err), child.Close(cleanupCtx), ptmx.Close())
+		return nil, fmt.Errorf("pty-host make stdin relay nonblocking: %w", err)
 	}
 	input := os.NewFile(uintptr(inputFD), "pty-host-stdin")
 
@@ -305,148 +265,16 @@ func startPTYProduct(ctx context.Context, argv []string, reaper *proc.Reaper) (*
 		defer close(readDone)
 		_, _ = io.Copy(io.MultiWriter(gridWriter{g}, os.Stdout), ptmx)
 	}()
-	inputCtx, cancelInput := context.WithCancel(context.WithoutCancel(ctx))
+	inputCtx, cancelInput := context.WithCancel(context.Background())
 	inputDone := make(chan struct{})
 	go func() {
 		defer close(inputDone)
 		copyPTYInput(inputCtx, ptmx, input, inputPollFD)
 	}()
-	resources := &ptyResources{
+	return &ptyResources{
 		winch: winch, ptmx: ptmx, readDone: readDone, grid: g,
 		cancelInput: cancelInput, input: input, inputDone: inputDone,
-	}
-	product := &ptyProduct{child: child, resources: resources}
-	if _, err := io.WriteString(release, "start\n"); err != nil {
-		_ = release.Close()
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ptyShutdownTimeout)
-		defer cancel()
-		return nil, errors.Join(fmt.Errorf("pty-host release child: %w", err), product.Close(cleanupCtx))
-	}
-	if err := release.Close(); err != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ptyShutdownTimeout)
-		defer cancel()
-		return nil, errors.Join(fmt.Errorf("pty-host close child release: %w", err), product.Close(cleanupCtx))
-	}
-	return product, nil
-}
-
-func prepareTrackedPTY(
-	ctx context.Context,
-	argv []string,
-	ws *pty.Winsize,
-	reaper *proc.Reaper,
-) (*exec.Cmd, *os.File, proc.Record, *os.File, error) {
-	readyRead, readyWrite, err := os.Pipe()
-	if err != nil {
-		return nil, nil, proc.Record{}, nil, fmt.Errorf("pty-host create readiness pipe: %w", err)
-	}
-	startRead, startWrite, err := os.Pipe()
-	if err != nil {
-		_ = readyRead.Close()
-		_ = readyWrite.Close()
-		return nil, nil, proc.Record{}, nil, fmt.Errorf("pty-host create release pipe: %w", err)
-	}
-	closePipes := func() {
-		_ = readyRead.Close()
-		_ = readyWrite.Close()
-		_ = startRead.Close()
-		_ = startWrite.Close()
-	}
-	args := append([]string{"-c", ptyPauseScript, "cc-orchestrate-pty-child"}, argv...)
-	cmd := exec.Command("/bin/sh", args...) //nolint:gosec // The caller supplies argv after the fixed readiness wrapper.
-	cmd.ExtraFiles = []*os.File{readyWrite, startRead}
-	ptmx, err := pty.StartWithSize(cmd, ws)
-	if err != nil {
-		closePipes()
-		return nil, nil, proc.Record{}, nil, fmt.Errorf("pty-host start %s: %w", argv[0], err)
-	}
-	_ = readyWrite.Close()
-	_ = startRead.Close()
-
-	deadline := time.Now().Add(ptyShutdownTimeout)
-	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
-		deadline = parentDeadline
-	}
-	if err := readyRead.SetReadDeadline(deadline); err != nil {
-		_ = cmd.Process.Kill()
-		waitErr := cmd.Wait()
-		_ = readyRead.Close()
-		_ = startWrite.Close()
-		_ = ptmx.Close()
-		return nil, nil, proc.Record{}, nil, errors.Join(fmt.Errorf("pty-host bound child readiness: %w", err), waitErr)
-	}
-	var ready [1]byte
-	_, readErr := io.ReadFull(readyRead, ready[:])
-	_ = readyRead.Close()
-	if readErr != nil || ready[0] != 'r' {
-		_ = cmd.Process.Kill()
-		waitErr := cmd.Wait()
-		_ = startWrite.Close()
-		_ = ptmx.Close()
-		if readErr == nil {
-			readErr = errors.New("invalid readiness byte")
-		}
-		return nil, nil, proc.Record{}, nil, errors.Join(fmt.Errorf("pty-host child readiness: %w", readErr), waitErr)
-	}
-	record, err := reaper.TrackGroup(ctx, cmd.Process.Pid, ptyChildRecoveryID)
-	if err != nil {
-		_ = cmd.Process.Kill()
-		waitErr := cmd.Wait()
-		_ = startWrite.Close()
-		_ = ptmx.Close()
-		return nil, nil, proc.Record{}, nil, errors.Join(fmt.Errorf("pty-host track child: %w", err), waitErr)
-	}
-	return cmd, ptmx, record, startWrite, nil
-}
-
-type childWorker struct {
-	cmd    *exec.Cmd
-	reaper *proc.Reaper
-	record proc.Record
-	done   chan struct{}
-
-	closeOnce sync.Once
-	mu        sync.Mutex
-	err       error
-	closeErr  error
-}
-
-func newChildWorker(cmd *exec.Cmd, reaper *proc.Reaper, record proc.Record) *childWorker {
-	w := &childWorker{cmd: cmd, reaper: reaper, record: record, done: make(chan struct{})}
-	go func() {
-		err := cmd.Wait()
-		w.mu.Lock()
-		w.err = err
-		w.mu.Unlock()
-		close(w.done)
-	}()
-	return w
-}
-
-func (w *childWorker) Close(ctx context.Context) error {
-	w.closeOnce.Do(func() {
-		select {
-		case <-w.done:
-			w.closeErr = w.reaper.Untrack(ctx, w.record)
-		default:
-			w.closeErr = w.reaper.Terminate(ctx, w.record)
-			if w.closeErr == nil {
-				select {
-				case <-w.done:
-				case <-ctx.Done():
-					w.closeErr = ctx.Err()
-				}
-			}
-		}
-	})
-	return w.closeErr
-}
-
-func (w *childWorker) Result() error {
-	<-w.done
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.err
+	}, nil
 }
 
 type ptyResources struct {

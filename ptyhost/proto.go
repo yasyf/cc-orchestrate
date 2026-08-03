@@ -7,18 +7,18 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/yasyf/daemonkit/wire"
+	"github.com/yasyf/daemonkit"
 )
 
 const (
 	ptySchemaV1     = `{"name":"cc-orchestrate.pty","version":1,"operations":[{"op":"pty.capture","request":"empty","response":{"text":"string"}},{"op":"pty.keys","request":{"data":"base64-bytes"},"response":"empty"}]}`
 	ptySchemaDigest = "d487d54dbf122e2bf481a266d9840f980a10e2da82931d34d3efc4f44f2f3daf"
-	ptyWireBuild    = "cc-orchestrate.pty.v1." + ptySchemaDigest
+	ptyWireBuild    = daemonkit.Schema("cc-orchestrate.pty.v1." + ptySchemaDigest)
 )
 
 const (
-	opCapture wire.Op = "pty.capture"
-	opKeys    wire.Op = "pty.keys"
+	opCapture = "pty.capture"
+	opKeys    = "pty.keys"
 )
 
 type captureResponse struct {

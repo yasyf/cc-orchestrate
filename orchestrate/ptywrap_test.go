@@ -1,12 +1,10 @@
 package orchestrate
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,21 +12,6 @@ import (
 
 	"github.com/yasyf/cc-orchestrate/backend"
 )
-
-// shortHome returns a temp HOME anchored at /tmp, cleaned up on test end. The default
-// temp root (darwin's /var/folders/...) plus .cc-orchestrate-v1/pty/<sid>-<16-hex>.sock
-// overruns the OS sun_path limit (~104 bytes); a /tmp anchor leaves ample headroom.
-func shortHome(t *testing.T) string {
-	t.Helper()
-	home, err := os.MkdirTemp("/tmp", "cco")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(home) })
-	t.Setenv("HOME", home)
-	t.Setenv("DAEMONKIT_HOME", home)
-	return home
-}
 
 func TestWrapForCapture(t *testing.T) {
 	self := "/abs/cc-orchestrate"
@@ -185,9 +168,7 @@ func startChildExitCapture(t *testing.T) <-chan daemon.Envelope {
 // one cco.agent.childExited envelope carrying the session id and spawn nonce, then
 // returns once the reply lands.
 func TestReportChildExitReachesDaemon(t *testing.T) {
-	// t.TempDir embeds the (long) test name, which can push HOME/.cc-orchestrate-v1/
-	// daemon.sock past the OS sun_path limit; shortHome's /tmp anchor stays short.
-	shortHome(t)
+	sandboxHome(t)
 
 	got := startChildExitCapture(t)
 
@@ -211,15 +192,13 @@ func TestReportChildExitReachesDaemon(t *testing.T) {
 }
 
 // TestPtyHostCmdReportsChildExitToDaemon drives the production wiring end to end at
-// the wrapper level: the hidden pty-host command hosts a real child under a PTY,
-// serves its per-incarnation control socket, and — once the child exits naturally —
-// tears the socket down and delivers exactly one cco.agent.childExited envelope
-// carrying its --session-id and --spawn-nonce to the daemon socket (a /tmp-anchored
-// HOME keeps the per-incarnation socket inside the OS sun_path limit). Together with
-// TestHandleChildExited (the daemon's side of that envelope) this covers the full
-// OnChildExit → report → handler chain.
+// the wrapper level: the hidden pty-host command hosts a real child under a PTY and
+// — once the child exits naturally — delivers exactly one cco.agent.childExited
+// envelope carrying its --session-id and --spawn-nonce to the daemon socket.
+// Together with TestHandleChildExited (the daemon's side of that envelope) this
+// covers the full OnChildExit → report → handler chain.
 func TestPtyHostCmdReportsChildExitToDaemon(t *testing.T) {
-	shortHome(t)
+	sandboxHome(t)
 
 	got := startChildExitCapture(t)
 
@@ -227,11 +206,6 @@ func TestPtyHostCmdReportsChildExitToDaemon(t *testing.T) {
 	c.SetArgs([]string{"--session-id", "sc", "--spawn-nonce", "n1chain0", "--", "sh", "-c", "exit 0"})
 	if err := c.Execute(); err != nil {
 		t.Fatalf("pty-host command: %v", err)
-	}
-
-	// The wrapper fully settled its daemonkit-owned per-incarnation endpoint.
-	if _, err := os.Stat(ptySocketPath("sc", "n1chain0")); !os.IsNotExist(err) {
-		t.Fatalf("per-incarnation control socket left behind: stat err = %v", err)
 	}
 
 	select {
@@ -249,67 +223,4 @@ func TestPtyHostCmdReportsChildExitToDaemon(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no childExited envelope reached the daemon socket")
 	}
-}
-
-func TestPtySocketPathDeterministic(t *testing.T) {
-	if a, b := ptySocketPath("sid-9", "nonce-abc"), ptySocketPath("sid-9", "nonce-abc"); a != b {
-		t.Fatalf("ptySocketPath not deterministic: %q vs %q", a, b)
-	}
-	if ptySocketPath("a", "nonce-abc") == ptySocketPath("b", "nonce-abc") {
-		t.Fatal("ptySocketPath collides across session ids")
-	}
-	// Per-incarnation: two nonces of the same session must derive distinct paths, or a
-	// killed wrapper's listener settlement could disturb its replacement's socket.
-	if ptySocketPath("sid-9", "11111111-aaaa") == ptySocketPath("sid-9", "22222222-bbbb") {
-		t.Fatal("ptySocketPath collides across spawn nonces of the same session")
-	}
-	// The nonces here share their leading 8 chars deliberately: a truncated-nonce
-	// suffix would collide, so this pins the derivation to the FULL nonce.
-	if ptySocketPath("sid-9", "11111111-aaaa") == ptySocketPath("sid-9", "11111111-bbbb") {
-		t.Fatal("ptySocketPath collides across spawn nonces sharing an 8-char prefix")
-	}
-	// The suffix carries 64 bits (16 hex chars), so two incarnations of one session
-	// can never share a path in practice.
-	base := filepath.Base(ptySocketPath("sid-9", "nonce-abc"))
-	suffix := strings.TrimSuffix(strings.TrimPrefix(base, "sid-9-"), ".sock")
-	if len(suffix) != 16 {
-		t.Fatalf("socket suffix = %q (%d chars), want 16 hex chars (64 bits)", suffix, len(suffix))
-	}
-	if _, err := hex.DecodeString(suffix); err != nil {
-		t.Fatalf("socket suffix %q is not hex: %v", suffix, err)
-	}
-	t.Run("empty nonce panics", func(t *testing.T) {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("ptySocketPath accepted an empty spawn nonce")
-			}
-		}()
-		_ = ptySocketPath("sid-9", "")
-	})
-}
-
-func TestPtyProcessStorePathIsStablePerSession(t *testing.T) {
-	shortHome(t)
-	path := ptyProcessStorePath("sid-9")
-	if path != ptyProcessStorePath("sid-9") {
-		t.Fatal("ptyProcessStorePath is not deterministic")
-	}
-	if path == ptyProcessStorePath("sid-10") {
-		t.Fatal("ptyProcessStorePath collides across sessions")
-	}
-	base := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "process-"), ".db")
-	if len(base) != 16 {
-		t.Fatalf("process store suffix = %q (%d chars), want 16 hex chars", base, len(base))
-	}
-	if _, err := hex.DecodeString(base); err != nil {
-		t.Fatalf("process store suffix %q is not hex: %v", base, err)
-	}
-	t.Run("empty session panics", func(t *testing.T) {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("ptyProcessStorePath accepted an empty session id")
-			}
-		}()
-		_ = ptyProcessStorePath("")
-	})
 }

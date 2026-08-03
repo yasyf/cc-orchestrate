@@ -1,7 +1,6 @@
 package orchestrate
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -9,23 +8,32 @@ import (
 )
 
 func TestAppPathsUseEpochOneNamespace(t *testing.T) {
-	sandboxHome(t)
-	if got, want := appPaths().StateDir(), filepath.Join(os.Getenv("HOME"), ".cc-orchestrate-v1"); got != want {
+	// The sandbox's own directory, not os.Getenv("HOME"): appPaths resolves through
+	// daemonkit, which reads the passwd database or DAEMONKIT_HOME and never HOME.
+	home := sandboxHome(t)
+	if got, want := appPaths().StateDir(), filepath.Join(home, ".cc-orchestrate-v1"); got != want {
 		t.Fatalf("StateDir() = %q, want %q", got, want)
 	}
 }
 
-func TestLauncherUsesSharedWireBuildAndCurrentRuntimeBuild(t *testing.T) {
+// TestLauncherSharesTheRuntimeIdentity proves the launcher half and the serving
+// half read one declaration: a launcher built from a different Daemon would dial a
+// socket the daemon never binds.
+func TestLauncherSharesTheRuntimeIdentity(t *testing.T) {
 	sandboxHome(t) // launcher stages the test binary as the stable program under the home
 	l, err := launcher()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.WireBuild != daemon.WireBuild {
-		t.Fatalf("WireBuild = %q, want %q", l.WireBuild, daemon.WireBuild)
+	d, err := appDaemon()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if l.RuntimeBuild != buildVersion() {
-		t.Fatalf("RuntimeBuild = %q, want %q", l.RuntimeBuild, buildVersion())
+	if l.Daemon.Label != d.Label {
+		t.Fatalf("Label = %q, want %q", l.Daemon.Label, d.Label)
+	}
+	if len(l.Daemon.Schemas) == 0 || l.Daemon.Schemas[0] != daemon.WireBuild {
+		t.Fatalf("Schemas = %v, want [%q]", l.Daemon.Schemas, daemon.WireBuild)
 	}
 }
 

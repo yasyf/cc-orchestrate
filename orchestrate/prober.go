@@ -165,7 +165,10 @@ func resolveScreen(ctx context.Context, db *sql.DB, ag agentRow) (promptScreen, 
 	if ag.SpawnNonce == "" {
 		return nil, nil, fmt.Errorf("agent %q has no spawn nonce", ag.ID)
 	}
-	client := ptyhost.Dial(ptySocketPath(ag.SessionID, ag.SpawnNonce))
+	client, err := ptyhost.Dial(ag.SpawnNonce)
+	if err != nil {
+		return nil, nil, err
+	}
 	return ptyScreen{client: client}, client.Close, nil
 }
 

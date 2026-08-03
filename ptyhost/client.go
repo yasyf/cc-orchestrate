@@ -4,29 +4,44 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
-	"github.com/yasyf/daemonkit/trust"
-	"github.com/yasyf/daemonkit/wire"
+	"github.com/yasyf/daemonkit"
 )
 
-// Client owns one persistent multiplexed session to a pty-host.
-type Client struct {
-	socket string
+// callTimeout bounds one control call whose caller carries no deadline of its
+// own, which daemonkit refuses outright.
+const callTimeout = 10 * time.Second
 
-	mu      sync.Mutex
-	session *wire.Client
+// readyPoll is the cadence a call retries a host that has bound its socket but
+// not yet published readiness.
+const readyPoll = 10 * time.Millisecond
+
+// Client owns one business lane to a pty-host incarnation.
+type Client struct {
+	business *daemonkit.Business
 }
 
-// Dial returns a lazy Client for the pty-host listening at socket.
-func Dial(socket string) *Client { return &Client{socket: socket} }
+// Dial returns a lazy Client for the pty-host of the incarnation spawnNonce
+// names. It performs no I/O: the lane attaches on the first call and verifies
+// the accepting process on every session it acquires.
+func Dial(spawnNonce string) (*Client, error) {
+	dk, err := daemonkit.Open(ptyDaemon(spawnNonce))
+	if err != nil {
+		return nil, err
+	}
+	return &Client{business: dk.Business()}, nil
+}
 
 // Capture returns the child's current rendered screen as plain text.
 func (c *Client) Capture(ctx context.Context) (string, error) {
-	var response captureResponse
-	if err := c.call(ctx, opCapture, nil, &response); err != nil {
+	reply, err := c.call(ctx, opCapture, nil)
+	if err != nil {
 		return "", err
+	}
+	var response captureResponse
+	if err := decodeMessage(reply.Body, &response); err != nil {
+		return "", fmt.Errorf("pty-host %s response: %w", opCapture, err)
 	}
 	return response.Text, nil
 }
@@ -37,88 +52,44 @@ func (c *Client) SendKeys(ctx context.Context, keys ...string) error {
 	if err != nil {
 		return err
 	}
-	return c.call(ctx, opKeys, payload, nil)
+	_, err = c.call(ctx, opKeys, payload)
+	return err
 }
 
-// Close closes the persistent session when one was established.
+// Close releases the lane; every later call is refused.
 func (c *Client) Close() error {
-	c.mu.Lock()
-	session := c.session
-	c.session = nil
-	c.mu.Unlock()
-	if session == nil {
-		return nil
-	}
-	return session.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	return c.business.Close(ctx)
 }
 
-func (c *Client) call(ctx context.Context, op wire.Op, payload []byte, dst any) error {
-	session, err := c.getSession(ctx)
-	if err != nil {
-		return fmt.Errorf("pty-host %s: %w", op, err)
-	}
-	var result wire.Result
+// call dispatches one op, retrying a host that is still starting: the prober
+// dials as soon as the spawn wrapper binds, routinely before the hosted child
+// has cleared its gate.
+func (c *Client) call(ctx context.Context, op string, payload []byte) (daemonkit.Reply, error) {
+	ctx, cancel := operationContext(ctx)
+	defer cancel()
 	for {
-		result, err = session.Call(ctx, op, "", payload)
-		if err != nil {
-			c.retire(session, err)
-			return fmt.Errorf("pty-host %s: %w", op, err)
+		reply, err := c.business.Call(ctx, op, payload)
+		if err == nil {
+			return reply, nil
 		}
-		rejection := result.Rejection()
-		if !errors.Is(rejection, wire.ErrNotReady) {
-			break
+		if !errors.Is(err, daemonkit.ErrNotReady) {
+			return daemonkit.Reply{}, fmt.Errorf("pty-host %s: %w", op, err)
 		}
-		timer := time.NewTimer(10 * time.Millisecond)
+		timer := time.NewTimer(readyPoll)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return fmt.Errorf("pty-host %s: %w", op, ctx.Err())
+			return daemonkit.Reply{}, fmt.Errorf("pty-host %s: %w", op, ctx.Err())
 		case <-timer.C:
 		}
 	}
-	if result.Response.Err != "" {
-		return fmt.Errorf("pty-host %s: %s", op, result.Response.Err)
-	}
-	if result.Outcome != wire.Delivered {
-		return fmt.Errorf("pty-host %s: %w", op, result.Rejection())
-	}
-	if dst == nil {
-		if len(result.Response.Payload) != 0 && string(result.Response.Payload) != "{}" {
-			return fmt.Errorf("pty-host %s returned unexpected payload", op)
-		}
-		return nil
-	}
-	if err := decodeMessage(result.Response.Payload, dst); err != nil {
-		return fmt.Errorf("pty-host %s response: %w", op, err)
-	}
-	return nil
 }
 
-func (c *Client) getSession(ctx context.Context) (*wire.Client, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.session != nil {
-		return c.session, nil
+func operationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
 	}
-	session, err := wire.NewClient(ctx, wire.ClientConfig{
-		Dial:      wire.UnixDialer(c.socket),
-		WireBuild: ptyWireBuild,
-		Role:      trust.UnprotectedRole,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", c.socket, err)
-	}
-	c.session = session
-	return session, nil
-}
-
-func (c *Client) retire(session *wire.Client, cause error) {
-	c.mu.Lock()
-	if c.session != session {
-		c.mu.Unlock()
-		return
-	}
-	c.session = nil
-	c.mu.Unlock()
-	_ = session.Abort(errors.Join(errors.New("pty-host session failed"), cause))
+	return context.WithTimeout(ctx, callTimeout)
 }

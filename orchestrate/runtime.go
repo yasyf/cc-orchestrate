@@ -1,46 +1,37 @@
 package orchestrate
 
 import (
-	"os"
-
 	"github.com/yasyf/cc-interact/daemon"
-	"github.com/yasyf/daemonkit/service"
-	"github.com/yasyf/daemonkit/trust"
+	"github.com/yasyf/daemonkit"
 )
 
 const (
 	runtimeAgentLabel = "com.yasyf.cc-orchestrate"
-	lifecycleRole     = "com.yasyf.cc-orchestrate.lifecycle.v1"
-	stopControlRole   = "com.yasyf.cc-orchestrate.stop.v1"
 	teamID            = "SXKCTF23Q2"
 	signingIdentifier = "cc-orchestrate"
 )
 
-func appRoles() daemon.Roles {
-	return daemon.Roles{
-		Business: trust.UnprotectedRole, Lifecycle: lifecycleRole, StopControl: stopControlRole,
-	}
-}
-
-func appTrustPolicy() (trust.TrustPolicy, error) {
-	roles := appRoles()
-	requirement := trust.Requirement{TeamID: teamID, SigningIdentifier: signingIdentifier}
-	return trust.NewTrustPolicy(trust.TrustPolicyConfig{
-		ExpectedUID: os.Geteuid(), AllowUnprotected: true,
-		Roles:          map[trust.PeerRole]trust.Requirement{roles.Lifecycle: requirement, roles.StopControl: requirement},
-		StopRoles:      []trust.PeerRole{roles.StopControl},
-		ReceiptRoles:   []trust.PeerRole{roles.Lifecycle},
-		ReadinessRoles: []trust.PeerRole{roles.Lifecycle},
-	})
-}
-
-func appAgent() (service.Agent, error) {
-	executable, err := service.StableProgram("cco", buildVersion())
+// appDaemon is the one identity the launcher half and the serving half both
+// read: label, program, launchd policy, and every trust lane declared once.
+// Control gates the drain and the broker handoff on this binary's own signing
+// identity; Business is left to the same-EUID floor, and Serving takes the
+// named waiver, because a dev build of the CLI is unsigned and could satisfy
+// no requirement.
+func appDaemon() (daemonkit.Daemon, error) {
+	program, err := daemonkit.Stable()
 	if err != nil {
-		return service.Agent{}, err
+		return daemonkit.Daemon{}, err
 	}
-	return service.Agent{
-		Label: runtimeAgentLabel, Program: executable, Args: []string{"daemon"},
-		LogPath: appPaths().LogPath(), RestartPolicy: service.RestartOnFailure,
-	}, nil
+	requirement := daemonkit.Requirement{TeamID: teamID, SigningIdentifier: signingIdentifier}
+	return daemon.Spec(daemonkit.Daemon{
+		Label:   runtimeAgentLabel,
+		Program: program,
+		Args:    []string{"daemon"},
+		Log:     appPaths().LogPath(),
+		Restart: daemonkit.RestartOnFailure,
+		Trust: daemonkit.Trust{
+			Control: &requirement,
+			Serving: daemonkit.ServingSameUser(),
+		},
+	}), nil
 }

@@ -67,23 +67,20 @@ func appPaths() paths.Paths { return paths.Paths{App: appDir} }
 // one subdirectory per repo: ~/.cc-orchestrate-v1/worktrees/<repo-id>/<name>.
 func worktreesBase() string { return filepath.Join(appPaths().StateDir(), "worktrees") }
 
-func newClient(ctx context.Context) (*daemon.Client, error) {
+func newClient(context.Context) (*daemon.Client, error) {
 	l, err := launcher()
 	if err != nil {
 		return nil, err
 	}
-	return l.NewClient(ctx)
+	return l.NewClient()
 }
 
 func launcher() (daemon.Launcher, error) {
-	agent, err := appAgent()
+	d, err := appDaemon()
 	if err != nil {
 		return daemon.Launcher{}, err
 	}
-	return daemon.Launcher{
-		Paths: appPaths(), WireBuild: daemon.WireBuild, RuntimeBuild: buildVersion(),
-		Agent: agent, Roles: appRoles(),
-	}, nil
+	return daemon.Launcher{Daemon: d, Paths: appPaths(), RuntimeBuild: buildVersion()}, nil
 }
 
 // deps builds the substrate wiring every cc-interact command shares: the state

@@ -47,17 +47,15 @@ func serve(ctx context.Context) error {
 		return err
 	}
 	c := channel.Connectivity{}
-	trustPolicy, err := appTrustPolicy()
+	d, err := appDaemon()
 	if err != nil {
 		return err
 	}
 	s, err := daemon.New(daemon.Config{
 		AppName:        AppName,
 		Paths:          appPaths(),
-		WireBuild:      daemon.WireBuild,
+		Daemon:         d,
 		RuntimeBuild:   buildVersion(),
-		TrustPolicy:    trustPolicy,
-		Roles:          appRoles(),
 		ActiveStatuses: []string{string(StatusActive)},
 		// c.Type() (not c.EventType) so the SSE plane filters the same presence
 		// type these hooks emit, correct even for the Connectivity zero value.

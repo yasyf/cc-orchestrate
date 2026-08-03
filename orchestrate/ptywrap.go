@@ -2,12 +2,9 @@ package orchestrate
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"time"
 
@@ -27,32 +24,6 @@ const ptyHostCmdName = "pty-host"
 // reportChildExitTimeout bounds the pty-host's best-effort child-exit report to the
 // daemon, so a slow or wedged daemon never delays the wrapper's own exit.
 const reportChildExitTimeout = 5 * time.Second
-
-// ptySocketPath is the control socket one pty-host incarnation serves, derived
-// deterministically from the session id and spawn nonce so the spawn wrapper, the
-// host, and the prober client (via the agent row's nonce) all resolve the same path.
-// Deriving per incarnation is what makes a kill-driven respawn race-free: the
-// replacement binds its own path, so settling the old daemonkit listener cannot
-// disturb the replacement's socket. The suffix is 64 bits of the
-// full nonce's SHA-256 (16 hex chars) — wide enough that two incarnations of one
-// session can never share a path, unlike a truncated-nonce prefix — while the full
-// path stays inside the OS sun_path limit under the production StateDir.
-func ptySocketPath(sessionID, spawnNonce string) string {
-	if spawnNonce == "" {
-		panic("pty socket requires spawn nonce")
-	}
-	sum := sha256.Sum256([]byte(spawnNonce))
-	name := sessionID + "-" + hex.EncodeToString(sum[:8])
-	return filepath.Join(appPaths().StateDir(), "pty", name+".sock")
-}
-
-func ptyProcessStorePath(sessionID string) string {
-	if sessionID == "" {
-		panic("pty process store requires session id")
-	}
-	sum := sha256.Sum256([]byte(sessionID))
-	return filepath.Join(appPaths().StateDir(), "pty", "process-"+hex.EncodeToString(sum[:8])+".db")
-}
 
 // wrapForCapture composes the launcher prefix and child argv, wrapping the result
 // under this binary's pty-host when the backend cannot capture its terminal
@@ -112,11 +83,9 @@ func ptyHostCmd() *cobra.Command {
 		},
 		RunE: func(c *cobra.Command, args []string) error {
 			return ptyhost.Run(c.Context(), ptyhost.Options{
-				Socket:       ptySocketPath(sessionID, spawnNonce),
-				ProcessStore: ptyProcessStorePath(sessionID),
-				Argv:         args,
-				RuntimeBuild: buildVersion(),
-				OnChildExit:  func() { reportChildExit(sessionID, spawnNonce) },
+				SpawnNonce:  spawnNonce,
+				Argv:        args,
+				OnChildExit: func() { reportChildExit(sessionID, spawnNonce) },
 			})
 		},
 	}

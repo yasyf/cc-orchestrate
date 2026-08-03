@@ -4,7 +4,43 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.16.0] - 2026-08-03
+
+### Changed
+
+- Pin daemonkit v0.21.2, cc-interact v0.32.0, reposync v0.28.0, and synckit
+  v0.37.0. daemonkit's cut collapses ten packages into one `Daemon` value that
+  the launcher and the daemon both read, so the five-field role and trust model
+  in `orchestrate/runtime.go` becomes a single declaration: the two signed
+  lifecycle roles fold into `Trust.Control`, the unprotected business role into
+  the same-EUID floor, and receipt and readiness roles have no successor. Trust
+  is verified in-process against the peer's kernel-held code identity, so the
+  binary no longer re-execs itself as a verifier child.
+- The pty-host is a daemonkit `Serve` product. Each incarnation declares one
+  daemon keyed by 64 bits of its spawn nonce and hosts its child through
+  `daemonkit.NewGate`, which holds the child parked before its first
+  instruction while the record is written, then adopts it into the serve
+  scope. That replaces the hand-rolled generation store, reaper, worker pool,
+  process manager, publication slot, and recovery-receipt dance. The screen
+  capture and key injection protocol is unchanged.
+- Daemon endpoints move to daemonkit's label-derived paths. The control socket
+  is now `~/com.yasyf.cc-orchestrate/daemon.sock` rather than
+  `~/.cc-orchestrate-v1/daemon.sock`, and each pty-host serves
+  `~/com.yasyf.cco-pty.<nonce-hash>/daemon.sock` in place of the former
+  per-incarnation socket under the state directory; a pty-host removes its own
+  directory when it exits. The database, logs, and every other application path
+  stay in `~/.cc-orchestrate-v1`.
+- Every Go CI job runs on macOS. daemonkit reaches straight for the darwin
+  seams and ships no non-darwin stubs, so the module does not compile on Linux.
+
+### Removed
+
+- Linux release builds. daemonkit v0.21 compiles only on macOS, so the release
+  publishes darwin arm64 and amd64 archives alone; the binrun descriptor drops
+  its two linux platforms with them.
+- `ptySocketPath` and `ptyProcessStorePath`. A pty-host derives its socket,
+  owner record, and state directory from the spawn nonce alone, so the hidden
+  `pty-host` command no longer carries a socket or process-store path.
 
 ## [0.15.3] - 2026-07-27
 
@@ -209,7 +245,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cc-orchestrate backends` command reporting which backends (cmux, superset)
   are installed.
 
-[Unreleased]: https://github.com/yasyf/cc-orchestrate/compare/v0.15.3...HEAD
+[0.16.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.15.3...v0.16.0
 [0.15.3]: https://github.com/yasyf/cc-orchestrate/compare/v0.15.2...v0.15.3
 [0.12.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.11.0...v0.12.0
 [0.3.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.1.0...v0.3.0

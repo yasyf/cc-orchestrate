@@ -111,7 +111,7 @@ func TestSprintCommandTree(t *testing.T) {
 // s.Append chokepoint, then drives the identical consume path against the daemon's
 // SSE plane.
 func TestAgentWatchObservesReport(t *testing.T) {
-	shortHome(t)
+	sandboxHome(t)
 	ctx := context.Background()
 
 	s, err := daemon.New(testDaemonConfig(t))
@@ -326,7 +326,7 @@ func TestBackendsSelectValidatesBeforeDaemon(t *testing.T) {
 // TestWatchFleetStatusPropagatesStreamErrors proves a fatal fleet SSE response reaches
 // the caller, while cancelling the parent context remains a clean watch exit.
 func TestWatchFleetStatusPropagatesStreamErrors(t *testing.T) {
-	shortHome(t)
+	sandboxHome(t)
 	s, err := daemon.New(testDaemonConfig(t))
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)

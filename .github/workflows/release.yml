@@ -12,8 +12,9 @@ jobs:
     uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@41f8de6765b3b833ef333b0b98f5683f0e46685b
     secrets: inherit
     with:
-      # cgo (libghostty-vt) → native clang for darwin + zig for static linux, so the
-      # release runs on macOS and signs with codesign+notarytool (not quill).
+      # cgo (libghostty-vt) → zig builds the static library, native clang builds the
+      # binaries, so the release runs on macOS and signs with codesign+notarytool
+      # (not quill). darwin-only since daemonkit v0.21 does not compile off macOS.
       runner: macos-latest
       signer: codesign
       pre-build: |

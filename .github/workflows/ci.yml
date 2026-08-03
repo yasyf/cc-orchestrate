@@ -18,8 +18,12 @@ env:
 jobs:
   # Pure-Go path (CGO_ENABLED=0 → the charmbracelet/x/vt grid). Fast, no toolchain;
   # covers all logic plus the x/vt grid. The cgo/go-libghostty grid has its own job.
+  #
+  # macOS only, as is every other Go job here: daemonkit reaches straight for the
+  # darwin seams (sysctl, csops, LOCAL_PEERCRED) and ships no non-darwin stubs, so
+  # the module does not compile on ubuntu at all.
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     env:
       CGO_ENABLED: "0"
     steps:
@@ -51,7 +55,7 @@ jobs:
   # Real-tmux integration test. CGO_ENABLED=1 because -race requires cgo; ./backend
   # imports no libghostty, so a plain C toolchain suffices (no native libghostty build).
   integration:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     env:
       CGO_ENABLED: "1"
     steps:
@@ -63,7 +67,7 @@ jobs:
           cache: true
 
       - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
+        run: brew install tmux
 
       - name: go test (integration)
         run: go test -race -run Integration ./backend/
@@ -72,7 +76,7 @@ jobs:
   # natively and runs the full -race suite (race requires cgo; orchestrate links the
   # libghostty-vt grid), so grid_cgo.go and data races can't regress unnoticed.
   cgo:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -81,13 +85,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install cmake
-        run: sudo apt-get update && sudo apt-get install -y cmake
-
-      - name: Install Zig 0.15.2
-        uses: xyzzylabs/setup-zig@v1
-        with:
-          version: 0.15.2
+      # Homebrew's zig@0.15, not upstream 0.15.2: upstream cannot link the
+      # Xcode SDK (ziglang/zig#31658), and release.yml already builds this same
+      # library through the patched formula.
+      - name: Install cmake and Zig 0.15
+        run: |
+          brew install zig@0.15 cmake
+          echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
 
       # build-libghostty.sh resolves the pinned ghostty source via
       # `go list -m -f '{{.Dir}}'`, which is empty unless the module is extracted —
@@ -96,7 +100,7 @@ jobs:
         run: go mod download
 
       - name: Build native libghostty-vt
-        run: echo "PKG_CONFIG_PATH=$(scripts/build-libghostty.sh linux-amd64 x86_64-linux-gnu)" >> "$GITHUB_ENV"
+        run: echo "PKG_CONFIG_PATH=$(scripts/build-libghostty.sh macos-arm64 aarch64-macos)" >> "$GITHUB_ENV"
 
       - name: go build + test -race (cgo)
         env:
@@ -104,7 +108,7 @@ jobs:
         run: go build ./... && go test -race ./...
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     # Lint the pure-Go path (CGO_ENABLED=0): the cgo grid (grid_cgo.go, //go:build
     # cgo) needs a natively-built libghostty-vt that the cgo job provides; here it is
     # excluded by build tag so the linter type-checks without the native dep.
@@ -122,7 +126,7 @@ jobs:
           version: latest
 
   vuln:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     # Scan the pure-Go path (CGO_ENABLED=0) so govulncheck need not link the native
     # libghostty-vt the cgo grid imports; the build-tagged cgo file is excluded.
     env:
