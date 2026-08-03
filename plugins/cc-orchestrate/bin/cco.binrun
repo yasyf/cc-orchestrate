@@ -3,46 +3,26 @@
   "schema": 1,
   "name": "cc-orchestrate",
   "kind": "release-binary",
-  "version": {"static": "0.15.3"},
+  "version": {"static": "0.16.0"},
   "platforms": {
     "macos-aarch64": {
-      "size": 8715289,
+      "size": 8445486,
       "hash": "sha256",
-      "digest": "8b6b9d8f7527371d73dbe570685b917bb39e44c66a4c08b8b045776aa08cc5fb",
+      "digest": "e58399ba0188e4ef3a8b20898657341908dfc7b1c7448193b08fd403dfad2d6f",
       "format": "tar.gz",
       "path": "cc-orchestrate",
       "providers": [
-        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.15.3", "name": "cc-orchestrate_0.15.3_darwin_arm64.tar.gz"}
+        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.16.0", "name": "cc-orchestrate_0.16.0_darwin_arm64.tar.gz"}
       ]
     },
     "macos-x86_64": {
-      "size": 9557888,
+      "size": 9262477,
       "hash": "sha256",
-      "digest": "3d2ef8c46ab5b5ec7918dc99f0ef6ab253e1124808c2addf523507a371f315c7",
+      "digest": "2330b0ee1e7cfad2cc421aca255d1f1829df27e536fd41e71f51231febd9dfac",
       "format": "tar.gz",
       "path": "cc-orchestrate",
       "providers": [
-        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.15.3", "name": "cc-orchestrate_0.15.3_darwin_amd64.tar.gz"}
-      ]
-    },
-    "linux-x86_64": {
-      "size": 11616920,
-      "hash": "sha256",
-      "digest": "69efbdb383cb76ce3c602b45732e98bec44a702c6f908129cbb3acd91e43a299",
-      "format": "tar.gz",
-      "path": "cc-orchestrate",
-      "providers": [
-        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.15.3", "name": "cc-orchestrate_0.15.3_linux_amd64.tar.gz"}
-      ]
-    },
-    "linux-aarch64": {
-      "size": 10781822,
-      "hash": "sha256",
-      "digest": "e38061f1205ac1332e17f8aea2524984d0109c2d7174a12b5331d89553eb4866",
-      "format": "tar.gz",
-      "path": "cc-orchestrate",
-      "providers": [
-        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.15.3", "name": "cc-orchestrate_0.15.3_linux_arm64.tar.gz"}
+        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.16.0", "name": "cc-orchestrate_0.16.0_darwin_amd64.tar.gz"}
       ]
     }
   }
