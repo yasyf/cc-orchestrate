@@ -2,15 +2,17 @@ module github.com/yasyf/cc-orchestrate
 
 go 1.26.5
 
+toolchain go1.26.6
+
 require (
 	github.com/charmbracelet/x/vt v0.0.0-20260615092313-b57e5e6d29bb
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/yasyf/cc-interact v0.32.0
+	github.com/yasyf/cc-interact v0.32.1
 	github.com/yasyf/cc-notes v0.47.2
-	github.com/yasyf/daemonkit v0.21.2
+	github.com/yasyf/daemonkit v0.21.4
 	github.com/yasyf/reposync v0.28.0
 	go.mitchellh.com/libghostty v0.0.0-20260528200934-790a3ff6e9f6
 	golang.org/x/sys v0.47.0
