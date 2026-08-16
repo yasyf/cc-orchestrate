@@ -4,6 +4,32 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] - 2026-08-16
+
+### Fixed
+
+- `cco stop` left its LaunchAgent installed, so the surviving plist relaunched
+  the daemon it had just been told to stop — the product could not remove its
+  own agent. cc-interact's `Launcher.Stop` reused the Program-bearing identity
+  `EnsureCurrent` converges on, so daemonkit's absence proof resolved
+  `~/.daemonkit/bin/cco`, a copy only `Ensure` ever places. On a machine that
+  never ensured this era the resolve failed with `resolve program … no such
+  file or directory` and `Stop` returned before it reached the removal. Pin
+  cc-interact v0.32.1, which stops through a `daemonkit.Daemon` that states no
+  `Program` — daemonkit's own contract for the verb, rendering no LaunchAgent
+  and placing nothing.
+
+### Changed
+
+- Pin daemonkit v0.21.4, which cc-interact v0.32.1 requires. v0.21.2 splits
+  Stop's observation off launchd state and holds its inventory gate vacuously
+  for an unstated `Program`.
+- Build with `toolchain go1.26.6`. Five standard-library advisories land in
+  code this module actually calls — `http.Server.Serve` and `asn1.Unmarshal`
+  reached through the pty-host's `daemonkit.Serve`, `http.Client.Do` and
+  `url.URL.Parse` under the CLI's command tree — and all five are fixed in
+  go1.26.6. The `go` directive stays at 1.26.5, so consumers are not forced up.
+
 ## [0.16.0] - 2026-08-03
 
 ### Changed
@@ -245,6 +271,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cc-orchestrate backends` command reporting which backends (cmux, superset)
   are installed.
 
+[0.16.1]: https://github.com/yasyf/cc-orchestrate/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.15.3...v0.16.0
 [0.15.3]: https://github.com/yasyf/cc-orchestrate/compare/v0.15.2...v0.15.3
 [0.12.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.11.0...v0.12.0
