@@ -120,10 +120,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # Pinned, not `latest`: an upstream golangci-lint release turns this job red
+      # with no code change here, on a schedule nobody controls. That is how main
+      # sat red from 2026-08-17 to 2026-08-29 and how #1 merged over a failing
+      # check. Bump this deliberately, and reformat in the same commit — the
+      # gofumpt bundled with a newer version wants
+      # orchestrate/{adoptops,cli,render,spawn}.go split differently.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.13.2
 
   vuln:
     runs-on: macos-latest
