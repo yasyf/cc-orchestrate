@@ -454,7 +454,8 @@ func (spawnBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) er
 // case spawned without the pty-host wrapper; the wrapped path is covered by
 // TestWrapForCapture.
 func (spawnBackend) Capture(context.Context, backend.AgentHandle) (string, error) { return "", nil }
-func (spawnBackend) Caps() backend.Caps                                           { return backend.Capabilities(backend.CanCapture) }
+
+func (spawnBackend) Caps() backend.Caps { return backend.Capabilities(backend.CanCapture) }
 
 type nonCapturingSpawnBackend struct {
 	spawnBackend
