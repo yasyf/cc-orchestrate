@@ -4,6 +4,27 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-08-29
+
+### Changed
+
+- Pin daemonkit v0.23.0, which moves per-daemon state under one owned root.
+  The control socket is now
+  `~/.daemonkit/a/com.yasyf.cc-orchestrate/daemon.sock` rather than
+  `~/com.yasyf.cc-orchestrate/daemon.sock`, and each pty-host serves
+  `~/.daemonkit/a/com.yasyf.cco-pty.<nonce-hash>/daemon.sock` in place of its
+  former top-level directory. Nothing reads the old locations and nothing
+  migrates them: run `cco stop` before upgrading, then delete
+  `~/com.yasyf.cc-orchestrate` and any leftover `~/com.yasyf.cco-pty.*` by
+  hand, because a running incarnation recreates its own. The database, logs,
+  and every other application path stay in `~/.cc-orchestrate-v1`.
+- The new root is a single letter because the pty-host cannot afford more. A
+  pty socket is the longest path either daemon builds — home, root, the
+  `com.yasyf.cco-pty.` prefix, 64 bits of spawn nonce, and `daemon.sock` — and
+  darwin's `sun_path` fits 103 bytes. Under a 39-byte home that path measures
+  99 bytes; spelling the root out as `agents` costs five more and overruns the
+  limit. `TestPTYSocketFitsSunPath` pins the budget.
+
 ## [0.16.1] - 2026-08-16
 
 ### Fixed
@@ -271,6 +292,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cc-orchestrate backends` command reporting which backends (cmux, superset)
   are installed.
 
+[0.17.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/yasyf/cc-orchestrate/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/yasyf/cc-orchestrate/compare/v0.15.3...v0.16.0
 [0.15.3]: https://github.com/yasyf/cc-orchestrate/compare/v0.15.2...v0.15.3
