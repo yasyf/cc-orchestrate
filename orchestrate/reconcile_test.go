@@ -41,9 +41,13 @@ func (reconcileBackend) Spawn(_ context.Context, spec backend.SpawnSpec) (backen
 func (b reconcileBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
 	return b.agents, nil
 }
-func (reconcileBackend) Kill(context.Context, backend.AgentHandle) error                { return nil }
+
+func (reconcileBackend) Kill(context.Context, backend.AgentHandle) error { return nil }
+
 func (reconcileBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error { return nil }
-func (reconcileBackend) Capture(context.Context, backend.AgentHandle) (string, error)   { return "", nil }
+
+func (reconcileBackend) Capture(context.Context, backend.AgentHandle) (string, error) { return "", nil }
+
 func (b reconcileBackend) Caps() backend.Caps {
 	if b.enumerate {
 		return backend.Capabilities(backend.CanEnumerate, backend.CanCapture)

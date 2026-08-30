@@ -65,8 +65,10 @@ func (b adoptFakeBackend) Kill(_ context.Context, agent backend.AgentHandle) err
 	}
 	return nil
 }
+
 func (adoptFakeBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error { return nil }
-func (adoptFakeBackend) Capture(context.Context, backend.AgentHandle) (string, error)   { return "", nil }
+
+func (adoptFakeBackend) Capture(context.Context, backend.AgentHandle) (string, error) { return "", nil }
 
 func (b adoptFakeBackend) Caps() backend.Caps {
 	if b.caps == (backend.Caps{}) {

@@ -130,6 +130,7 @@ func (captureTestBackend) Caps() backend.Caps { return backend.Capabilities(back
 func (captureTestBackend) Capture(_ context.Context, agent backend.AgentHandle) (string, error) {
 	return "screen:" + agent.SessionID, nil
 }
+
 func (captureTestBackend) SendText(context.Context, backend.AgentHandle, string) error { return nil }
 
 // TestResolveBackend covers the explicit, persisted-selection, and unknown-name
@@ -989,8 +990,11 @@ func (workstreamBackend) Spawn(context.Context, backend.SpawnSpec) (backend.Agen
 func (workstreamBackend) ListAgents(context.Context, backend.WorkstreamHandle) ([]backend.AgentHandle, error) {
 	return nil, nil
 }
-func (workstreamBackend) Kill(context.Context, backend.AgentHandle) error                { return nil }
+
+func (workstreamBackend) Kill(context.Context, backend.AgentHandle) error { return nil }
+
 func (workstreamBackend) KillWorkstream(context.Context, backend.WorkstreamHandle) error { return nil }
+
 func (b workstreamBackend) Caps() backend.Caps {
 	if b.manages {
 		return backend.Capabilities(backend.ManagesWorktree)
