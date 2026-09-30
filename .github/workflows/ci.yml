@@ -107,8 +107,8 @@ jobs:
 
       - name: Smoke the supervised daemon, CLI, and MCP channel
         run: |
-          ./cc-orchestrate config list 2>&1 | tee refusal.txt && exit 1
-          grep -q 'no supervisor is running' refusal.txt
+          if ./cc-orchestrate config list > refusal.txt 2>&1; then exit 1; fi
+          grep 'no supervisor is running' refusal.txt
           ./cc-orchestrate supervise &
           supervisor=$!
           for _ in $(seq 100); do
