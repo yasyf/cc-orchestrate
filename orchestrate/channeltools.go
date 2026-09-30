@@ -25,12 +25,7 @@ var channelInstructions = channel.Instructions(channel.InstructionsSpec{
 // the orchestrated agent uses to send progress, results, or questions back to its
 // orchestrator. The handler round-trips to the daemon via cco.agent.report because the
 // channel server is a separate stdio process and cannot Append directly.
-func channelTools(ctx context.Context, session, scope string) ([]channel.Tool, string, string, error) {
-	client, err := newClient(ctx)
-	if err != nil {
-		return nil, "", "", err
-	}
-	context.AfterFunc(ctx, func() { _ = client.Close() })
+func channelTools(_ context.Context, session, scope string) ([]channel.Tool, string, string, error) {
 	pid := procs.ClaudePID()
 	report := channel.Tool{
 		Name:        "report",
@@ -44,6 +39,11 @@ func channelTools(ctx context.Context, session, scope string) ([]channel.Tool, s
 			"required": []string{"text"},
 		},
 		Handler: func(ctx context.Context, args json.RawMessage, _ func(string)) (string, bool) {
+			client, err := newClient(ctx)
+			if err != nil {
+				return "report failed: " + err.Error(), true
+			}
+			defer func() { _ = client.Close() }()
 			reply, err := client.Do(ctx, daemon.Envelope{
 				Op: mAgentReport.op(), Session: session, ClaudePID: pid, Scope: scope, Body: args,
 			})

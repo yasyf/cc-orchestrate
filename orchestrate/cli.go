@@ -66,6 +66,7 @@ func Root() *cobra.Command {
 		mcpCmd(),
 		cmd.SetupChannelsCmd(d, channelPlugin, "Channel delivery is enabled. New agent spawns will now load the cc-orchestrate channel."),
 	)
+	r.AddCommand(platformCmds()...)
 	return r
 }
 

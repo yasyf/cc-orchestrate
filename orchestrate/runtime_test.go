@@ -29,12 +29,7 @@ func TestRuntimeIdentityIsExact(t *testing.T) {
 	if len(d.Schemas) == 0 || d.Schemas[0] != daemon.WireBuild {
 		t.Fatalf("Schemas = %v, want [%q]", d.Schemas, daemon.WireBuild)
 	}
-	if d.Trust.Control == nil {
-		t.Fatal("Trust.Control is nil; the drain and broker handoff would admit any same-EUID peer")
-	}
-	if d.Trust.Control.TeamID != teamID || d.Trust.Control.SigningIdentifier != signingIdentifier {
-		t.Fatalf("Trust.Control = %+v", *d.Trust.Control)
-	}
+	assertPlatformTrust(t, d.Trust)
 	if d.Trust.Business != nil {
 		t.Fatalf("Trust.Business = %v, want nil for the same-EUID floor", d.Trust.Business)
 	}
