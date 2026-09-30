@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.18.0] - 2026-09-30
+
+### Added
+
+- Linux amd64 release binaries include `libghostty-vt`. Keep `cco supervise`
+  running under the workspace's process manager so commands and channels can
+  start and upgrade the daemon. Linux trusts processes with the same user ID;
+  run it only in private single-user VMs.
+
+### Fixed
+
+- Channel reports close their daemon connection after each call.
+
 ## [0.17.1] - 2026-09-15
 
 ### Fixed
