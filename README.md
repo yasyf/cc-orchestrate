@@ -26,6 +26,14 @@ Driving with an agent? Paste this:
 
 The plugin loads the command surface into context and registers `/cc-orchestrate`, so Claude drives the fleet with the `cco` CLI directly.
 
+On Linux (amd64), the plugin's `bin/cco` fetches the `linux_amd64` release binary on first use. Linux has no launchd, so keep the daemon's supervisor running in the foreground wherever the machine runs its long-lived processes:
+
+```bash
+cco supervise
+```
+
+While it runs, every `cco` command starts and upgrades the daemon through it; without it they fail with `no supervisor is running`. Any process of the same user can reach the daemon, so run this only on a single-user machine.
+
 ---
 
 ## Use cases
