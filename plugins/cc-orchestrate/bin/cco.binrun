@@ -3,36 +3,36 @@
   "schema": 1,
   "name": "cc-orchestrate",
   "kind": "release-binary",
-  "version": {"static": "0.18.0"},
+  "version": {"static": "0.18.1"},
   "platforms": {
     "macos-aarch64": {
-      "size": 8313495,
+      "size": 8316052,
       "hash": "sha256",
-      "digest": "267695e7dd20159a80b7410806818539c02eacb6c3f1d945f2059bf78e7ffd32",
+      "digest": "d26a8a2b09a1a09e16b9f5958b1d18cd11128a99751b6af278057db6de66bde1",
       "format": "tar.gz",
       "path": "cc-orchestrate",
       "providers": [
-        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.18.0", "name": "cc-orchestrate_0.18.0_darwin_arm64.tar.gz"}
+        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.18.1", "name": "cc-orchestrate_0.18.1_darwin_arm64.tar.gz"}
       ]
     },
     "macos-x86_64": {
-      "size": 9143195,
+      "size": 9144862,
       "hash": "sha256",
-      "digest": "33fb68934db85ac6a945db8aef46ab56962322094bff39458c3bb9501e7bf64f",
+      "digest": "716b28c33b226bc745c80050bff9cadd3401b6b52795cf750ba2f0fafa78259b",
       "format": "tar.gz",
       "path": "cc-orchestrate",
       "providers": [
-        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.18.0", "name": "cc-orchestrate_0.18.0_darwin_amd64.tar.gz"}
+        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.18.1", "name": "cc-orchestrate_0.18.1_darwin_amd64.tar.gz"}
       ]
     },
     "linux-x86_64": {
-      "size": 9434155,
+      "size": 9434977,
       "hash": "sha256",
-      "digest": "414314439e6066777a4ff3a2b4edf7f29eea28b53717b0ad998bc2a65b897122",
+      "digest": "83d4480158da19b249264f03d161bfccb02260010d7d567a91865802495706d8",
       "format": "tar.gz",
       "path": "cc-orchestrate",
       "providers": [
-        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.18.0", "name": "cc-orchestrate_0.18.0_linux_amd64.tar.gz"}
+        {"type": "github-release", "repo": "yasyf/cc-orchestrate", "tag": "v0.18.1", "name": "cc-orchestrate_0.18.1_linux_amd64.tar.gz"}
       ]
     }
   }
