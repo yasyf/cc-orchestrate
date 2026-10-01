@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/yasyf/cc-interact v0.35.1
+	github.com/yasyf/cc-interact v0.35.2
 	github.com/yasyf/cc-notes v0.47.2
 	github.com/yasyf/daemonkit v0.32.0
 	github.com/yasyf/reposync v0.28.0
