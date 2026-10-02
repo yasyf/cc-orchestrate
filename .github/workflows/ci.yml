@@ -33,6 +33,15 @@ jobs:
           descriptor="$(tail -n +2 plugins/cc-orchestrate/bin/cco.binrun | jq -r .version.static)"
           test "$manifest" = "$descriptor" \
             || { echo "version drift: plugin.json=$manifest descriptor=$descriptor" >&2; exit 1; }
+      - name: Assert the cask de-quarantine steps stay behind the Developer ID gate
+        run: |
+          cask="$(sed -n '/^homebrew_casks:/,$p' .goreleaser.yaml)"
+          grep -Fq 'postflight_steps do' <<<"$cask"
+          grep -Fq 'run "/usr/bin/codesign", args: ["--verify", "--strict", "-R=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"SXKCTF23Q2\"", "--", "{{ "{{staged_path}}" }}/cc-orchestrate"]' <<<"$cask"
+          grep -Fq 'run "/usr/bin/xattr", args: ["-d", "com.apple.quarantine", "{{ "{{staged_path}}" }}/cc-orchestrate"], must_succeed: false, print_stderr: false' <<<"$cask"
+          test "$(grep -c 'com.apple.quarantine' .goreleaser.yaml)" = 1
+          if grep -q -- '"-dr"' .goreleaser.yaml; then echo "recursive quarantine strip" >&2; exit 1; fi
+          if grep -qE '^\s+(pre|post)flight do' .goreleaser.yaml; then echo "deprecated flight block; use *_steps" >&2; exit 1; fi
 
       - uses: actions/setup-go@v6
         with:
