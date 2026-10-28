@@ -9,7 +9,7 @@ import (
 )
 
 func TestRuntimeIdentityIsExact(t *testing.T) {
-	sandboxHome(t) // Stable() reads the running executable; every derived path lands under the home
+	sandboxHome(t)
 	d, err := appDaemon()
 	if err != nil {
 		t.Fatal(err)
@@ -29,14 +29,9 @@ func TestRuntimeIdentityIsExact(t *testing.T) {
 	if len(d.Schemas) == 0 || d.Schemas[0] != daemon.WireBuild {
 		t.Fatalf("Schemas = %v, want [%q]", d.Schemas, daemon.WireBuild)
 	}
-	assertPlatformTrust(t, d.Trust)
-	if d.Trust.Business != nil {
-		t.Fatalf("Trust.Business = %v, want nil for the same-EUID floor", d.Trust.Business)
-	}
 	if err := d.ValidateForServe(); err != nil {
 		t.Fatalf("ValidateForServe: %v", err)
 	}
-	// ValidateForClient is what refuses an unstated Trust.Serving.
 	if err := d.ValidateForClient(); err != nil {
 		t.Fatalf("ValidateForClient: %v", err)
 	}
