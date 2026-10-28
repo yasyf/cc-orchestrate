@@ -23,9 +23,7 @@ func testDaemonConfig(t *testing.T) daemon.Config {
 }
 
 // startTestDaemon serves cfg in-process and returns once it answers business
-// requests. Readiness rides the business lane, not daemonkit's Client.WaitReady:
-// that subscribes over the control lane, which Trust.Control gates on the
-// release signing identity a test binary cannot carry.
+// requests.
 func startTestDaemon(t *testing.T, s *daemon.Server) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

@@ -54,7 +54,6 @@ func ptyDaemon(spawnNonce string) daemonkit.Daemon {
 		Schemas:   []daemonkit.Schema{ptyWireBuild},
 		Shutdown:  ptyShutdown,
 		Handshake: ptyHandshake,
-		Trust:     daemonkit.Trust{Serving: daemonkit.ServingSameUser()},
 	}
 }
 

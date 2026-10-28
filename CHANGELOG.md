@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Any process running as the same user can now connect to the cc-orchestrate
+  daemon. The daemon no longer pins drain and broker handoff to the signed
+  release build, and it names its build by version instead of hashing the
+  executable.
+
 ## [0.18.0] - 2026-09-30
 
 ### Added
