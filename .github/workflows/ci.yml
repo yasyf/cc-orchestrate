@@ -37,7 +37,7 @@ jobs:
         run: |
           cask="$(sed -n '/^homebrew_casks:/,$p' .goreleaser.yaml)"
           grep -Fq 'postflight_steps do' <<<"$cask"
-          grep -Fq 'run "/usr/bin/codesign", args: ["--verify", "--strict", "-R=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"SXKCTF23Q2\"", "--", "{{ "{{staged_path}}" }}/cc-orchestrate"]' <<<"$cask"
+          grep -Fq "run \"/usr/bin/codesign\", args: [\"--verify\", \"--strict\", '-R=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"SXKCTF23Q2\"', \"--\", \"{{ \"{{staged_path}}\" }}/cc-orchestrate\"]" <<<"$cask"
           grep -Fq 'run "/usr/bin/xattr", args: ["-d", "com.apple.quarantine", "{{ "{{staged_path}}" }}/cc-orchestrate"], must_succeed: false, print_stderr: false' <<<"$cask"
           test "$(grep -c 'com.apple.quarantine' .goreleaser.yaml)" = 1
           if grep -q -- '"-dr"' .goreleaser.yaml; then echo "recursive quarantine strip" >&2; exit 1; fi
