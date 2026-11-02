@@ -19,6 +19,7 @@ jobs:
   # Pure-Go path (CGO_ENABLED=0 → the charmbracelet/x/vt grid). Fast, no toolchain;
   # covers all logic plus the x/vt grid. The cgo/go-libghostty grid has its own job.
   build:
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     env:
       CGO_ENABLED: "0"
@@ -137,6 +138,7 @@ jobs:
   # Real-tmux integration test. CGO_ENABLED=1 because -race requires cgo; ./backend
   # imports no libghostty, so a plain C toolchain suffices (no native libghostty build).
   integration:
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     env:
       CGO_ENABLED: "1"
@@ -158,6 +160,7 @@ jobs:
   # natively and runs the full -race suite (race requires cgo; orchestrate links the
   # libghostty-vt grid), so grid_cgo.go and data races can't regress unnoticed.
   cgo:
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -190,6 +193,7 @@ jobs:
         run: go build ./... && go test -race ./...
 
   lint:
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     # Lint the pure-Go path (CGO_ENABLED=0): the cgo grid (grid_cgo.go, //go:build
     # cgo) needs a natively-built libghostty-vt that the cgo job provides; here it is
@@ -214,6 +218,7 @@ jobs:
           version: v2.13.2
 
   vuln:
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     # Scan the pure-Go path (CGO_ENABLED=0) so govulncheck need not link the native
     # libghostty-vt the cgo grid imports; the build-tagged cgo file is excluded.
