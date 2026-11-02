@@ -21,6 +21,7 @@ jobs:
   build:
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
+    timeout-minutes: 30
     env:
       CGO_ENABLED: "0"
     steps:
@@ -62,6 +63,7 @@ jobs:
   # supervisor and same-user trust instead of a signed LaunchAgent.
   linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       CGO_ENABLED: "0"
     steps:
@@ -85,6 +87,7 @@ jobs:
   # for x86_64-linux-musl and a fully static cgo link through zig cc.
   linux-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -140,6 +143,7 @@ jobs:
   integration:
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
+    timeout-minutes: 10
     env:
       CGO_ENABLED: "1"
     steps:
@@ -162,6 +166,7 @@ jobs:
   cgo:
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -195,6 +200,7 @@ jobs:
   lint:
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
+    timeout-minutes: 10
     # Lint the pure-Go path (CGO_ENABLED=0): the cgo grid (grid_cgo.go, //go:build
     # cgo) needs a natively-built libghostty-vt that the cgo job provides; here it is
     # excluded by build tag so the linter type-checks without the native dep.
@@ -220,6 +226,7 @@ jobs:
   vuln:
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
+    timeout-minutes: 30
     # Scan the pure-Go path (CGO_ENABLED=0) so govulncheck need not link the native
     # libghostty-vt the cgo grid imports; the build-tagged cgo file is excluded.
     env:
