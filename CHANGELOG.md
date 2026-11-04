@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A resumed session's channel reaches its window again: cc-interact 0.40.2 moves the channel onto the session's subject and leaves a live window's pid alone.
+
 ## [0.19.0] - 2026-10-28
 
 ### Changed
