@@ -1,0 +1,31 @@
+name: Release tag
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  release:
+    uses: yasyf/cc-skills/.github/workflows/plugin-release-tag.yml@97845c70d39bb30d4bd77ce80f02b8a4623a7862
+    with:
+      release-workflow: release.yml
+      script-ref: 97845c70d39bb30d4bd77ce80f02b8a4623a7862
+      paths: |
+        backend
+        ccnotes
+        orchestrate
+        ptyhost
+        worktree
+        main.go
+        go.mod
+        go.sum
+        .goreleaser.yaml
+        scripts/build-libghostty.sh
+        :(exclude,glob)**/*_test.go
+        :(exclude,glob)**/testdata/**
