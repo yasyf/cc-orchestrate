@@ -39,10 +39,11 @@ builds:
       - 'CXX={{ if eq .Os "darwin" }}clang++ -arch {{ if eq .Arch "arm64" }}arm64{{ else }}x86_64{{ end }}{{ else }}zig c++ -target x86_64-linux-musl{{ end }}'
     ldflags:
       - -s -w -X github.com/yasyf/cc-orchestrate/orchestrate.Version={{ .Version }}
-    # Developer ID sign + notarize the darwin binaries via codesign + notarytool
+    # Developer ID sign the darwin binaries via codesign
     # (quill SIGKILLs on arm64 — anchore/quill#566), using the shared script the
     # import-developer-id action drops on the runner. The
     # script is required so every build fails closed instead of shipping unsigned.
+    # release.yml's notarize job notarizes them once the release publishes.
     hooks:
       post:
         - cmd: bash "{{ .Env.MACOS_CODESIGN_SCRIPT }}" "{{ .Path }}" "{{ .Target }}"
