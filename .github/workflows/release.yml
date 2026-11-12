@@ -10,11 +10,11 @@ permissions:
 
 jobs:
   release:
-    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@28367ec611b0463b43b3c0fc8e984efddfe7379c
+    uses: yasyf/homebrew-tap/.github/workflows/release-go.yml@48bd52dbd3669f32199fd54ec0fc7e519da67154
     secrets: inherit
     with:
       # cgo (libghostty-vt) → native clang for darwin + zig for static linux, so the
-      # release runs on macOS and signs with codesign+notarytool (not quill).
+      # release runs on macOS and signs with codesign (not quill).
       runner: macos-latest
       signer: codesign
       pre-build: |
@@ -22,6 +22,11 @@ jobs:
         echo "$(brew --prefix zig@0.15)/bin" >> "$GITHUB_PATH"
         echo "LIBGHOSTTY_ROOT=$GITHUB_WORKSPACE/.libghostty" >> "$GITHUB_ENV"
         echo "GOTOOLCHAIN=auto" >> "$GITHUB_ENV"
+
+  notarize:
+    needs: release
+    uses: yasyf/homebrew-tap/.github/workflows/notarize-release.yml@48bd52dbd3669f32199fd54ec0fc7e519da67154
+    secrets: inherit
 
   # Refresh the committed binrun descriptor (plugins/cc-orchestrate/bin/cco.binrun)
   # to pin the just-released version, and move the plugin manifest to the same
