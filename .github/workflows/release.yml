@@ -75,7 +75,7 @@ jobs:
             echo "descriptor and manifest already current for ${GITHUB_REF_NAME}"
           else
             git add plugins/cc-orchestrate/bin/cco.binrun plugins/cc-orchestrate/.claude-plugin/plugin.json
-            git commit -m "chore: sync cco.binrun + manifest to ${GITHUB_REF_NAME}"
+            git commit -m "chore(release): sync cco.binrun + manifest to ${GITHUB_REF_NAME}"
             git pull --rebase origin main
             git push origin HEAD:main
           fi

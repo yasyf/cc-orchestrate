@@ -25,5 +25,6 @@ jobs:
         go.sum
         .goreleaser.yaml
         scripts/build-libghostty.sh
+        plugins/cc-orchestrate/.claude-plugin/plugin.json
         :(exclude,glob)**/*_test.go
         :(exclude,glob)**/testdata/**
