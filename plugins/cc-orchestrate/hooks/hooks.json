@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/cco\" channel-check", "timeout": 15 }
+        ]
+      }
+    ]
+  }
+}

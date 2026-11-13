@@ -339,7 +339,7 @@ func TestSpawnBrief(t *testing.T) {
 	}{
 		{name: "watch command", want: "/opt/cc-orchestrate watch --session sid-1 --cwd /work"},
 		{name: "channel ack command", want: "/opt/cc-orchestrate channel-ack --session sid-1 --cwd /work"},
-		{name: "channel tag", want: `<channel source="plugin:cc-orchestrate:cc-orchestrate">`},
+		{name: "channel tag", want: `<channel source="plugin:cc-orchestrate:channel">`},
 		{name: "directive event", want: "orchestrate.message"},
 		{name: "report tool", want: `"report"`},
 		{name: "message id dedupe", want: `Deduplicate by the message's "id" field`},

@@ -107,7 +107,7 @@ Everything rides an event plane, not the terminal:
   (`~/.claude/projects/**/<session-id>.jsonl`); `agent status` / `agent list` read it.
 - **Orchestrator to agent**: `agent send-message` appends the instruction to the
   agent's event log. The agent receives it as a
-  `<channel source="plugin:cc-orchestrate:cc-orchestrate">` tag (approved once in
+  `<channel source="plugin:cc-orchestrate:channel">` tag (approved once in
   First-time setup), and over its `watch` Monitor as the fallback until its first
   channel ack.
 - **Agent to orchestrator** rides the `report` MCP tool wired into every spawned agent;
