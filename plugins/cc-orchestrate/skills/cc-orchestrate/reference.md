@@ -93,7 +93,7 @@ session's `.mcp.json` to drive the fleet from another agent. See *MCP tools* bel
 
 | Command | Flags | Description |
 |---|---|---|
-| `cco setup-channels` | `--check` (default), `--apply`, `--decline` | `--check` prints `{"offer": bool, "reason": "…"}`. `--apply` adds the cc-orchestrate plugin to Claude's managed channel allowlist (one-time macOS admin prompt) so spawned agents receive `<channel source="plugin:cc-orchestrate:cc-orchestrate">` tags. `--decline` records the refusal so the offer is not repeated. |
+| `cco setup-channels` | `--check` (default), `--apply`, `--decline` | `--check` prints `{"offer": bool, "reason": "…"}`. `--apply` adds the cc-orchestrate plugin to Claude's managed channel allowlist (one-time macOS admin prompt) so spawned agents receive `<channel source="plugin:cc-orchestrate:channel">` tags. `--decline` records the refusal so the offer is not repeated. |
 
 ## Substrate commands (cc-interact plane)
 

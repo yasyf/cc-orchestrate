@@ -25,7 +25,7 @@ const (
 
 var channelPlugin = channelsetup.Plugin{Marketplace: "cc-orchestrate", Name: "cc-orchestrate"}
 
-const channelServer = "cc-orchestrate"
+const channelServer = cmd.ChannelServer
 
 // Version is the binary's build version, advertised in the channel handshake. It is
 // a var (not const) so the release build can inject the tag via
@@ -90,6 +90,7 @@ func deps() cmd.Deps {
 	return cmd.Deps{
 		Paths:                  appPaths(),
 		Version:                buildVersion(),
+		Plugin:                 channelPlugin,
 		NewClient:              newClient,
 		EnsureCurrent:          ensureCurrent,
 		EnsureCurrentIfRunning: ensureCurrentIfRunning,

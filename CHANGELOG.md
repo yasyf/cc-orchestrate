@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- cc-orchestrate's channel runs on its own toolless server, `channel`, which Claude Code starts as `cco channel --no-tools` from `PATH` with `CLAUDE_PLUGIN_ROOT` emptied, so its config is the same in every version and `/reload-plugins` leaves it running. The tools stay on the `cc-orchestrate` server under their old names, now `cco tools`. The channel server moves itself onto the newest installed cco once that one reports a newer release. A `Stop` hook, `cco channel-check`, notices a channel that stopped in a session inside Orca and types `/mcp reconnect plugin:cc-orchestrate:channel` at its next idle prompt with an empty draft, at most once every 5 minutes. Orchestrator directives now arrive as `<channel source="plugin:cc-orchestrate:channel">` tags. The `cco` binary must be on `PATH`, which the Homebrew cask puts there.
+
 ## [0.19.1] - 2026-11-04
 
 ### Fixed

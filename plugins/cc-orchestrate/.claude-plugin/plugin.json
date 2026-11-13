@@ -12,16 +12,26 @@
   "repository": "https://github.com/yasyf/cc-orchestrate",
   "license": "PolyForm-Noncommercial-1.0.0",
   "mcpServers": {
+    "channel": {
+      "command": "cco",
+      "args": [
+        "channel",
+        "--no-tools"
+      ],
+      "env": {
+        "CLAUDE_PLUGIN_ROOT": ""
+      }
+    },
     "cc-orchestrate": {
       "command": "${CLAUDE_PLUGIN_ROOT}/bin/cco",
       "args": [
-        "channel"
+        "tools"
       ]
     }
   },
   "channels": [
     {
-      "server": "cc-orchestrate",
+      "server": "channel",
       "displayName": "cc-orchestrate"
     }
   ],
