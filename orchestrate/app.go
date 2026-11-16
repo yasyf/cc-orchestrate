@@ -108,7 +108,7 @@ func ensureCurrent(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return l.EnsureCurrent(ctx, daemon.UpgradeTimeout)
+	return l.EnsureCurrent(ctx)
 }
 
 func ensureCurrentIfRunning(ctx context.Context) error {
@@ -124,5 +124,5 @@ func stop(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return l.Stop(ctx, daemon.UpgradeTimeout)
+	return l.Stop(ctx)
 }
